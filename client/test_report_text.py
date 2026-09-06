@@ -251,3 +251,63 @@ class Refunds(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RefundOnlyWhenNothingWasFiled(unittest.TestCase):
+    """
+    A slot is given back only if no issue exists.
+
+    `report_commands` refunds both rate-limit buckets when filing fails, which
+    is right for a missing token or an unreachable GitHub: charging a player for
+    the club's misconfiguration is a punishment, not a limit.
+
+    One raise is different. GitHub answers 201 and the body carries no
+    `html_url`: the issue is on the public tracker and only its address is
+    missing. Refunding there hands back a slot for a report that exists, and a
+    run of them files issues at no cost to either bucket — the limiter defeated
+    rather than exceeded. `GitHubUnavailable.filed` is what tells the two apart,
+    and this pins that the distinction is still made.
+
+    Read off the source because driving it needs `discord` and `aiohttp`, which
+    this suite deliberately runs without.
+    """
+
+    @staticmethod
+    def _source() -> str:
+        import pathlib
+
+        return (pathlib.Path(__file__).parent / "report_commands.py").read_text()
+
+    def test_the_post_creation_raise_marks_the_issue_as_filed(self):
+        source = self._source()
+        self.assertIn(
+            'raise GitHubUnavailable(\n            "The issue was filed, but GitHub did not say where.", filed=True)',
+            source,
+            "the raise that happens after a 201 must say an issue exists, or the\n"
+            "handler refunds a slot for a report that is on the tracker",
+        )
+
+    def test_the_refund_is_conditional_on_nothing_having_been_filed(self):
+        source = self._source()
+        start = source.index("    except GitHubUnavailable as exc:")
+        block = source[start : source.index("\n        return", start)]
+
+        self.assertIn("if not exc.filed:", block,
+                      "the refund is unconditional again — a filed issue gives its slot back")
+        # And both buckets stay inside that guard, not just the player's.
+        guard = block.index("if not exc.filed:")
+        self.assertGreater(block.index("limiter.refund"), guard)
+        self.assertGreater(block.index("guild_limiter.refund"), guard)
+
+    def test_the_default_is_not_filed(self):
+        # Every other raise site omits the flag, so the ordinary failure still
+        # refunds. Getting this backwards would charge players for outages.
+        import re
+
+        source = self._source()
+        raises = re.findall(r"raise GitHubUnavailable\((.*?)\)", source, re.S)
+        self.assertGreaterEqual(len(raises), 3)
+        self.assertEqual(
+            sum(1 for r in raises if "filed=True" in r), 1,
+            "exactly one raise should mark an issue as filed",
+        )

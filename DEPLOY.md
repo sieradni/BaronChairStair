@@ -109,7 +109,7 @@ with write access to that one repository.
 Discord server, under the bot's identity, to a public issue tracker. What stands between
 that and abuse:
 
-- Three reports per player per hour, twenty per server per hour. Both live in memory, so
+- Fifteen reports per player per hour, sixty per server per hour. Both live in memory, so
   **both reset when the bot restarts**.
 - Reporter text is defanged in `client/report_text.py`: `@mentions` and all four of
   GitHub's issue-autolink forms (`#26`, `GH-26`, `owner/repo#26`, and the organisation
@@ -119,7 +119,7 @@ that and abuse:
   something other than what it says.
 - A filed report replies **in the channel**, so the club can see a bug is already
   known. Anything about the *player* replies privately — too long, too often, and
-  "not set up yet" — because "you have filed three reports this hour" is not
+  "not set up yet" — because "you have filed fifteen reports this hour" is not
   something to read out in front of everybody, and neither is your own missing
   `GITHUB_TOKEN`. A GitHub outage is the one public failure, because it is about
   the world rather than about this club and the next person will hit it too. The
@@ -132,7 +132,7 @@ that and abuse:
 That layer has tests, and they need no install:
 
 ```sh
-python3 -m unittest discover -s client     # 36 pass
+python3 -m unittest discover -s client     # 72 pass
 ```
 
 ### Restarting, and making a new command appear
