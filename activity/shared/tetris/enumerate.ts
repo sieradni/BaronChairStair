@@ -29,7 +29,7 @@ import {
   type Puzzle,
   type SolutionStep,
 } from "../puzzle";
-import { DEFAULT_HANDLING, type Handling } from "./handling";
+import { DEFAULT_HANDLING, SDF_INSTANT, type Handling } from "./handling";
 import { createPuzzleEngine, readBoard, toLetter } from "./engine";
 import { nameClear } from "./replay";
 import { RoutePlanner, ticksForRoute, type MoveKey, type TargetCells } from "./pathfinder";
@@ -153,6 +153,8 @@ interface Walker {
   readonly puzzle: Puzzle;
   readonly limits: SearchLimits;
   readonly deadline: number;
+  /** The soft-drop rate the run is being planned at. */
+  readonly sdf: number;
   readonly seen: Set<string>;
   readonly lines: FoundLine[];
   /** Canonical keys of the lines already kept, so permutations count once. */
@@ -285,13 +287,23 @@ function completesARow(engine: Engine, cells: TargetCells): boolean {
   return false;
 }
 
-/** Plays a route out on the live engine and reads what the lock scored. */
+/**
+ * Plays a route out on the live engine and reads what the lock scored.
+ *
+ * `sdf` and `softDrops` are what #44 added to `ticksForRoute`: below the
+ * instant soft drop a held drop descends `0.05 × sdf` rows a frame, so the key
+ * has to stay down for as many frames as the planned descent needs. At the
+ * default they change nothing, which is why omitting them typechecked as a
+ * two-argument call right up until the two branches met.
+ */
 function play(
   engine: Engine,
   route: readonly MoveKey[],
+  sdf: number,
+  softDrops: readonly number[],
   lastLock: () => LockRes | null,
 ): { readonly clear: ClearName | null; readonly attack: number } | null {
-  for (const batch of ticksForRoute(route, engine.frame)) {
+  for (const batch of ticksForRoute(route, engine.frame, sdf, softDrops)) {
     engine.tick(batch as never);
   }
   const lock = lastLock();
@@ -318,6 +330,8 @@ interface Branch {
    * identical answer.
    */
   readonly route: readonly MoveKey[];
+  /** The descent of each soft drop in `route`, as the planner measured it. */
+  readonly softDrops: readonly number[];
 }
 
 /**
@@ -350,15 +364,27 @@ function childrenOf(walker: Walker, owed: Owed): Branch[] {
         // worth asking where a row actually comes out. On a puzzle board most
         // placements are quiet stacking, and asking anyway was the whole cost
         // of the search.
-        const route = completesARow(engine, cells)
-          ? planner.placementAt(cells)?.route
-          : (planner.plainRouteTo(cells) ?? planner.placementAt(cells)?.route);
+        // The expensive question — which kick does the engine credit — is only
+        // worth asking where a row actually comes out. Below the instant soft
+        // drop it has to be asked anyway: `plainRouteTo` reports a route and no
+        // descents, and *every* plain route contains a soft drop (673 of 673
+        // over the archive's opening positions), so one held tick would stop
+        // the fall short and land the piece on squares nobody asked for. At
+        // `SDF_INSTANT` one tick always covers the whole descent, which is what
+        // makes the cheap route safe there and only there.
+        const mustMeasure = completesARow(engine, cells) || walker.sdf < SDF_INSTANT;
+        const plain = mustMeasure ? null : planner.plainRouteTo(cells);
+        const measured = plain ? null : planner.placementAt(cells);
+        const route = plain ?? measured?.route;
+        // A seat the planner cannot land on is skipped, clearing or not —
+        // falling through to the cheap route there would play a placement the
+        // engine had just refused.
         if (!route) continue;
-        const placement = { route };
+        const softDrops = measured?.softDrops ?? [];
         const resting = engine.snapshot();
-        const outcome = play(engine, placement.route, walker.lastLock);
+        const outcome = play(engine, route, walker.sdf, softDrops, walker.lastLock);
         engine.fromSnapshot(resting);
-        if (outcome) found.push({ cells, piece, holdFirst, route: placement.route, ...outcome });
+        if (outcome) found.push({ cells, piece, holdFirst, route, softDrops, ...outcome });
       }
     } finally {
       engine.fromSnapshot(before);
@@ -405,7 +431,7 @@ function walk(
     const before = engine.snapshot();
     try {
       if (branch.holdFirst) engine.hold(false, true);
-      const outcome = play(engine, branch.route, walker.lastLock);
+      const outcome = play(engine, branch.route, walker.sdf, branch.softDrops, walker.lastLock);
       if (!outcome) continue;
       walk(
         walker,
@@ -461,6 +487,7 @@ export function searchSolutions(
     puzzle,
     limits: settled,
     deadline: started + settled.maxMillis,
+    sdf: handling.sdf,
     seen: new Set(),
     lines: [],
     keys: new Set(),

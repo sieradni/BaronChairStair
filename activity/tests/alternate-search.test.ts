@@ -11,6 +11,9 @@
 
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_LIMITS, searchSolutions } from "../shared/tetris/enumerate";
+import { DEFAULT_HANDLING } from "../shared/tetris/handling";
+import { replayPlacements } from "../shared/tetris/replay";
+import { decodeBoard, ENGINE_ROWS } from "../shared/puzzle";
 import { solutionKey } from "../shared/solution-key";
 import type { Puzzle } from "../shared/puzzle";
 
@@ -146,6 +149,56 @@ describe("finding every way a puzzle can be solved", () => {
       { piece: "I", cells: [[9, 0], [9, 1], [9, 2], [9, 3]] },
     ]);
     expect(report.lines.map((line) => solutionKey(line.placements))).toContain(dropped);
+  });
+
+  test("a line found at a slow soft drop lands where it says it lands", () => {
+    // Nothing else in this suite runs the search at anything but the default,
+    // so the handling threaded into `ticksForRoute` was unobservable and
+    // reverting it was a silent no-op.
+    //
+    // It is not cosmetic. `plainRouteTo` returns the walk's path to a seat, and
+    // that walk drops a piece all the way to rest before the moves and kicks
+    // that follow — so its soft drop is how the piece gets *down*, not
+    // decoration. Reporting no descents means one held tick, which at `sdf 5`
+    // falls a quarter of a row, and every later move fires from the wrong
+    // height. Measured over the archive: 456 of 3380 quiet seats lock on
+    // different squares at `sdf 5`, while the search records the seat it asked
+    // for and still reports `exhausted`.
+    //
+    // Archive puzzle 37, not a made-up board: a synthetic well passed either
+    // way, and this test's whole job is to fail when the search stops measuring
+    // below the instant setting. Three pieces, so it exhausts in about two
+    // seconds even with every seat measured.
+    const slow = { ...DEFAULT_HANDLING, sdf: 5 };
+    const puzzle = puzzleOf({
+      board: ["G.....GGGG", "G......GGG", "G.J...GGGG", "JJJ......."],
+      queue: ["L", "S", "T"],
+      hold: null,
+      targetAttack: 4,
+      requiredClears: [{ clear: "tsd", count: 1 }],
+    });
+
+    const report = searchSolutions(puzzle, { ...GENEROUS, maxLines: 6, maxMillis: 20_000 }, slow);
+    expect(report.lines.length).toBeGreaterThan(0);
+
+    const seats = (cells: readonly (readonly [number, number])[]) =>
+      [...cells].map(([x, y]) => `${x},${y}`).sort().join(" ");
+
+    for (const line of report.lines) {
+      const replayed = replayPlacements(
+        { board: decodeBoard(puzzle.board, ENGINE_ROWS), queue: puzzle.queue, hold: puzzle.hold },
+        slow,
+        line.placements.map((step) => ({ piece: step.piece, cells: step.cells })),
+      );
+      replayed.steps.forEach((step, index) => {
+        expect(
+          seats(step.cells),
+          "a placement the search reported does not land there when replayed at\n" +
+            "the same handling — the soft-drop descents are not reaching\n" +
+            "`ticksForRoute`, so the fall stops short of the seat that was chosen.",
+        ).toBe(seats(line.placements[index]!.cells));
+      });
+    }
   });
 
   test("a search that ran out says so, and never claims to have exhausted", () => {
