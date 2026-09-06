@@ -98,6 +98,43 @@ how fast, who missed, and how long the server's run of solves is. It happens
 once per server per day, and only in servers that announced the puzzle in the
 first place, because the reply needs something to reply to.
 
+### Versions, and how a server hears about them
+
+The bot carries a version — `beta 0.1` at the time of writing — in
+`client/changelog.py`, next to the list of what each one changed.
+
+**A server is told the first time somebody runs `/puzzle` on a build it has not
+heard about**, as a plain message behind the puzzle embed. Not on a timer and
+not at boot: a deploy should not wake a channel up, so the note rides along
+behind something a person actually asked for, and only the first person to ask
+sees it arrive. It sends with `AllowedMentions.none()`, so a release note can
+never ping a room however it is worded.
+
+**It names every version the server missed, not just the newest one.**
+Production pulls when somebody deploys, which may be several releases after the
+last deploy — announcing only the tip would drop the middle ones silently. Past
+three releases the message says how many older ones it is not listing, because a
+server that has never heard from the bot is owed the entire history and nobody
+typing `/puzzle` asked to read it — and it is trimmed by *length* as well, since
+counting releases is not counting characters. Before that cap existed, three
+releases of eight wordy notes rendered to 2,029 characters, which Discord
+rejects outright; the same input now fits.
+
+Releasing is adding a `Release` at the top of `RELEASES`; `VERSION` follows it,
+and a test fails if it does not. Order in that tuple *is* the version order —
+comparing `beta 0.10` against `beta 0.9` as text is wrong and as numbers is a
+parser nobody needs.
+
+What each server has been told lives in `bot_versions`, one row per guild, and
+the claim is taken before the message is sent — the write is what stops a second
+caller, so it has to happen where two callers can still both be running.
+
+A send that fails therefore loses those notes **permanently**: the row already
+says the server has heard, and the next release names only what came after it.
+That is a trade, not a mitigation, and it is the right one only because nobody
+depends on a changelog. Something that mattered would claim after the send and
+dedupe instead.
+
 ### `/report` — a bug, without a GitHub account
 
 ```
