@@ -106,7 +106,11 @@ export function replayPlacements(
       throw new ReplayError(`no route to ${describe(placement.cells)}`, index);
     }
 
-    for (const batch of ticksForRoute(committed.route, engine.frame)) {
+    // Timed with the handling the replay was given and the distances the
+    // planner measured: below the instant soft drop the key stays down for the
+    // frames the descent needs, so what the build pipeline replays is the
+    // shape a commit recorded at the same setting.
+    for (const batch of ticksForRoute(committed.route, engine.frame, handling.sdf, committed.softDrops)) {
       engine.tick(batch as never);
     }
     if (!lastLock) throw new ReplayError("hard drop did not lock a piece", index);

@@ -546,12 +546,31 @@ export class PuzzleRun {
     const releases = releaseTicks(this.engine, this.engine.frame);
     const batches = [
       releases,
-      ...ticksForRoute(placement.route, this.engine.frame + (releases.length > 0 ? 1 : 0)),
-    ].filter((batch) => batch.length > 0);
+      ...ticksForRoute(
+        placement.route,
+        this.engine.frame + (releases.length > 0 ? 1 : 0),
+        this.handling.sdf,
+        placement.softDrops,
+      ),
+    ];
+    // Held soft-drop frames arrive as eventless batches and are load-bearing:
+    // the key must stay down while the clock walks, and the replay ticks every
+    // frame whether or not it carries events. Nothing here filters empties.
     const additions = batches.reduce((total, batch) => total + batch.length, 0);
     // One rule from `input`, kept: a full log ends the attempt rather than
     // letting the player drive moves the server will never see.
     if (this.events.length + additions > MAX_EVENTS) {
+      this.finish(meetsTarget(this.attack, this.puzzle.targetAttack) ? "solved" : "failed");
+      return true;
+    }
+    // A slow soft drop spends real frames: its descent is held across as many
+    // ticks as the handling needs, which can carry the log past the frame
+    // ceiling the server enforces — and an event stamped there would have the
+    // whole run rejected, not merely ended. The same honesty as the event
+    // ceiling above: finish on what has been earned, commit nothing further.
+    const lastBatch = batches[batches.length - 1];
+    const lastFrame = lastBatch && lastBatch.length > 0 ? lastBatch[lastBatch.length - 1]!.frame : this.engine.frame;
+    if (lastFrame > MAX_FRAMES) {
       this.finish(meetsTarget(this.attack, this.puzzle.targetAttack) ? "solved" : "failed");
       return true;
     }
