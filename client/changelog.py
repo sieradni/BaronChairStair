@@ -44,7 +44,7 @@ RELEASES: tuple[Release, ...] = (
             "Your progress toward those clears shows on the board while you play.",
             "Solved a daily? **Play again** replays it unscored, so your filed run stands.",
             "The **Solved!** stamp now clears itself once there is a solution to read.",
-            "`/report` files in the channel and allows 15 reports an hour instead of 3.",
+            "`/report` now answers in the channel rather than only to whoever sent it.",
         ),
     ),
 )
@@ -180,10 +180,15 @@ def claim_announcement(
 
     Claimed *before* the send and not after, for the reason `puzzle_recap.claim`
     gives: the write is what excludes the second caller, so it has to happen
-    where two callers can still both be running. The cost is that a send failing
-    after the claim loses that announcement, which is the right way round — a
-    changelog posted twice is worse than one posted never, and the next release
-    will say what this one would have.
+    where two callers can still both be running.
+
+    The cost is real and worth stating plainly, because it is easy to write down
+    as smaller than it is: a send that fails after the claim loses those notes
+    **permanently**. `releases_since` reads from the recorded version, so the
+    next release names only what came after it — the lost one is not carried
+    forward. That is still the right way round for a changelog nobody depends
+    on, but it is a trade rather than a mitigation, and a future version of this
+    that people *do* depend on wants the claim after the send plus a dedupe.
 
     The `WHERE` is the whole exclusion. Two calls read the same `previously_seen`
     and both try the write; exactly one changes a row.

@@ -70,7 +70,15 @@ def _install_stubs() -> bool:
     discord.Colour = Colour
     discord.Interaction = object
     discord.Message = object
-    discord.HTTPException = type("HTTPException", (Exception,), {})
+    class HTTPException(Exception):
+        # discord.py's takes (response, message). Constructing it with one
+        # argument works here and raises there, which would make a test that
+        # passes on a bare box fail on the bot's own machine.
+        def __init__(self, response, message=None):
+            super().__init__(message or "http error")
+            self.response, self.text = response, message
+
+    discord.HTTPException = HTTPException
 
     app_commands = types.ModuleType("discord.app_commands")
 
@@ -105,7 +113,7 @@ class Followup:
 
     async def send(self, content=None, **kwargs):
         if self.explode:
-            raise sys.modules["discord"].HTTPException("nope")
+            raise sys.modules["discord"].HTTPException(object(), "nope")
         self.sent.append({"content": content, **kwargs})
         return object()
 
@@ -120,11 +128,11 @@ class Announcing(unittest.TestCase):
     def setUp(self):
         self.db = sqlite3.connect(":memory:")
         changelog.init_db(self.db)
-        self._saved = puzzle_commands.recap_db
-        puzzle_commands.recap_db = self.db
+        self._saved = puzzle_commands.version_db
+        puzzle_commands.version_db = self.db
 
     def tearDown(self):
-        puzzle_commands.recap_db = self._saved
+        puzzle_commands.version_db = self._saved
         self.db.close()
 
     def announce(self, guild_id=1, followup=None):
@@ -154,7 +162,7 @@ class Announcing(unittest.TestCase):
         self.assertEqual(self.announce(guild_id=None).sent, [])
 
     def test_without_a_database_it_stays_quiet_rather_than_raising(self):
-        puzzle_commands.recap_db = None
+        puzzle_commands.version_db = None
         self.assertEqual(self.announce().sent, [])
 
     def test_a_send_that_fails_does_not_take_the_command_down(self):
@@ -169,8 +177,6 @@ class Announcing(unittest.TestCase):
         self.assertEqual(self.announce().sent, [])
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TheCommandActuallyCallsIt(unittest.TestCase):
@@ -182,10 +188,26 @@ class TheCommandActuallyCallsIt(unittest.TestCase):
     which no amount of stubbing the network would surface.
     """
 
-    def test_puzzle_command_announces_after_it_answers(self):
-        import inspect
+    @staticmethod
+    def _command_source() -> str:
+        """
+        `puzzle_command`'s body, read off the file.
 
-        body = inspect.getsource(puzzle_commands.puzzle_command)
+        Not `inspect.getsource(puzzle_commands.puzzle_command)`: with the real
+        `discord.py` installed the decorator has replaced the function with an
+        `app_commands.Command`, and `getsource` raises on it. The stub here
+        returns the function untouched, so that version passed on a bare box and
+        would have failed on the bot's own machine.
+        """
+        import pathlib
+
+        text = pathlib.Path(puzzle_commands.__file__).read_text()
+        start = text.index("async def puzzle_command(")
+        end = text.index("\ndef ", start)
+        return text[start:end]
+
+    def test_puzzle_command_announces_after_it_answers(self):
+        body = self._command_source()
         self.assertIn(
             "_announce_new_version",
             body,
@@ -195,8 +217,44 @@ class TheCommandActuallyCallsIt(unittest.TestCase):
         # After the puzzle is sent, not before: the changelog is a footnote to
         # the thing somebody asked for, and a failure to send it must not
         # displace the puzzle.
+        #
+        # Anchored on the send that posts the puzzle — the one whose result is
+        # kept — rather than on the first `followup.send` in the text, which is
+        # the unreachable-server branch further up. Anchored there, this
+        # assertion passed however the two were ordered.
         self.assertLess(
-            body.index("followup.send"),
+            body.index("message = await interaction.followup.send"),
             body.index("_announce_new_version"),
             "the changelog is being sent before the puzzle it rides behind",
         )
+
+
+class ItsOwnDatabaseHandle(unittest.TestCase):
+    """
+    That a recap failure cannot switch version announcements off.
+
+    Both tables live in one file, but each feature is enabled only if its own
+    table was made. Sharing `recap_db` meant a locked database during the
+    recap's `init_db` disabled the changelog too, with the boot log naming the
+    recap and `changelog_error` still None.
+    """
+
+    def test_the_two_features_have_separate_handles(self):
+        self.assertIsNot(
+            puzzle_commands.recap_db,
+            "sentinel",
+            "recap_db must still exist for the recap",
+        )
+        self.assertTrue(hasattr(puzzle_commands, "version_db"))
+
+    def test_the_announcer_reads_its_own_handle(self):
+        import inspect
+
+        body = inspect.getsource(puzzle_commands._announce_new_version)
+        self.assertIn("version_db", body)
+        self.assertNotIn("recap_db", body,
+                         "the changelog is gated on the recap's handle again")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -116,8 +116,9 @@ last deploy — announcing only the tip would drop the middle ones silently. Pas
 three releases the message says how many older ones it is not listing, because a
 server that has never heard from the bot is owed the entire history and nobody
 typing `/puzzle` asked to read it — and it is trimmed by *length* as well, since
-counting releases is not counting characters: three releases of eight wordy
-notes measured 2,029 characters, which Discord rejects outright.
+counting releases is not counting characters. Before that cap existed, three
+releases of eight wordy notes rendered to 2,029 characters, which Discord
+rejects outright; the same input now fits.
 
 Releasing is adding a `Release` at the top of `RELEASES`; `VERSION` follows it,
 and a test fails if it does not. Order in that tuple *is* the version order —
@@ -125,10 +126,14 @@ comparing `beta 0.10` against `beta 0.9` as text is wrong and as numbers is a
 parser nobody needs.
 
 What each server has been told lives in `bot_versions`, one row per guild, and
-the claim is taken before the message is sent. A send that fails therefore loses
-that announcement rather than repeating it, which is the right way round: a
-changelog posted twice is worse than one posted never, and the next release will
-say what this one would have.
+the claim is taken before the message is sent — the write is what stops a second
+caller, so it has to happen where two callers can still both be running.
+
+A send that fails therefore loses those notes **permanently**: the row already
+says the server has heard, and the next release names only what came after it.
+That is a trade, not a mitigation, and it is the right one only because nobody
+depends on a changelog. Something that mattered would claim after the send and
+dedupe instead.
 
 ### `/report` — a bug, without a GitHub account
 

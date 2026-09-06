@@ -55,6 +55,13 @@ GRADE_BANDS = (
 # day. Left as None when nothing wired it up: this module stays importable on
 # its own, and a missing recap must never stop the commands working.
 recap_db: "sqlite3.Connection | None" = None
+#: The same file, set separately.
+#:
+#: Not `recap_db` reused. That one is assigned inside the try that creates the
+#: recap's table, so a recap failure would switch version announcements off too
+#: — two unrelated features sharing one failure, and a boot log pointing at the
+#: wrong one. Each is set only if its own table was made.
+version_db: "sqlite3.Connection | None" = None
 
 
 def _app_id() -> str:
@@ -200,10 +207,10 @@ async def _announce_new_version(interaction: discord.Interaction) -> None:
     The claim happens before the send, so a failure loses that announcement
     rather than repeating it — see `changelog.claim_announcement`.
     """
-    if recap_db is None or interaction.guild_id is None:
+    if version_db is None or interaction.guild_id is None:
         return
     try:
-        message = changelog.announcement_for(recap_db, interaction.guild_id)
+        message = changelog.announcement_for(version_db, interaction.guild_id)
     except sqlite3.Error:
         log.warning("could not read the changelog state", exc_info=True)
         return

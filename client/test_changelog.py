@@ -180,6 +180,33 @@ class ClaimingOnce(unittest.TestCase):
 
         self.assertFalse(claimed)
 
+    def test_the_message_names_every_missed_version_not_just_the_newest(self):
+        """
+        The headline rule, end to end.
+
+        Everything else here tests `releases_since` and `format_announcement`
+        separately. Nothing tested that `announcement_for` — the one thing
+        `/puzzle` actually calls — joins them up, so replacing its body with
+        `format_announcement((RELEASES[0],))` would have announced only the tip
+        and left the whole suite green.
+        """
+        history = (
+            Release("beta 0.3", ("the third thing",)),
+            Release("beta 0.2", ("the second thing",)),
+            Release("beta 0.1", ("the first thing",)),
+        )
+        real = changelog.RELEASES
+        changelog.RELEASES = history
+        try:
+            changelog.claim_announcement(self.db, 42, "beta 0.1")
+            message = changelog.announcement_for(self.db, 42, "beta 0.3")
+        finally:
+            changelog.RELEASES = real
+
+        self.assertIn("the third thing", message)
+        self.assertIn("the second thing", message, "a skipped version was not announced")
+        self.assertNotIn("the first thing", message, "a version already heard was repeated")
+
     def test_a_new_version_is_announced_to_a_server_already_on_an_old_one(self):
         changelog.claim_announcement(self.db, 3, "beta 0.1")
         claimed, previously = changelog.claim_announcement(self.db, 3, "beta 0.2")

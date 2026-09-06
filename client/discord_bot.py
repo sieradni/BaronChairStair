@@ -369,6 +369,7 @@ except sqlite3.Error as e:
 # table nobody is told what changed, and `/puzzle` carries on regardless.
 try:
     changelog.init_db(db)
+    puzzle_commands.version_db = db
     changelog_error = None
 except sqlite3.Error as e:
     changelog_error = f"{type(e).__name__}: {e}"
