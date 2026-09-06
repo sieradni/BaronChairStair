@@ -188,6 +188,8 @@ interface ReviewPuzzle {
   /** Who last moved each field. Per field, because one name for five is a lie. */
   readonly correctedBy: Record<string, { by: string; at: number }>;
   readonly history: readonly { field: string; by: string; was: string | null; became: string | null }[];
+  /** How the puzzle is holding up: distinct lines, and how many miss its goal. */
+  readonly solutions: { readonly total: number; readonly missingGoal: number };
 }
 
 /** `token: null` sends no Authorization header at all; anything else mints one. */
@@ -461,5 +463,56 @@ describe("reverting to the source", () => {
 
   test("refuses to revert a puzzle that is not there", async () => {
     expect((await revert(999_999)).status).toBe(404);
+  });
+});
+
+describe("what a correction does to the row's solution counts", () => {
+  /** Two lines on one puzzle: one that met its goal, one that did not. */
+  function recordTwoLines(puzzleId: number): void {
+    for (const [key, strict] of [["k-good", true], ["k-offgoal", false]] as const) {
+      store.recordSolution({
+        puzzleId,
+        canonicalKey: key,
+        keyVersion: 1,
+        placements: [{ piece: "O", cells: [[0, 0]], clear: null, attack: 0 }],
+        events: null,
+        handling: null,
+        attack: 1,
+        clears: strict ? ["double"] : [],
+        solvedStrict: strict,
+        source: "player",
+        foundBy: "ada",
+        guildId: "g1",
+      });
+    }
+  }
+
+  test("a correction answers with the counts, rather than blanking them", async () => {
+    // The row the page replaces comes from this response. Leaving the counts out
+    // made the line count and the `off-goal` badge vanish the moment an officer
+    // touched the title — and a badge that disappears when you edit something
+    // reads as "fixed".
+    recordTwoLines(target.id);
+
+    const row = await corrected(await patch(target.id, { title: "A better name" }));
+
+    expect(row.solutions).toEqual({ total: 2, missingGoal: 1 });
+  });
+
+  test("and so does putting a correction back", async () => {
+    recordTwoLines(target.id);
+    await patch(target.id, { title: "A better name" });
+
+    const row = await corrected(
+      await call("DELETE", `/api/review/puzzles/${target.id}/override`),
+    );
+
+    expect(row.solutions).toEqual({ total: 2, missingGoal: 1 });
+  });
+
+  test("a puzzle nobody has solved reports zero, which is not the same as unknown", async () => {
+    const row = await corrected(await patch(target.id, { title: "Renamed" }));
+
+    expect(row.solutions).toEqual({ total: 0, missingGoal: 0 });
   });
 });

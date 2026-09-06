@@ -422,6 +422,22 @@ function toReviewPuzzle(
  * in a JSON file and there is no parent row to reference — so a row written
  * against an id that does not exist would simply never be read again.
  */
+/**
+ * How one puzzle is holding up, for the routes that answer with a single row.
+ *
+ * The list route asks this of the whole archive in one query. A correction
+ * answers with one puzzle, and used to leave the counts out entirely — so the
+ * row it replaced lost its line count and its `off-goal` badge the moment an
+ * officer touched the title, and stayed wrong until the list was fetched again.
+ * A badge that disappears when you edit something reads as "fixed".
+ */
+function holdingUpFor(
+  store: ReviewDependencies["store"],
+  puzzleId: number,
+): SolutionCount | undefined {
+  return store.solutionCounts().find((row) => row.puzzleId === puzzleId);
+}
+
 function correctablePuzzle(
   c: Context,
   archive: ReviewDependencies["archive"],
@@ -705,6 +721,7 @@ export function registerReviewRoutes(app: AppRouter, deps: ReviewDependencies): 
         override ?? undefined,
         store.overrideHistory(puzzle.id),
         archive.correctionsApplied,
+        holdingUpFor(store, puzzle.id),
       ),
     });
   });
@@ -732,7 +749,13 @@ export function registerReviewRoutes(app: AppRouter, deps: ReviewDependencies): 
       ok: true,
       reverted,
       puzzle: puzzle
-        ? toReviewPuzzle(puzzle, undefined, store.overrideHistory(id), archive.correctionsApplied)
+        ? toReviewPuzzle(
+            puzzle,
+            undefined,
+            store.overrideHistory(id),
+            archive.correctionsApplied,
+            holdingUpFor(store, id),
+          )
         : null,
     });
   });
