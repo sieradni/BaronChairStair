@@ -104,6 +104,48 @@ describe("finding every way a puzzle can be solved", () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
+  test("two orders of the same pieces are not merged when they score differently", () => {
+    // The transposition table's whole job is to notice that two orders reach the
+    // same position. Combo is the part of "the same position" that is not on the
+    // board: the engine multiplies damage by `1 + 0.25 * combo`, so a quiet
+    // placement followed by a clearing one, and the same two the other way
+    // round, leave an identical board, hold, piece set, attack and clear
+    // multiset — and a different combo. Everything after them is worth
+    // different amounts.
+    //
+    // Keyed without it, this position returned 16 lines and said `exhausted`
+    // while four real solving lines were unreachable, which is the one claim
+    // this tool must never make wrongly.
+    const report = searchSolutions(
+      puzzleOf({
+        board: ["GGGGGGGGG.", "GGGGGGGGG.", "GGGGGGGGG.", "GGGGGGGGG.", "GGGGGG...."],
+        queue: ["I", "I", "I"],
+        targetAttack: 5,
+      }),
+      { maxLines: 500, maxNodes: 5_000_000, maxMillis: 60_000 },
+    );
+
+    expect(report.stoppedBy).toBe("exhausted");
+    // Counted, not sampled. A "does some line score quad+single" check passes
+    // with the bug reinstated, because other lines reach the same shape by
+    // other seats — the loss is four *specific* orders, not a whole category.
+    expect(
+      report.lines.length,
+      "The transposition key has stopped carrying the engine's combo/b2b state,\n" +
+        "so two orders worth different amounts are being merged. This position\n" +
+        "loses exactly four real solving lines that way, while the search still\n" +
+        "reports `exhausted` — the one claim this tool must never make wrongly.",
+    ).toBe(20);
+    // And the named one among them, so the count cannot be satisfied by four
+    // lines arriving from somewhere else.
+    const dropped = solutionKey([
+      { piece: "I", cells: [[0, 5], [0, 6], [0, 7], [0, 8]], clear: null, attack: 0 },
+      { piece: "I", cells: [[6, 4], [7, 4], [8, 4], [9, 4]], clear: "single", attack: 0 },
+      { piece: "I", cells: [[9, 0], [9, 1], [9, 2], [9, 3]], clear: "quad", attack: 5 },
+    ]);
+    expect(report.lines.map((line) => solutionKey(line.placements))).toContain(dropped);
+  });
+
   test("a search that ran out says so, and never claims to have exhausted", () => {
     const stopped = searchSolutions(QUAD_WELL, { ...GENEROUS, maxNodes: 1 });
     expect(stopped.stoppedBy).not.toBe("exhausted");

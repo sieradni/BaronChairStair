@@ -117,7 +117,7 @@ function total(owed: Owed): number {
  * a maker needs to see.
  */
 function stateKey(
-  board: readonly (readonly (string | null)[])[],
+  engine: Engine,
   owed: Owed,
   held: Mino | null,
   attack: number,
@@ -125,11 +125,26 @@ function stateKey(
 ): string {
   const pieces = [...owed].sort(([a], [b]) => a.localeCompare(b)).map(([p, n]) => `${p}${n}`);
   return [
-    encodeBoard(board as never).join("/"),
+    encodeBoard(readBoard(engine) as never).join("/"),
     pieces.join(""),
     held ?? "-",
     attack,
     [...clears].sort().join(","),
+    // The scoring state the engine carries into the *next* placement, and the
+    // reason the rest of this key is not enough. Combo multiplies damage —
+    // `garbage *= 1 + 0.25 * combo` — and back-to-back adds to it, so two ways
+    // of reaching the same board with the same score so far can be worth
+    // different amounts from here on.
+    //
+    // Leaving them out is not a weaker merge, it is a wrong one. Measured: on a
+    // three-I position, placing a quiet piece then a line-clearing one, or the
+    // same two in the other order, gives a byte-identical board, owed set, hold,
+    // attack and clear multiset — and combo 0 against -1. The identical third
+    // placement then scores a quad worth 5 from one and 4 from the other, so
+    // merging them dropped four real solving lines while the search still
+    // reported `exhausted`.
+    engine.stats.combo,
+    engine.stats.b2b,
   ].join("|");
 }
 
@@ -378,7 +393,7 @@ function walk(
   if (total(owed) === 0 || budgetSpent(walker)) return;
   if (!canStillReachGoal(walker.engine, walker.puzzle, owed, clears)) return;
 
-  const key = stateKey(readBoard(walker.engine), owed, toLetter(walker.engine.held) as Mino | null, attack, clears);
+  const key = stateKey(walker.engine, owed, toLetter(walker.engine.held) as Mino | null, attack, clears);
   if (walker.seen.has(key)) return;
   walker.seen.add(key);
 
