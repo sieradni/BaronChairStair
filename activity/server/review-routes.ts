@@ -44,7 +44,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { decodeBoard, ENGINE_ROWS, type Puzzle, toListing } from "../shared/puzzle";
 import { InvalidRunError, parseInputLog, verifyRun } from "../shared/tetris/verify";
-import type { Store } from "./db";
+import type { SolutionCount, Store } from "./db";
 import { type AppRouter, bearerToken, type Variables } from "./http";
 import { readJsonBody } from "./limits";
 import type { OverrideLogEntry, PuzzleOverride } from "./puzzle-overrides";
@@ -81,6 +81,11 @@ export interface ReviewDependencies {
     | "overrideHistory"
     | "acceptedPuzzles"
     | "hasAcceptedPuzzle"
+    // Read-only, and that is the whole of this page's relationship with the
+    // solution table: reviewers see how a puzzle is holding up, and nothing
+    // here can write a discovery or take one away.
+    | "solutionCounts"
+    | "solutionsFor"
   >;
   /**
    * The archive, for the puzzles a correction is *about*.
@@ -368,6 +373,16 @@ function toReviewPuzzle(
    * `overridden: true` while every player was being served the source.
    */
   applied = true,
+  /**
+   * How this puzzle is holding up under being played.
+   *
+   * The maker-facing half of alternate-solution detection, and it belongs on
+   * the list rather than behind a click: `missingGoal` above zero says players
+   * are hitting the target attack by lines the stated condition does not
+   * describe, which is the defect the whole feature exists to surface. Absent
+   * counts mean nobody has solved it yet, not that it is sound.
+   */
+  solutions: SolutionCount | undefined = undefined,
 ) {
   const usable = applied && override !== undefined && overrideProblem(override) === null;
   return {
@@ -387,6 +402,10 @@ function toReviewPuzzle(
     // over five fields is the defect, not the presentation of it.
     correctedBy: correctedBy(history),
     history,
+    solutions: {
+      total: solutions?.total ?? 0,
+      missingGoal: solutions?.missingGoal ?? 0,
+    },
   };
 }
 
@@ -570,6 +589,9 @@ export function registerReviewRoutes(app: AppRouter, deps: ReviewDependencies): 
     // the DELETE's own 404, unreachable: sqlite3 was the only way to one. And
     // it matters more than tidiness, because the merge is by id alone, so
     // whatever the club numbers next inherits that correction.
+    // One query for the whole archive. Asked per puzzle this would be 138
+    // round trips to render one page.
+    const counted = new Map(store.solutionCounts().map((row) => [row.puzzleId, row]));
     const listed = new Set(archive.originals.map((puzzle) => puzzle.id));
     const orphans = [...overrides.values()]
       .filter((override) => !listed.has(override.puzzleId))
@@ -600,10 +622,34 @@ export function registerReviewRoutes(app: AppRouter, deps: ReviewDependencies): 
             overrides.get(puzzle.id),
             store.overrideHistory(puzzle.id),
             archive.correctionsApplied,
+            counted.get(puzzle.id),
           ),
         ),
         ...orphans,
       ],
+    });
+  });
+
+  /**
+   * Every distinct line on record for one puzzle.
+   *
+   * The list view says *how many* and how many miss the goal; this says which,
+   * and it is the view that turns a count into a fix. A maker reading
+   * `missingGoal: 3` needs to see the three lines to know whether the condition
+   * is too loose or the goal sentence was always ambiguous.
+   *
+   * Placements without the input logs. The logs are on the rows so a line can
+   * be re-proved, not so it can be handed out: they are keystroke-level
+   * recordings of named players, and nothing on this page needs them.
+   */
+  app.get("/api/review/puzzles/:puzzle/solutions", requireReviewer(secret), (c) => {
+    const puzzle = correctablePuzzle(c, archive, store);
+    return c.json({
+      puzzleId: puzzle.id,
+      goal: puzzle.goal,
+      targetAttack: puzzle.targetAttack,
+      requiredClears: puzzle.requiredClears ?? null,
+      solutions: store.solutionsFor(puzzle.id),
     });
   });
 

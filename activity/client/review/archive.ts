@@ -123,6 +123,16 @@ function archiveRow(puzzle: ArchiveRow, open: boolean, handlers: ArchiveHandlers
       // Only that a correction exists, never which field — the row has no room
       // for it and the form is one click away, where every field says so.
       puzzle.overridden ? el("span", { class: "review__flag", text: "corrected" }) : null,
+      // Lines that hit the target without doing what the goal says. It earns a
+      // place beside "corrected" because it is the same kind of fact — a thing
+      // about this puzzle an officer has to decide about — and unlike the
+      // count in the meta line it is a defect, not a statistic.
+      puzzle.solutions.missingGoal > 0
+        ? el("span", {
+            class: "review__flag review__flag--loose",
+            text: `${puzzle.solutions.missingGoal} off-goal`,
+          })
+        : null,
     ),
     el("span", {
       class: "review__row-by",
@@ -138,6 +148,11 @@ function archiveRow(puzzle: ArchiveRow, open: boolean, handlers: ArchiveHandlers
       el("span", { text: `#${puzzle.id}` }),
       el("span", { text: rating }),
       el("span", { text: `${puzzle.pieces} ${puzzle.pieces === 1 ? "piece" : "pieces"}` }),
+      puzzle.solutions.total > 0
+        ? el("span", {
+            text: `${puzzle.solutions.total} ${puzzle.solutions.total === 1 ? "line" : "lines"}`,
+          })
+        : null,
     ),
   );
 }

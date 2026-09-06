@@ -103,6 +103,19 @@ export interface ReviewPuzzle extends ArchiveListing {
   readonly correctedBy: Readonly<Record<string, { readonly by: string; readonly at: number }>>;
   /** Every move ever made to this puzzle's metadata, oldest first. */
   readonly history: readonly OverrideMove[];
+  /**
+   * How the puzzle is holding up under being played.
+   *
+   * `missingGoal` is the one that matters: lines that reached the target attack
+   * without doing what the goal says. Above zero means the condition is looser
+   * than the sentence next to it, which is a puzzle bug rather than a player
+   * one. Zero with `total` zero means nobody has solved it yet — not that it is
+   * sound.
+   */
+  readonly solutions: {
+    readonly total: number;
+    readonly missingGoal: number;
+  };
   /** Never set on a real row. The discriminant `OrphanedOverride` carries. */
   readonly orphaned?: false;
 }
