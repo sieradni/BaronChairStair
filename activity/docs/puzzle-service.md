@@ -13,14 +13,27 @@ There are three copies of the puzzle archive, and they disagree:
 
 | Copy | Rows | Owner |
 |---|---|---|
-| the Google Sheet | 200 | the club, edited by hand in Blueprint |
+| the Google Sheet | 200 metadata rows, 151 with blueprint codes | the club, edited by hand in Blueprint |
 | `activity/data/puzzles.json` (+ `solutions.json`) | 138 | this repository, committed |
 | `var/data/puzzles.json` in the website repo | 140 | that repository, committed |
 
-Sixty-two puzzles exist that `/puzzle` has never served. The two committed
-copies were cut from the sheet at different times and neither is refreshed by
-anything automatic. Every new puzzle currently has to be imported twice, by
-hand, into two repositories that decode it differently.
+The two committed copies were cut from the sheet at different times and neither
+is refreshed by anything automatic. Every new puzzle currently has to be
+imported twice, by hand, into two repositories that decode it differently.
+
+**Measured 2026-09-06** by running the existing build against the live sheet
+(`bun run tools/build-puzzles.ts --archive <fetched> --out <scratch>`):
+
+- **148 puzzles build**, against 138 committed — so **10 are new**, not the 62
+  the row count suggests. The `Puzzles` tab has 200 rows but only 151 carry a
+  blueprint code pair; the rest are metadata without a puzzle behind them yet.
+- **3 fail to build and are skipped**, as they should be: #13 and #149 have a
+  step the router cannot reach, and #58's answer sends no attack, so there is
+  nothing to score against.
+- **136 of 148 stated goals match the replayed clears.** The other twelve
+  disagree, which is what the frozen clear requirement exists to absorb.
+- **12 already-published puzzles have changed content since the last build.**
+  That is the finding that matters most, and it has its own rule below.
 
 The fix is one service that owns the archive, and two consumers that read it.
 
@@ -132,12 +145,40 @@ silently changes what the club plays tomorrow is the thing to avoid.
 
 The daily rotation is a pure function of the pool's *length*
 (`puzzleIndexForDay(day, pool.length, stream)`, `shared/daily.ts`). Going from
-138 puzzles to 200 changes which puzzle every future day draws.
+138 puzzles to 148 changes which puzzle every future day draws.
 
-Past days are safe: `day_puzzles` pins what was actually served, so history and
-old leaderboards do not move. But tomorrow's puzzle changes the moment the pool
-grows, and the pool should therefore grow **once**, deliberately, rather than a
-few rows at a time.
+Tomorrow's puzzle changes the moment the pool grows, so the pool should grow
+**once**, deliberately, rather than a few rows at a time.
+
+### 4b. A puzzle id does not identify a puzzle
+
+`day_puzzles` pins a day to a `puzzle_id` and nothing else:
+
+    CREATE TABLE IF NOT EXISTS day_puzzles (
+      day       INTEGER NOT NULL,
+      tier      TEXT NOT NULL,
+      puzzle_id INTEGER NOT NULL,
+      PRIMARY KEY (day, tier)
+    );
+
+There is no content snapshot. So the pin survives a *reordering* of the pool,
+which is what it was built for — and does **not** survive the content behind an
+id changing. Rebuilding from the sheet today changes twelve published puzzles:
+
+- **#8 is a different puzzle now.** Board, queue, goal and title all changed;
+  it went from "fourtris mogs" to "misplaced heart". Whoever played day-N
+  puzzle 8 played something that no longer exists under that id, and their
+  score is now filed against a puzzle they never saw.
+- **#7 and #109 have different piece queues** — same length, different pieces.
+  They play differently, so old scores are not comparable to new ones.
+- The remaining nine are harmless: eight difficulty ratings (five of them
+  filling in a 0 that meant "unrated") and one title typo on #3.
+
+This has to be decided before the first sync, not discovered after it. The
+options are to let the content move and accept that a few historical rows now
+describe a different puzzle, or to treat content as immutable once published
+and give a changed puzzle a new id. **Nothing should sync until somebody
+chooses**, because the second option is much harder to apply retroactively.
 
 ### 5. `PuzzleArchive.load` runs once, at module scope
 
@@ -157,10 +198,17 @@ makes this easy; nothing else about dev should reach production.
 
 ## Order of work — **planned**
 
+0. **Decide what a changed puzzle means** (rule 4b). Blocks everything else.
 1. **Schema and sync.** `archive_puzzles` table; `tools/sync-archive.ts`
    pulling both tabs over `gviz`, decoding and replaying exactly as
    `build-puzzles.ts` does, upserting rows as unpublished. Seeded from the
    existing 138 so the table starts equal to what is live.
+
+   Two details the build already has and the sync must keep: it reads its own
+   previous output to **carry frozen clear requirements forward** (112 of 138
+   carry across today), and it reads sheet columns **by position**, so a column
+   inserted in either tab shifts every field silently. The sync should match on
+   header names instead.
 2. **Public read endpoints.** `GET /api/archive`, `GET /api/archive/:id`,
    solutions included. No key.
 3. **The activity reads the table.** `PuzzleArchive.load` sources from the
@@ -172,6 +220,15 @@ Publishing the 62 new puzzles is a step of its own, taken deliberately, after
 1–3 are in and reviewed. See rule 4.
 
 ---
+
+## Open questions for the club
+
+- **`hide answer`** is a real column on the `blueprint urls` tab. Nobody has
+  said what it means for the public endpoint. The decision that solutions are
+  safe to publish was made about the archive as a whole; this column looks like
+  a per-puzzle intent that predates it, and it should be honoured or explicitly
+  retired rather than ignored.
+- **Rule 4b** — whether a published puzzle's content may change under its id.
 
 ## Naming
 
