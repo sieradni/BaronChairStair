@@ -56,8 +56,35 @@ Useful commands:
 ```sh
 bun test                                 # decoder, verifier, routes, and archive checks
 bun run tools/inspect-puzzle.ts 13 70    # why a given archive entry will not build
+bun run tools/find-alternates.ts --only 15   # other ways a puzzle can be solved
 bun run typecheck
 ```
+
+### Is this puzzle only solvable the way I meant?
+
+`tools/find-alternates.ts` searches a puzzle for lines that meet its goal, using
+the game's own reachability, kick choice and end-of-run rules so that what it
+finds is what a player could actually do.
+
+It answers two different questions and only one of them is a proof.
+
+- **"My condition is loose."** One alternate is enough. A puzzle finishable by a
+  line its author did not intend usually has a condition that says less than the
+  sentence beside it.
+- **"My condition is tight."** Only an `exhausted` search may say this. Every
+  other `stopped:` reason means the budget ran out with ground unexplored, and
+  the report always says which — a truncated search read as a clean bill of
+  health is the one failure this tool must not produce.
+
+Puzzles of about six pieces or fewer exhaust in seconds; nothing longer does, so
+most of the archive can be reported on but never cleared. `--seconds` raises the
+per-puzzle budget, `--only 15,37` narrows it, and `--write` files what it finds
+as `enumerated` rows credited to nobody — which is what stops the first player
+to *play* one of those lines being paid for rediscovering it.
+
+Its findings agree with the archive where the archive has an opinion: puzzle 15's
+goal text reads "Clear 1 TSD (2 solutions)", written by a person years before any
+of this, and an exhaustive search finds exactly two.
 
 **What the suite can and cannot see.** Most of it needs no browser: the engine,
 the verifier, the routes and the duel referee are all plain data in and plain
@@ -170,6 +197,31 @@ itself gave every run the same strictly ascending ladder — which reads as a
 fixed list even when the puzzles on it are new, and on a replay of the same day
 it *was* one. Difficulty still only ever climbs: nothing from an easier band
 arrives after something from a harder one.
+
+### Discoveries
+
+Every solved daily run is filed as a *solution* — the placements, the log they
+were derived from, and what the engine scored them. A run whose line nobody had
+recorded before is a discovery, and the Discoveries board counts them.
+
+**When two solutions are the same solution** is the whole of it. Placements as
+an unordered set, cells sorted within each placement, plus the run's own totals.
+Order is deliberately not part of it: whichever piece finishes the board is the
+one credited with the line, so keying on that made left-then-right and
+right-then-left two discoveries of the same answer.
+
+The rules that stop it being a measure of who plays most live in the query, not
+in a stored flag, so they can be retuned without re-crediting anybody:
+
+- only lines a player actually played — enumerated and reference lines are
+  credited to nobody,
+- only lines that met the goal, not merely the attack target,
+- one credit per player per puzzle, however many ways they find to solve it.
+
+Lines that hit the target attack while missing the required clears are still
+*filed*, and still count for nothing. They are what the review tool's `off-goal`
+badge counts, and they are the clearest evidence a puzzle's condition says less
+than its goal sentence does.
 
 **Everyone gets the same sequence on the same day**, for the run that counts,
 which is the only way the board compares like with like. That is the run that goes on the leaderboard,

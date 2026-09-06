@@ -59,10 +59,30 @@ export interface DailyResponse {
   readonly totalSolved: number;
 }
 
+/** One player on the discovery board. */
+export interface DiscoveryRow {
+  readonly player: PlayerProfile;
+  readonly found: number;
+  readonly latestAt: number;
+}
+
+/**
+ * What the just-filed run added to what the archive knows about this puzzle.
+ *
+ * Null when the run met nothing worth recording — an abandoned attempt, or one
+ * that never reached the target — so the client can stay quiet rather than
+ * announce a discovery of nothing.
+ */
+export interface RunDiscovery {
+  readonly isNew: boolean;
+  readonly known: number;
+}
+
 export interface SubmitResponse {
   readonly tier: DailyTier;
   readonly run: StoredRun;
   readonly isFirst: boolean;
+  readonly discovery: RunDiscovery | null;
   readonly streak: number;
   readonly totalSolved: number;
   readonly solution: readonly SolutionStep[];
@@ -254,6 +274,10 @@ export class Api {
     rush: readonly RushRun[];
   }> {
     return this.request("/api/daily/leaderboard");
+  }
+
+  discoveries(): Promise<{ board: readonly DiscoveryRow[] }> {
+    return this.request("/api/discoveries");
   }
 
   rush(): Promise<RushState> {

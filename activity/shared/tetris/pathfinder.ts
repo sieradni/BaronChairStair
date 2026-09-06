@@ -251,6 +251,7 @@ export class RoutePlanner {
   private reachability: Map<string, ReachableState> | null = null;
   private readonly routeCache = new Map<string, MoveKey[][]>();
   private readonly placementCache = new Map<string, Placement | null>();
+  private restingSeats: Map<string, { readonly cells: TargetCells; readonly path: MoveKey[] }> | null = null;
 
   /**
    * The falling piece this plan was built for.
@@ -293,6 +294,32 @@ export class RoutePlanner {
   }
 
   /**
+   * Every distinct square the piece can be hard-dropped onto from here.
+   *
+   * The same breadth-first walk {@link routesTo} asks its questions of, read
+   * for a different one: which of the states it found are *at rest*. A state
+   * the piece cannot soft-drop out of is exactly a state a hard drop would
+   * lock it in, and every state a hard drop passes through on the way down is
+   * itself in the walk — so this is the complete set of placements, tucks and
+   * spin seats included, with no second search and no separate notion of
+   * reachability to drift from the one the game plays by.
+   *
+   * Keyed by squares rather than by (x, y, rotation): an S piece flat on the
+   * floor occupies the same four cells from two rotations, and they are one
+   * placement, not two. That is the same equivalence `shared/solution-key.ts`
+   * builds a solution's identity out of.
+   *
+   * The caller gets squares, not routes, because squares are what
+   * {@link placementAt} takes — and it, not this, decides which kick lands the
+   * piece, so an enumerated placement scores exactly what the same placement
+   * would score if a player dragged the piece there.
+   */
+  restingPlacements(): TargetCells[] {
+    return [...this.resting().values()].map((seat) => seat.cells);
+  }
+
+
+  /**
    * Every distinct route that lands the piece on `target`, best first.
    *
    * Routes ending in a rotation come first, because the engine only credits a
@@ -330,6 +357,46 @@ export class RoutePlanner {
     ];
     this.routeCache.set(wanted, routes);
     return routes;
+  }
+
+  /**
+   * Every square the piece can be hard-dropped onto, with a route that gets it
+   * there. Built once, because both questions asked of it are asked per
+   * placement and the walk behind them is the same walk.
+   */
+  private resting(): Map<string, { readonly cells: TargetCells; readonly path: MoveKey[] }> {
+    if (this.restingSeats) return this.restingSeats;
+    const seats = new Map<string, { cells: TargetCells; path: MoveKey[] }>();
+    for (const { state, path } of this.states().values()) {
+      restore(this.piece, state);
+      if (applyMove(this.piece, "softDrop", this.board, this.kickTable)) continue;
+      const cells = this.piece.absoluteAt({
+        x: state.location[0],
+        y: state.location[1],
+        rotation: state.rotation,
+      });
+      const key = cellsKey(cells);
+      // Breadth-first, so the first arrival is the shortest one.
+      if (!seats.has(key)) seats.set(key, { cells, path });
+    }
+    this.restingSeats = seats;
+    return seats;
+  }
+
+  /**
+   * A route that lands the piece on `target` without asking which kick is
+   * worth most — the cheap answer, for when the expensive one cannot matter.
+   *
+   * {@link placementAt} is expensive because it plays every candidate rotation
+   * out on the real engine and lets the lock judge it. That judgement only
+   * changes the *spin* a placement is credited with, and a spin is only worth
+   * something when lines come out with it: which rows complete is decided by
+   * the squares the piece ends on, and those are the same on every route that
+   * arrives here. So a caller that has already established nothing clears can
+   * take any route that arrives and be sure it gave nothing up.
+   */
+  plainRouteTo(target: TargetCells): MoveKey[] | null {
+    return this.resting().get(cellsKey(target))?.path ?? null;
   }
 
   /**
