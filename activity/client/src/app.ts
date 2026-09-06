@@ -8,7 +8,7 @@
  */
 
 import { BOARD_HEIGHT, type PuzzlePrompt, type SolutionStep } from "@shared/puzzle";
-import type { Handling } from "@shared/tetris/handling";
+import { SDF_INSTANT, type Handling } from "@shared/tetris/handling";
 import type { InputEvent } from "@shared/tetris/verify";
 import type { Connection } from "./discord";
 import type { DailyEntry, DailyResponse, RushState, StoredRun } from "./api";
@@ -16,6 +16,7 @@ import type { ArchiveListing } from "@shared/puzzle";
 import { filterArchive } from "@shared/archive-filter";
 import { ApiError } from "./api";
 import { InputRouter } from "./game/input";
+import { attachPointerPlay } from "./game/pointer";
 import { type LocalAction, keyName } from "@shared/keybinds";
 import { RushSession, type RushSummary } from "./game/rush";
 import { PuzzleRun, type RunSnapshot } from "./game/runner";
@@ -91,6 +92,8 @@ export class App {
   private readonly settingsDialog;
   private readonly verdict;
   private readonly walkthrough = createWalkthroughPanel();
+  /** Undoes the pointer attachment; nothing else ever needs it. */
+  private readonly detachPointerPlay: () => void;
 
   private readonly rushPanel = createRushPanel(() => this.rush?.giveUp());
   private readonly rushBoard = createRushBoard();
@@ -284,6 +287,25 @@ export class App {
     });
 
     this.settings.subscribe((next) => this.input.setKeybinds(next.keybinds));
+
+    // Tap to rotate, drag to place, long-press to hold — on a finger or a
+    // mouse, through the one run the player is looking at.
+    this.detachPointerPlay = attachPointerPlay(this.canvas, {
+      spotAt: (x, y) => this.renderer.spotAt(x, y),
+      aim: (spot) => this.activeRun?.aimAt(spot),
+      commit: (spot) => {
+        const run = this.activeRun;
+        if (!run) return;
+        run.aimAt(spot);
+        if (!run.placeAt()) this.toast(this.refusalFor());
+      },
+      unaim: () => this.activeRun?.clearAim(),
+      rotate: () => this.activeRun?.tap("rotateCW"),
+      hold: () => this.runHold(),
+    });
+
+    // The hold bay is a label, not a control; hold lives on the long-press
+    // gesture and, on a keyboard, wherever the player has bound it.
   }
 
   // ── Boot ───────────────────────────────────────────────────────────────────
@@ -292,6 +314,7 @@ export class App {
     this.mount();
     this.input.attach();
     window.addEventListener("resize", this.relayout);
+    window.addEventListener("beforeunload", () => this.dispose());
     new ResizeObserver(this.relayout).observe(this.stage);
     this.startCountdown();
 
@@ -302,7 +325,6 @@ export class App {
       return;
     }
 
-    this.masthead.setStreak(this.daily.streak, this.daily.totalSolved);
     this.showHome();
   }
 
@@ -559,6 +581,17 @@ export class App {
   private showPlayfield(): void {
     this.showColumns(this.hud.left, this.stage, this.hud.right);
     this.relayout();
+  }
+
+  /** Swaps the falling piece into hold, wherever a run is live. */
+  private runHold(): void {
+    this.activeRun?.tap("hold");
+  }
+
+  /** One place that updates the undo/redo affordances after a placement. */
+  private syncHistory(): void {
+    const run = this.activeRun;
+    this.hud.setHistory(run?.canUndo ?? false, run?.canRedo ?? false);
   }
 
   /**
@@ -1181,7 +1214,7 @@ export class App {
       },
       onFinish: (snapshot, events) => void this.finishRun(snapshot, events),
       // A placement is the only thing that changes what there is to undo.
-      onLock: () => this.hud.setHistory(this.run?.canUndo ?? false, this.run?.canRedo ?? false),
+      onLock: () => this.syncHistory(),
     },
     carriedResets,
     this.sheetOpenedAt);
@@ -1242,13 +1275,22 @@ export class App {
         resets: snapshot.resets,
         totalMs: snapshot.elapsedMs,
       });
-      this.masthead.setStreak(response.streak, response.totalSolved);
       // Remember the filed sheet so returning from practice restores it.
       // Only the tier that was filed. The other two are untouched — and their
       // solutions must stay null, or filing the easy one would reveal them.
       if (this.daily) {
         this.daily = {
           ...this.daily,
+          // The run that just landed is what moves these, and the response is
+          // the only place the new values exist — `api.daily()` runs once, at
+          // boot. They used to be spent immediately on the masthead tallies, so
+          // nothing needed to keep them; with those gone and the front page
+          // naming the streak in its own sentence, not carrying them here left
+          // that sentence printing the number from before the solve. A player
+          // extending a 6-day streak was told it was 6, and a player starting
+          // one today was told to start one.
+          streak: response.streak,
+          totalSolved: response.totalSolved,
           puzzles: this.daily.puzzles.map((entry) =>
             entry.tier === response.tier
               ? { ...entry, run: response.run, solution: response.solution }
@@ -1331,7 +1373,12 @@ export class App {
 
   private attachWalkthrough(puzzle: PuzzlePrompt, solution: readonly SolutionStep[]): void {
     this.solutionPlayer = new SolutionPlayer(puzzle, solution, BOARD_HEIGHT);
-    this.walkthrough.bind(this.solutionPlayer, () => {
+    this.walkthrough.bind(this.solutionPlayer, (stepped) => {
+      // The badge lands on the board and stays there, which is right for a
+      // result and wrong the moment the board becomes something to read. The
+      // first press of the walkthrough is where it stops being a verdict and
+      // starts being in the way of the answer it is sitting on top of.
+      if (stepped) this.badge.hide();
       if (this.solutionPlayer) this.renderer.draw(this.solutionPlayer.view());
     });
     replaceChildren(
@@ -1495,6 +1542,12 @@ export class App {
     this.settingsDialog.open(this.settings.value.handling, this.settings.value.keybinds);
   }
 
+  /** Frees the pointer capture and the last active run's frame loop. */
+  dispose(): void {
+    this.detachPointerPlay();
+    this.disposeActiveMode();
+  }
+
   private readonly relayout = (): void => {
     const rows = BOARD_HEIGHT;
     const box = this.stage.getBoundingClientRect();
@@ -1519,6 +1572,23 @@ export class App {
     };
     tick();
     setInterval(tick, COUNTDOWN_TICK_MS);
+  }
+
+  /**
+   * Why a drag would not place, in the player's terms.
+   *
+   * "No way to place the piece there" is true at the default soft drop and a
+   * lie below it: there *is* a way — the keyboard reaches that square, and at
+   * `sdf 41` so does the drag. A route that descends mid-way needs the instant
+   * drop to descend far enough, so turning the slider down quietly costs the
+   * kick and tuck seats. A player who has done that deserves to be told which
+   * of the two things went wrong rather than that the square is impossible.
+   */
+  private refusalFor(): string {
+    const { sdf } = this.settings.value.handling;
+    return sdf < SDF_INSTANT
+      ? `Kick and tuck placements need instant soft drop — yours is ${sdf}×. Raise it in Settings, or type this one.`
+      : "No way to place the piece there";
   }
 
   private toast(message: string): void {
