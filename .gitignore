@@ -259,7 +259,12 @@ bower_components
 build/Release
 
 # Dependency directories
-node_modules/
+# No trailing slash. `node_modules/` matches a *directory* only, so a symlink
+# named node_modules — which is how a git worktree is given the dependencies
+# it has no copy of — slipped past it and was committed on three branches.
+# Merged, that symlink names an absolute path that exists on one machine, and
+# `bun install` on any other fails outright with ENOENT rather than replacing it.
+node_modules
 jspm_packages/
 
 # Snowpack dependency directory (https://snowpack.dev/)

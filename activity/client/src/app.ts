@@ -826,7 +826,7 @@ export class App {
         onRoundOver: (winnerId, duel, solution, nextRoundAt) => {
           this.duelState = duel;
           this.input.setGameInputEnabled(false);
-          this.badge.show(winnerId === self(), winnerId === self() ? "Round won" : "Round lost");
+          this.stampBadge(winnerId === self(), winnerId === self() ? "Round won" : "Round lost");
           window.setTimeout(() => this.badge.hide(), 900);
           this.duelIntermissionAt = nextRoundAt;
           // Both players watch it, the loser most of all: it is the only look
@@ -1056,7 +1056,7 @@ export class App {
           this.relayout();
         },
         onSolved: (snapshot) => {
-          this.badge.show(true, `${snapshot.solved} solved`);
+          this.stampBadge(true, `${snapshot.solved} solved`);
           window.setTimeout(() => this.badge.hide(), 380);
         },
         onFinish: (summary) => void this.finishRush(summary),
@@ -1083,7 +1083,7 @@ export class App {
   private async finishRush(summary: RushSummary): Promise<void> {
     const ticket = this.rushTicket;
     this.input.setGameInputEnabled(false);
-    this.badge.show(summary.solved > 0, `${summary.solved} solved`);
+    this.stampBadge(summary.solved > 0, `${summary.solved} solved`);
     if (!ticket) return;
 
     try {
@@ -1364,7 +1364,7 @@ export class App {
     solution: readonly SolutionStep[] | null,
   ): void {
     this.input.setGameInputEnabled(false);
-    this.badge.show(run.solved, `${run.attack} / ${run.targetAttack} attack`);
+    this.stampBadge(run.solved, `${run.attack} / ${run.targetAttack} attack`);
     this.presentVerdict(
       {
         day: run.day,
@@ -1462,7 +1462,22 @@ export class App {
 
   /** The badge names what happened; the subtitle says how close it was. */
   private showBadge(solved: boolean, snapshot: RunSnapshot): void {
-    this.badge.show(solved, `${snapshot.attack} / ${snapshot.targetAttack} attack`);
+    this.stampBadge(solved, `${snapshot.attack} / ${snapshot.targetAttack} attack`);
+  }
+
+  /**
+   * Puts a verdict on the board, and cancels any auto-dismiss still pending.
+   *
+   * One way in, because the auto-dismiss added for the walkthrough is a timer
+   * with no idea which badge it was started for. Cancelling it only where it is
+   * *set* leaves it able to reach the next one: solve a daily, press "Play
+   * again", and a verdict landing inside the window is wiped by the previous
+   * run's clock. Every `badge.show` in this file goes through here so that
+   * cannot depend on which path showed it.
+   */
+  private stampBadge(ok: boolean, text: string): void {
+    this.clearBadgeLinger();
+    this.badge.show(ok, text);
   }
 
   // ── Chrome ─────────────────────────────────────────────────────────────────
@@ -1578,7 +1593,6 @@ export class App {
     this.settingsDialog.open(this.settings.value.handling, this.settings.value.keybinds);
   }
 
-  /** Frees the pointer capture and the last active run's frame loop. */
   /** Stops a pending auto-dismiss, so it cannot reach a later badge. */
   private clearBadgeLinger(): void {
     if (this.badgeLinger === null) return;
@@ -1586,9 +1600,13 @@ export class App {
     this.badgeLinger = null;
   }
 
+  /** Frees the pointer capture and the last active run's frame loop. */
   dispose(): void {
     this.detachPointerPlay();
     this.disposeActiveMode();
+    // A timer outliving the app it was started in fires against a badge that
+    // is no longer on screen.
+    this.clearBadgeLinger();
   }
 
   private readonly relayout = (): void => {
