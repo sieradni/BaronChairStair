@@ -29,7 +29,7 @@ import {
   type Puzzle,
   type SolutionStep,
 } from "../puzzle";
-import { DEFAULT_HANDLING, type Handling } from "./handling";
+import { DEFAULT_HANDLING, SDF_INSTANT, type Handling } from "./handling";
 import { createPuzzleEngine, readBoard, toLetter } from "./engine";
 import { nameClear } from "./replay";
 import { RoutePlanner, ticksForRoute, type MoveKey, type TargetCells } from "./pathfinder";
@@ -364,16 +364,23 @@ function childrenOf(walker: Walker, owed: Owed): Branch[] {
         // worth asking where a row actually comes out. On a puzzle board most
         // placements are quiet stacking, and asking anyway was the whole cost
         // of the search.
-        // `plainRouteTo` answers with a route and no descents, which is right:
-        // it is only taken where nothing clears, and a quiet placement lands on
-        // the same squares however long the drop was held. `ticksForRoute` then
-        // falls back to one held tick per drop, its documented minimum.
-        const best = completesARow(engine, cells) ? planner.placementAt(cells) : null;
-        const plain = best ? null : (planner.plainRouteTo(cells) ?? null);
-        const fallback = best ?? (plain ? null : planner.placementAt(cells));
-        const route = best?.route ?? plain ?? fallback?.route;
-        const softDrops = best?.softDrops ?? fallback?.softDrops ?? [];
+        // The expensive question — which kick does the engine credit — is only
+        // worth asking where a row actually comes out. Below the instant soft
+        // drop it has to be asked anyway: `plainRouteTo` reports a route and no
+        // descents, and *every* plain route contains a soft drop (673 of 673
+        // over the archive's opening positions), so one held tick would stop
+        // the fall short and land the piece on squares nobody asked for. At
+        // `SDF_INSTANT` one tick always covers the whole descent, which is what
+        // makes the cheap route safe there and only there.
+        const mustMeasure = completesARow(engine, cells) || walker.sdf < SDF_INSTANT;
+        const plain = mustMeasure ? null : planner.plainRouteTo(cells);
+        const measured = plain ? null : planner.placementAt(cells);
+        const route = plain ?? measured?.route;
+        // A seat the planner cannot land on is skipped, clearing or not —
+        // falling through to the cheap route there would play a placement the
+        // engine had just refused.
         if (!route) continue;
+        const softDrops = measured?.softDrops ?? [];
         const resting = engine.snapshot();
         const outcome = play(engine, route, walker.sdf, softDrops, walker.lastLock);
         engine.fromSnapshot(resting);
