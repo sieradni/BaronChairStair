@@ -552,7 +552,7 @@ export class PuzzleRun {
     // One rule from `input`, kept: a full log ends the attempt rather than
     // letting the player drive moves the server will never see.
     if (this.events.length + additions > MAX_EVENTS) {
-      this.finish(meetsTarget(this.attack, this.puzzle.targetAttack) ? "solved" : "failed");
+      this.finish(solvesPuzzle(this.attack, this.clears, this.puzzle) ? "solved" : "failed");
       return true;
     }
     // Playing on after an undo is the player choosing this line over the one
