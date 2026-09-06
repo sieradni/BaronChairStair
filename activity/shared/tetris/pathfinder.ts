@@ -466,11 +466,13 @@ export class RoutePlanner {
       let best: Placement | null = null;
       let bestAttack = -1;
       for (const route of routes) {
+        this.engine.fromSnapshot(before);
         // The distances ride along with the route: the trial must hold each
         // soft drop exactly as long as the commit will, or it judges a shape
-        // of the route the log cannot keep.
+        // of the route the log cannot keep. Measured after the restore — the
+        // previous candidate's trial locked and spawned the next piece, so
+        // measuring before it would read distances off the wrong piece.
         const softDrops = this.softDropsOf(route);
-        this.engine.fromSnapshot(before);
         lastLock = null;
         lockedCells = null;
         // The snapshot carries the live input state with it, so the releases

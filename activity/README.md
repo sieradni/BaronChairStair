@@ -722,7 +722,11 @@ delivers that descent at whatever rate the slider sets (`Settings > sdf`): the
 key stays down for as many frames as the drop needs, so at the default
 instant setting it costs one frame and at a slow one it costs proportionally
 more — the piece takes its time, and the kicks fire once it has arrived. The
-keyboard reaches every seat at any setting, and so does the drag.
+keyboard reaches every seat at any setting, and so does the drag, with one
+known exception: a square whose only parking height is partway down a fall —
+parkable mid-descent only on a slider slower than instant — cannot be
+dragged there yet, because the search has no mid-air parking spots. It shows
+dashed.
 
 Spins work the same way: tap first to set the rotation — twice for a TSD —
 then drag to the slot, and the engine credits what the route earned. While a
