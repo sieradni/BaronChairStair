@@ -117,10 +117,12 @@ function describe(verdict: Verdict): string {
   const { puzzle, report, alternates, refFound } = verdict;
   const complete = report.stoppedBy === "exhausted";
   const headline = alternates.length > 0
-    ? `${String(alternates.length).padStart(3)} alternate${alternates.length === 1 ? " " : "s"}`
+    ? `${String(alternates.length).padStart(3)} alternate${alternates.length === 1 ? "" : "s"}`.padEnd(
+        14,
+      )
     : complete
-      ? "  only the intended line"
-      : "  none found (incomplete)";
+      ? "only the line   "
+      : "none (partial)  ";
   const note = complete ? "exhausted" : `stopped: ${report.stoppedBy}`;
   const missing = refFound === false ? "  [!] did not re-find the answer on file" : "";
   return (
@@ -198,11 +200,17 @@ function main(): void {
   const tight = exhausted.filter((v) => v.alternates.length === 0);
   const lost = verdicts.filter((v) => v.refFound === false);
 
-  console.log(`\n${verdicts.length} puzzles searched.`);
-  console.log(`  ${loose.length} have a line the author did not write down`);
-  console.log(`  ${tight.length} are provably tight — searched to exhaustion, nothing else exists`);
+  const many = (count: number, one: string, more: string): string =>
+    `${count} ${count === 1 ? one : more}`;
+
+  console.log(`\n${many(verdicts.length, "puzzle", "puzzles")} searched.`);
+  console.log(`  ${many(loose.length, "has", "have")} a line the author did not write down`);
   console.log(
-    `  ${verdicts.length - exhausted.length} ran out of budget, and are proof of nothing either way`,
+    `  ${many(tight.length, "is", "are")} provably tight — searched to exhaustion, nothing else exists`,
+  );
+  console.log(
+    `  ${many(verdicts.length - exhausted.length, "ran", "ran")} out of budget, ` +
+      "and proves nothing either way",
   );
   if (lost.length > 0) {
     // The search could not re-find an answer the archive says is real. That is
