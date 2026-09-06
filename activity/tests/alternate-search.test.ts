@@ -1,0 +1,143 @@
+/**
+ * The search that answers "is this the only way?".
+ *
+ * Its two readers want opposite reassurances. A maker wants to be told their
+ * condition is tight, which only an exhausted search may say. A player wants
+ * credit for a line nobody recorded, which only holds if the search would have
+ * found that line had it looked. Both fail the same way — a placement the
+ * search cannot reach — so the tests that matter here are the ones that pin
+ * what it can reach and what it is allowed to claim.
+ */
+
+import { describe, expect, test } from "bun:test";
+import { DEFAULT_LIMITS, searchSolutions } from "../shared/tetris/enumerate";
+import { solutionKey } from "../shared/solution-key";
+import type { Puzzle } from "../shared/puzzle";
+
+const GENEROUS = { maxLines: 200, maxNodes: 200_000, maxMillis: 30_000 };
+
+function puzzleOf(fields: Partial<Puzzle>): Puzzle {
+  return {
+    id: 1,
+    title: "test",
+    author: "test",
+    difficulty: 1,
+    goal: "test",
+    set: null,
+    board: [],
+    queue: ["I"],
+    hold: null,
+    targetAttack: 1,
+    ...fields,
+  };
+}
+
+/**
+ * A well: four rows filled but for column zero, so one vertical I fills all
+ * four at once. A quad, because a single clear sends nothing at all in this
+ * ruleset and a puzzle scored on attack would never register it.
+ */
+const WELL = [".GGGGGGGGG", ".GGGGGGGGG", ".GGGGGGGGG", ".GGGGGGGGG"];
+const QUAD_WELL = puzzleOf({ board: WELL, queue: ["I"], targetAttack: 4 });
+
+describe("finding every way a puzzle can be solved", () => {
+  test("the obvious line is found, and the search knows it looked everywhere", () => {
+    const report = searchSolutions(QUAD_WELL, GENEROUS);
+
+    expect(report.stoppedBy).toBe("exhausted");
+    expect(report.lines.length).toBeGreaterThan(0);
+    // Every line it returns really does clear the row it was asked to clear.
+    for (const line of report.lines) {
+      expect(line.attack).toBeGreaterThanOrEqual(QUAD_WELL.targetAttack);
+      expect(line.clears.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("a line stops at the placement that solves it, because the run would", () => {
+    // Two pieces, but the first one already finishes the row. The second is
+    // never placed — the game ends the run on the solve, so a line carrying a
+    // piece after it is a line nobody could have played.
+    const report = searchSolutions(
+      puzzleOf({ board: WELL, queue: ["I", "O"], targetAttack: 4 }),
+      GENEROUS,
+    );
+
+    expect(report.lines.length).toBeGreaterThan(0);
+    const shortest = Math.min(...report.lines.map((line) => line.placements.length));
+    expect(shortest).toBe(1);
+  });
+
+  test("a required clear the line never made is not a solve", () => {
+    // The board and pieces are unchanged; only the demand is. Asking for a TSD
+    // from a board with no T-slot and no T piece must find nothing at all,
+    // where asking for the attack alone finds plenty.
+    const onAttack = searchSolutions(QUAD_WELL, GENEROUS);
+    const onClears = searchSolutions(
+      puzzleOf({
+        board: WELL,
+        queue: ["I"],
+        targetAttack: 4,
+        requiredClears: [{ clear: "tsd", count: 1 }],
+      }),
+      GENEROUS,
+    );
+
+    expect(onAttack.lines.length).toBeGreaterThan(0);
+    expect(onClears.lines).toEqual([]);
+    expect(onClears.stoppedBy).toBe("exhausted");
+  });
+
+  test("two orders of the same placements are one solution", () => {
+    // A board needing two separate columns filled: the pieces can go down in
+    // either order and it is the same answer, which is the rule the leaderboard
+    // pays out on.
+    const report = searchSolutions(
+      puzzleOf({
+        board: [".GGGGGGGG.", ".GGGGGGGG.", ".GGGGGGGG.", ".GGGGGGGG."],
+        queue: ["I", "I"],
+        targetAttack: 4,
+      }),
+      GENEROUS,
+    );
+
+    const keys = report.lines.map((line) => solutionKey(line.placements));
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  test("a search that ran out says so, and never claims to have exhausted", () => {
+    const stopped = searchSolutions(QUAD_WELL, { ...GENEROUS, maxNodes: 1 });
+    expect(stopped.stoppedBy).not.toBe("exhausted");
+  });
+
+  test("hitting the line limit is reported as the limit, not as completeness", () => {
+    // The distinction the whole tool rests on: a maker reading "exhausted"
+    // takes it as proof their puzzle is tight, so every other way of stopping
+    // has to be visibly not that.
+    const capped = searchSolutions(QUAD_WELL, { ...GENEROUS, maxLines: 1 });
+
+    expect(capped.lines).toHaveLength(1);
+    expect(capped.stoppedBy).toBe("lines");
+  });
+
+  test("the defaults are bounded, so no caller can start an endless search", () => {
+    expect(DEFAULT_LIMITS.maxMillis).toBeGreaterThan(0);
+    expect(DEFAULT_LIMITS.maxNodes).toBeGreaterThan(0);
+    expect(DEFAULT_LIMITS.maxLines).toBeGreaterThan(0);
+  });
+
+  test("every placement it returns is one the engine really locked there", () => {
+    // The scores come off real locks, so a line's own arithmetic has to add up:
+    // the attack it claims is the sum of the placements it made.
+    const report = searchSolutions(QUAD_WELL, GENEROUS);
+
+    for (const line of report.lines) {
+      const summed = line.placements.reduce((total, step) => total + step.attack, 0);
+      expect(summed).toBe(line.attack);
+      const named = line.placements
+        .map((step) => step.clear)
+        .filter((clear): clear is NonNullable<typeof clear> => clear !== null);
+      expect([...line.clears].sort()).toEqual([...named].sort());
+      for (const step of line.placements) expect(step.cells).toHaveLength(4);
+    }
+  });
+});

@@ -39,8 +39,19 @@ import type { ClearName, SolutionStep } from "./puzzle";
 /** Bumped only when the rule below changes. Stored beside every key. */
 export const SOLUTION_KEY_VERSION = 1;
 
-/** A placement as the key sees it: the piece, and where it came to rest. */
-function placementKey(step: Pick<SolutionStep, "piece" | "cells" | "clear" | "attack">): string {
+/**
+ * A placement as the key sees it: the piece, and where it came to rest.
+ *
+ * Deliberately *not* the clear or the attack this particular placement earned.
+ * Those are real, but they are properties of the order the line was played in
+ * rather than of the answer: fill two wells and whichever column you finish
+ * second is the one credited with the clear. Keying on them made left-then-
+ * right and right-then-left two discoveries of the same board, which is the
+ * farm this key exists to close. The result is not lost — it is asked at the
+ * level it belongs to, in {@link solutionFingerprint}, where the totals cannot
+ * be moved around by re-ordering.
+ */
+function placementKey(step: Pick<SolutionStep, "piece" | "cells">): string {
   // Cells sorted, because `[[3,0],[4,0]]` and `[[4,0],[3,0]]` are the same four
   // squares written two ways — a notation artifact of how a route was walked,
   // not a difference a player made. It accounts for 46% of the archive's
@@ -50,10 +61,7 @@ function placementKey(step: Pick<SolutionStep, "piece" | "cells" | "clear" | "at
     .sort((a, b) => a[0] - b[0] || a[1] - b[1])
     .map(([x, y]) => `${x},${y}`)
     .join(" ");
-  // The clear and the attack this placement actually produced. Two routes to
-  // the same squares can differ here, and when they do they are not the same
-  // solution — one of them may not even be a solve.
-  return `${step.piece}:${cells}:${step.clear ?? "-"}:${step.attack}`;
+  return `${step.piece}:${cells}`;
 }
 
 /**
@@ -64,7 +72,7 @@ function placementKey(step: Pick<SolutionStep, "piece" | "cells" | "clear" | "at
  * solution. That is the form the archive's own solution counts agree with.
  */
 export function solutionKey(
-  placements: readonly Pick<SolutionStep, "piece" | "cells" | "clear" | "attack">[],
+  placements: readonly Pick<SolutionStep, "piece" | "cells">[],
 ): string {
   return placements.map(placementKey).sort().join("|");
 }
@@ -78,15 +86,21 @@ export interface SolutionOutcome {
 /**
  * The key plus the run-level outcome, which is what a row is identified by.
  *
- * The per-placement attack already distinguishes most routes, but the run-level
- * totals catch a case the parts do not: a combo or back-to-back bonus is scored
- * against the sequence rather than against any one placement, so two orderings
- * of identical placements can send different garbage. Those orderings are the
- * same *set* and a different *result*, and the result is what a player was
- * scored on.
+ * This is where the result lives, and it has to be here rather than on the
+ * parts. The same four squares reached by a different kick score differently —
+ * measured on the archive, 5 of 138 puzzles produce both a different attack and
+ * different clear names from identical cells, and puzzle 6 gives either
+ * `9|tsd,tsd` or `6|tsmini,tsd` — so a key without the outcome would file a
+ * solve and a non-solve as one row. Combo and back-to-back are scored against
+ * the sequence rather than any one placement, which is the other reason the
+ * totals cannot be recovered by adding the placements up.
+ *
+ * What it does *not* do is let the order a line was played in split one answer
+ * into two: totals are the same however the same placements are shuffled, which
+ * is exactly the property {@link placementKey} gave up to get.
  */
 export function solutionFingerprint(
-  placements: readonly Pick<SolutionStep, "piece" | "cells" | "clear" | "attack">[],
+  placements: readonly Pick<SolutionStep, "piece" | "cells">[],
   outcome: SolutionOutcome,
 ): string {
   const clears = [...outcome.clears].sort().join(",");

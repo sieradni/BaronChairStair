@@ -35,12 +35,26 @@ describe("what counts as the same solution", () => {
     expect(solutionKey([jumbled])).toBe(solutionKey([T_SPIN]));
   });
 
-  test("but the clear a placement earned does", () => {
-    // The same four squares reached by a different kick. Measured on the real
-    // archive: 5 of 138 puzzles produce a different clear AND attack from
-    // identical cells, and one of the two may not be a solve at all.
-    const mini = step("T", [[3, 0], [4, 0], [5, 0], [4, 1]], "tsmini", 1);
-    expect(solutionKey([mini])).not.toBe(solutionKey([T_SPIN]));
+  test("nor which of the placements happened to earn the clear", () => {
+    // Whichever piece finishes the board is the one credited with the line, and
+    // that is decided by the order, not by the answer. Fill two wells: go left
+    // first and the right-hand piece scores; go right first and the left-hand
+    // one does. Same board, same pieces, same seats — one solution, and keying
+    // on the attribution made it two.
+    const scored = step("I", [[0, 0], [0, 1], [0, 2], [0, 3]], "quad", 4);
+    const quiet = step("I", [[0, 0], [0, 1], [0, 2], [0, 3]]);
+    expect(solutionKey([scored])).toBe(solutionKey([quiet]));
+  });
+
+  test("the clear is asked at the level it cannot be shuffled at", () => {
+    // Not lost, moved: the same four squares reached by a different kick really
+    // are a different result — measured on the archive, 5 of 138 puzzles
+    // produce a different clear AND attack from identical cells, and one of the
+    // two may not be a solve at all. The run's totals say so, and unlike the
+    // per-placement credit they do not move when the order does.
+    const asMini = solutionFingerprint([T_SPIN], { attack: 1, clears: ["tsmini"] });
+    const asFull = solutionFingerprint([T_SPIN], { attack: 4, clears: ["tsd"] });
+    expect(asMini).not.toBe(asFull);
   });
 
   test("and so does which piece went there", () => {
