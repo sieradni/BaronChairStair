@@ -293,6 +293,42 @@ export class RoutePlanner {
   }
 
   /**
+   * Every distinct square the piece can be hard-dropped onto from here.
+   *
+   * The same breadth-first walk {@link routesTo} asks its questions of, read
+   * for a different one: which of the states it found are *at rest*. A state
+   * the piece cannot soft-drop out of is exactly a state a hard drop would
+   * lock it in, and every state a hard drop passes through on the way down is
+   * itself in the walk — so this is the complete set of placements, tucks and
+   * spin seats included, with no second search and no separate notion of
+   * reachability to drift from the one the game plays by.
+   *
+   * Keyed by squares rather than by (x, y, rotation): an S piece flat on the
+   * floor occupies the same four cells from two rotations, and they are one
+   * placement, not two. That is the same equivalence `shared/solution-key.ts`
+   * builds a solution's identity out of.
+   *
+   * The caller gets squares, not routes, because squares are what
+   * {@link placementAt} takes — and it, not this, decides which kick lands the
+   * piece, so an enumerated placement scores exactly what the same placement
+   * would score if a player dragged the piece there.
+   */
+  restingPlacements(): TargetCells[] {
+    const found = new Map<string, TargetCells>();
+    for (const { state } of this.states().values()) {
+      restore(this.piece, state);
+      if (applyMove(this.piece, "softDrop", this.board, this.kickTable)) continue;
+      const cells = this.piece.absoluteAt({
+        x: state.location[0],
+        y: state.location[1],
+        rotation: state.rotation,
+      });
+      found.set(cellsKey(cells), cells);
+    }
+    return [...found.values()];
+  }
+
+  /**
    * Every distinct route that lands the piece on `target`, best first.
    *
    * Routes ending in a rotation come first, because the engine only credits a
