@@ -17,6 +17,7 @@
 
 import { Engine, Tetromino } from "@haelp/teto/engine";
 import type { LockRes, Rotation } from "@haelp/teto/engine";
+import { SDF_INSTANT } from "./handling";
 
 export type MoveKey =
   | "moveLeft"
@@ -58,9 +59,16 @@ interface ReachableState {
 /**
  * One honest way to put the piece down: the input log that puts it there,
  * proven by a trial lock on the real engine.
+ *
+ * `softDrops` carries one descent distance per soft-drop occurrence in the
+ * route — how far the BFS let that drop fall. The timing needs it: a soft
+ * drop held one tick descends `0.05 × sdf` rows, so below the instant setting
+ * the key must stay down for as many ticks as the planned descent demands,
+ * and only the planner knows how many rows each one was meant to cover.
  */
 export interface Placement {
   readonly route: MoveKey[];
+  readonly softDrops: readonly number[];
 }
 
 /**
@@ -111,15 +119,42 @@ export function releaseTicks(engine: Engine, frame: number): RouteTick[] {
 }
 
 /**
+ * How many whole frames a soft drop must stay held to fall `rows` at `sdf`.
+ *
+ * The engine descends `max(gravity × sdf, 0.05 × sdf)` rows a tick while the
+ * key is down — with a puzzle's zero gravity that is `0.05 × sdf` — and 41 is
+ * the special "instant" setting: 400 rows a tick, more than any board is
+ * tall, so one tick always covers the whole descent. A fall clamps at rest
+ * and the engine judges the piece by its floored cells, so rounding up can
+ * only arrive; it can never overshoot into the stack.
+ */
+export function softDropTicks(sdf: number, rows: number): number {
+  if (sdf >= SDF_INSTANT) return 1;
+  return Math.max(1, Math.ceil(rows / (0.05 * sdf)));
+}
+
+/**
  * `route` as timed tick batches — the one shape trial, commit and server all
  * play. Every key goes down and up; edge keys (moves, rotations, hard drop)
- * share one tick, which keeps them handling-independent, while a soft drop's
- * down ends its tick so the drop is genuinely held across the boundary and
- * descends for real. Subframes are zero throughout: with every pair closed
- * inside its tick no slice phase ever sees a held key, so the value is inert
- * and trials cannot drift from commits.
+ * share one tick, which keeps them handling-independent. A soft drop's down
+ * ends its tick so the key is genuinely held, and it stays held across
+ * {@link softDropTicks} whole frames — the descent the route planned,
+ * delivered at the rate the handling actually descends. Subframes are zero
+ * throughout: with every pair closed inside its tick no slice phase ever sees
+ * a held key, so the value is inert and trials cannot drift from commits.
+ *
+ * `softDrops` is the descent distance of each soft-drop occurrence, in order,
+ * as the planner measured it; a missing entry falls back to one held tick,
+ * the honest minimum. At the default `sdf` the count is 1 for any distance,
+ * so the shape below is exactly the single-boundary hold every
+ * default-handling log has always had — default logs do not move.
  */
-export function ticksForRoute(route: readonly MoveKey[], firstFrame: number): RouteTick[][] {
+export function ticksForRoute(
+  route: readonly MoveKey[],
+  firstFrame: number,
+  sdf: number,
+  softDrops: readonly number[] = [],
+): RouteTick[][] {
   const ticks: RouteTick[][] = [];
   let frame = firstFrame;
   let open: RouteTick[] = [];
@@ -132,12 +167,21 @@ export function ticksForRoute(route: readonly MoveKey[], firstFrame: number): Ro
   };
   const down = (key: RouteKey): RouteTick => ({ type: "keydown", frame, data: { key, subframe: 0 } });
   const up = (key: RouteKey): RouteTick => ({ type: "keyup", frame, data: { key, subframe: 0 } });
+  let softDropIndex = 0;
   for (const key of [...route, "hardDrop" as const]) {
     if (key === "softDrop") {
       flush();
       open.push(down(key));
       flush();
+      // The frames the key stays down with nothing else in them: the batch is
+      // empty on purpose, an eventless frame is exactly what a held key is,
+      // and the replay ticks every frame whether or not it carries events.
+      for (let held = 1; held < softDropTicks(sdf, softDrops[softDropIndex] ?? 0); held++) {
+        ticks.push([]);
+        frame++;
+      }
       open.push(up(key));
+      softDropIndex++;
     } else {
       open.push(down(key), up(key));
     }
@@ -370,6 +414,31 @@ export class RoutePlanner {
     return placement;
   }
 
+  /**
+   * The descent distance of every soft-drop occurrence in `route`, in order:
+   * how far the BFS let each one fall. Walked on the scratch piece with the
+   * same primitives the reachability walk used, so the distances are the
+   * ones the route was found under. An unreplayable route yields nothing,
+   * which the timing degrades from — one held tick each, the old shape.
+   */
+  private softDropsOf(route: MoveKey[]): number[] {
+    const drops: number[] = [];
+    let state: PieceState = stateOf(this.engine.falling);
+    for (const key of route) {
+      restore(this.piece, state);
+      if (key === "softDrop") {
+        const before = state.location[1];
+        this.piece.softDrop(this.board);
+        state = stateOf(this.piece);
+        drops.push(before - state.location[1]);
+      } else {
+        if (!applyMove(this.piece, key, this.board, this.kickTable)) return [];
+        state = stateOf(this.piece);
+      }
+    }
+    return drops;
+  }
+
   private computePlacement(target: TargetCells, wanted: string): Placement | null {
     const routes = this.routesTo(target);
     if (routes.length === 0) return null;
@@ -398,13 +467,19 @@ export class RoutePlanner {
       let bestAttack = -1;
       for (const route of routes) {
         this.engine.fromSnapshot(before);
+        // The distances ride along with the route: the trial must hold each
+        // soft drop exactly as long as the commit will, or it judges a shape
+        // of the route the log cannot keep. Measured after the restore — the
+        // previous candidate's trial locked and spawned the next piece, so
+        // measuring before it would read distances off the wrong piece.
+        const softDrops = this.softDropsOf(route);
         lastLock = null;
         lockedCells = null;
         // The snapshot carries the live input state with it, so the releases
         // mirror the commit's even though every candidate restores first.
         const prefix = releaseTicks(this.engine, this.engine.frame);
         if (prefix.length > 0) this.engine.tick(prefix as never);
-        for (const batch of ticksForRoute(route, this.engine.frame)) {
+        for (const batch of ticksForRoute(route, this.engine.frame, this.engine.handling.sdf, softDrops)) {
           this.engine.tick(batch as never);
         }
         if (!lastLock || !lockedCells) continue;
@@ -412,7 +487,7 @@ export class RoutePlanner {
         const attack = attackOf(lastLock);
         if (attack > bestAttack) {
           bestAttack = attack;
-          best = { route };
+          best = { route, softDrops };
         }
       }
       return best;

@@ -44,9 +44,11 @@ describe("the run's end condition", () => {
     const source = readFileSync(RUNNER, "utf8");
     const full = [...source.matchAll(/\bsolvesPuzzle\s*\(/g)];
 
-    // Four today: `checkForEnd`, the ledger overrun, `input`'s log-full branch,
-    // and `placeAt`'s — the fourth arriving with #37 and converted when the two
-    // branches met.
+    // Five today: `checkForEnd`, the ledger overrun, `input`'s log-full branch,
+    // `placeAt`'s, and `commitPlacement`'s frame ceiling — the fourth arriving
+    // with #37 and the fifth with #44, each converted where the branches met.
+    // That is twice this count has moved for the same reason, which is the
+    // reason it is a count.
     //
     // Exact, not `>=`. This test exists so that adding an end point is a
     // deliberate act rather than a silent one, and a `>=` cannot fail on an
@@ -61,6 +63,6 @@ describe("the run's end condition", () => {
         "`solvesPuzzle(this.attack, this.clears, this.puzzle)` — a run has to continue\n" +
         "past the attack target while a required clear is outstanding, or the puzzle\n" +
         "cannot be solved at all. Update this count once the new site is converted.",
-    ).toBe(4);
+    ).toBe(5);
   });
 });

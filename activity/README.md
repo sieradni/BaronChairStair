@@ -717,11 +717,16 @@ placement exactly like a typed one, and a square reachable only by a kick is
 placed with the kick that reaches it — the spin credit follows the route, not
 the finger.
 
-Kick and tuck seats need the instant soft drop, which is the default
-(`Settings > sdf`, 41). Turn it down and a route that descends mid-way no longer
-descends far enough to reach those seats, so the drag refuses them rather than
-guessing: the outline stays dashed and nothing is placed. The keyboard reaches
-every one of them at any setting.
+A kick or tuck reaches its seat by descending mid-route, and the drag
+delivers that descent at whatever rate the slider sets (`Settings > sdf`): the
+key stays down for as many frames as the drop needs, so at the default
+instant setting it costs one frame and at a slow one it costs proportionally
+more — the piece takes its time, and the kicks fire once it has arrived. The
+keyboard reaches every seat at any setting, and so does the drag, with one
+known exception: a square whose only parking height is partway down a fall —
+parkable mid-descent only on a slider slower than instant — cannot be
+dragged there yet, because the search has no mid-air parking spots. It shows
+dashed.
 
 Spins work the same way: tap first to set the rotation — twice for a TSD —
 then drag to the slot, and the engine credits what the route earned. While a
