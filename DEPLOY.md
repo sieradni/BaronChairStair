@@ -109,7 +109,7 @@ with write access to that one repository.
 Discord server, under the bot's identity, to a public issue tracker. What stands between
 that and abuse:
 
-- Three reports per player per hour, twenty per server per hour. Both live in memory, so
+- Fifteen reports per player per hour, sixty per server per hour. Both live in memory, so
   **both reset when the bot restarts**.
 - Reporter text is defanged in `client/report_text.py`: `@mentions` and all four of
   GitHub's issue-autolink forms (`#26`, `GH-26`, `owner/repo#26`, and the organisation
@@ -132,7 +132,7 @@ that and abuse:
 That layer has tests, and they need no install:
 
 ```sh
-python3 -m unittest discover -s client     # 36 pass
+python3 -m unittest discover -s client     # 72 pass
 ```
 
 ### Restarting, and making a new command appear

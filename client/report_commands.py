@@ -90,7 +90,25 @@ guild_limiter = ReportLimiter(limit=GUILD_REPORTS_PER_WINDOW)
 
 
 class GitHubUnavailable(Exception):
-    """The issue could not be filed. Carries a message meant for the player."""
+    """
+    The report did not come back with a link. Carries a message for the player.
+
+    `filed` is whether an issue nevertheless exists. Almost always false — the
+    token is missing, GitHub is unreachable, the API refused — and in those
+    cases the player's rate-limit slot is given back, because nothing was
+    published and charging them for the club's misconfiguration is not a limit,
+    it is a punishment.
+
+    It is true on exactly one path: GitHub answered 201 and the body carried no
+    `html_url`. The issue is on the public tracker; only its address is
+    missing. A slot handed back there is a slot spent on a report that exists,
+    and a run of them files issues at no cost to either bucket — which is the
+    limiter defeated rather than merely exceeded.
+    """
+
+    def __init__(self, message: str, *, filed: bool = False) -> None:
+        super().__init__(message)
+        self.filed = filed
 
 
 async def open_issue(title: str, body: str) -> str:
@@ -131,7 +149,12 @@ async def open_issue(title: str, body: str) -> str:
     url = created.get("html_url") if isinstance(created, dict) else None
     if not isinstance(url, str):
         log.warning("github issue created without an html_url: %r", created)
-        raise GitHubUnavailable("The issue was filed, but GitHub did not say where.")
+        # `filed=True`, and it is the whole difference. Everything above this
+        # raises before the POST or on a non-201; this raises *after* one, so
+        # the issue is on the public tracker and only its address is missing.
+        # Refunding here would hand back a slot for a report that exists.
+        raise GitHubUnavailable(
+            "The issue was filed, but GitHub did not say where.", filed=True)
     return url
 
 
@@ -249,11 +272,16 @@ async def report_command(
             ),
         )
     except GitHubUnavailable as exc:
-        # Nothing was filed, so nothing is spent. Both buckets, in the order
-        # they were taken: a club that has not set `GITHUB_TOKEN` yet would
-        # otherwise let one player burn their hour on the error message.
-        limiter.refund(interaction.user.id)
-        guild_limiter.refund(room)
+        # Refund only when nothing was filed. A club that has not set
+        # `GITHUB_TOKEN` yet would otherwise let one player burn their hour on
+        # the error message — but one raise above happens *after* a 201, when
+        # the issue exists and only its address is missing. Refunding that one
+        # gave a slot back for a report that is on the tracker, so a run of them
+        # produced issues at no cost to either bucket while the player was told
+        # nothing had been filed.
+        if not exc.filed:
+            limiter.refund(interaction.user.id)
+            guild_limiter.refund(room)
         await interaction.followup.send(str(exc))
         return
 
