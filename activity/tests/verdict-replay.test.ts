@@ -11,6 +11,8 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Window } from "happy-dom";
 import type { ClearName } from "../shared/puzzle";
 import { createVerdictPanel, type VerdictHandlers } from "../client/src/ui/results";
@@ -107,5 +109,60 @@ describe("an unscored practice run", () => {
     panel.update(fields(true), null, { scored: false });
     press(panel.element, "Play again");
     expect(fired).toEqual(["replay"]);
+  });
+});
+
+/**
+ * The one property that makes "Play again" safe, guarded where it can actually
+ * fail.
+ *
+ * The panel tests above prove the button is offered, labelled and wired. None of
+ * them can fail if the replay starts being *scored* — and that is the whole risk
+ * of the feature: a scored replay would file a run against today's puzzle and
+ * move the leaderboard the filed run already sits on. Sabotaging
+ * `scored: false` to `true` leaves all six of them passing.
+ *
+ * A source check rather than a behavioural one, for the same reason
+ * `tests/run-end-condition.test.ts` is one: exercising it would mean driving the
+ * whole `App` through a session, a fetch and a board, and the failure mode is a
+ * one-word edit in a method nobody has written yet.
+ */
+describe("a replay cannot become a scored run", () => {
+  const APP = join(import.meta.dir, "..", "client", "src", "app.ts");
+
+  function bodyOf(source: string, name: string): string {
+    const start = source.indexOf(`private async ${name}(`);
+    expect(start, `${name} is gone from app.ts — this guard needs rewriting`).toBeGreaterThan(-1);
+    // To the next method at the same indentation, which is where this one ends.
+    const rest = source.slice(start);
+    const next = rest.slice(1).search(/\n  (?:private|public|protected)?\s*(?:async\s+)?[a-zA-Z]+\(/);
+    return next === -1 ? rest : rest.slice(0, next + 1);
+  }
+
+  test("the replay goes through the path that opens a puzzle unscored", () => {
+    const source = readFileSync(APP, "utf8");
+    const replay = bodyOf(source, "replaySheet");
+
+    // Not `startRun()`, which re-runs the sheet as it is — and a filed daily
+    // sheet is a scored one.
+    expect(
+      replay.includes("openArchivePuzzle"),
+      "replaySheet must route through openArchivePuzzle, which is the path that\n" +
+        "sets `scored: false`. Calling startRun() here would replay today's sheet\n" +
+        "as a scored run and let a practice go overwrite the filed one.",
+    ).toBe(true);
+  });
+
+  test("and that path marks the sheet unscored", () => {
+    const source = readFileSync(APP, "utf8");
+    const open = bodyOf(source, "openArchivePuzzle");
+
+    expect(
+      /scored:\s*false/.test(open),
+      "openArchivePuzzle no longer sets `scored: false`. Every caller of it —\n" +
+        "the explorer, random practice, the rush card, and Play again — depends\n" +
+        "on that to keep a practice run off the leaderboard.",
+    ).toBe(true);
+    expect(/scored:\s*true/.test(open)).toBe(false);
   });
 });
