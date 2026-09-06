@@ -776,13 +776,31 @@ describe.skipIf(!hasSolutions)("a round is won by a log that solves it", () => {
     // the way in, which is what makes the count above worth anything: it was
     // read, after the round it names had ended, and turned down there before it
     // could be replayed against anything.
-    const refused = "That round is over";
+    //
+    // *Which* refusal depends on where the loser's frame lands in the round
+    // change, and both land before any replay. `endRound` nulls `duel.round`
+    // in the same synchronous block that names the winner, so a claim read
+    // during the rest is told the round is over; one read after the next round
+    // has started names a position that is no longer current and is told so.
+    // Pinning the first of those made this test fail about twice in twelve
+    // runs once the suite grew enough to starve the loser's frame past the
+    // intermission — a fact about how busy the process was, not about the
+    // referee. There is no third outcome: the winner's claim sets `winnerId`
+    // and ends the round without yielding, so the loser can never find a live
+    // round already won and be dropped in silence.
+    const refusals = ["That round is over", "That log was played on another puzzle"];
     const loser = winnerId === host.id ? guest : host;
     const winner = winnerId === host.id ? host : guest;
-    expect(framesOfType(loser.received, "error").map((frame) => frame.message)).toContain(refused);
-    expect(framesOfType(winner.received, "error").map((frame) => frame.message)).not.toContain(
-      refused,
-    );
+    const loserErrors = framesOfType(loser.received, "error").map((frame) => frame.message);
+    const winnerErrors = framesOfType(winner.received, "error").map((frame) => frame.message);
+
+    expect(loserErrors.some((message) => refusals.includes(message))).toBe(true);
+    expect(winnerErrors.some((message) => refusals.includes(message))).toBe(false);
+    // The part that actually matters, and the reason either refusal will do:
+    // the losing log was turned away before the referee replayed it. This is
+    // the message it would have earned had it been run against round two's
+    // puzzle, and it must never appear.
+    expect(loserErrors).not.toContain("That log does not solve this round");
   });
 });
 
