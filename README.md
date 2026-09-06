@@ -321,6 +321,28 @@ root and fill in what you need:
 
 ---
 
+## Contributing
+
+`main` is protected. It takes a pull request and one approving review from
+someone other than the author — GitHub refuses a self-approval, so a solo change
+still needs a second pair of eyes, and a new commit dismisses the reviews the
+old one had. Branch off `main`, open a PR, get a review.
+
+**`main` is append-only, for everybody.** Force pushes and branch deletion are
+refused for every account including owners: those two sit under GitHub's "rules
+applied to everyone including administrators" and are not waived by the
+administrator exemption below. Nothing on `main` has been rewritten, because
+nothing on `main` *can* be.
+
+**The review gate is a default rather than a wall.** `enforce_admins` is off, so
+an administrator can merge or push without the pull request and the approval —
+useful when something is on fire, and worth knowing before reading every commit
+on `main` as having been reviewed by a second person. Direct pushes are
+additionally restricted to a single account, so "an admin can push straight to
+`main`" means one specific owner rather than any of them.
+
+---
+
 ## Licence
 
 See [LICENSE](LICENSE).
