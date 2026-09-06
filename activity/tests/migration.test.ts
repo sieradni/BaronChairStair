@@ -417,6 +417,10 @@ describe("writing down what a day dealt", () => {
         // of it — so this line is the whole of what an old database needs, and
         // `tests/puzzle-override.test.ts` is where it is opened and used.
         "puzzle_overrides",
+        // Every distinct way a puzzle has been solved, and who got there first.
+        // The UNIQUE (puzzle_id, canonical_key) on it is what stops the same
+        // discovery being credited twice.
+        "puzzle_solutions",
         "runs",
         "rush_runs",
         "submissions",
@@ -424,6 +428,13 @@ describe("writing down what a day dealt", () => {
       // The runs rebuild happens on the same start; its indexes must survive it.
       expect(named("index")).toEqual([
         "puzzle_override_log_puzzle",
+        // One credit per discovery: `_key` is UNIQUE and is the whole novelty
+        // test, so if it ever fails to appear the leaderboard silently starts
+        // paying twice for the same line. `_finder` and `_puzzle` are only for
+        // reading the board back.
+        "puzzle_solutions_finder",
+        "puzzle_solutions_key",
+        "puzzle_solutions_puzzle",
         "runs_board",
         "runs_by_day",
         "runs_by_guild",

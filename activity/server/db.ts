@@ -5,7 +5,9 @@
 
 import { Database } from "bun:sqlite";
 import { DAILY_TIERS, type DailyTier } from "../shared/daily";
-import type { Puzzle } from "../shared/puzzle";
+import type { ClearName, Puzzle, SolutionStep } from "../shared/puzzle";
+import type { Handling } from "../shared/tetris/handling";
+import type { InputEvent } from "../shared/tetris/verify";
 import {
   deleteOverride,
   overrideHistory,
@@ -339,6 +341,56 @@ CREATE UNIQUE INDEX IF NOT EXISTS submissions_puzzle
 -- leaderboard row standing against it and every past day that dealt it. The
 -- five here cannot change what a solve was worth.
 --
+-- Every distinct way a puzzle has been solved, and who got there first.
+--
+-- A table and not a field on the puzzle, for the reason puzzle_overrides gives:
+-- data/puzzles.json is rewritten wholesale by \`bun run puzzles\`, so anything
+-- written there dies at the next rebuild. "Saved to the puzzle database" has to
+-- mean a row.
+--
+-- \`canonical_key\` is the fingerprint from shared/solution-key.ts, stored raw.
+-- The UNIQUE index on (puzzle_id, canonical_key) IS the deduplication: the first
+-- writer of a line takes it and every later writer of the same line conflicts,
+-- which is how "the same alternate is not counted twice" is enforced by the
+-- database rather than by a check somebody can forget.
+--
+-- \`events\` and \`handling\` are here so a stored line can be re-verified through
+-- \`verifyRun\` — the same path the server already trusts — rather than through
+-- \`replayPlacements\`, which cannot express every legal tuck and would reject
+-- precisely the cleverest discoveries. That costs about 8 KB a row against 800
+-- bytes for the placements alone; it is the price of being able to prove later
+-- that a recorded discovery was real.
+--
+-- \`solved_strict\` is whether the line met the puzzle's required clears, stored
+-- rather than derived because \`requiredClears\` can be corrected by an officer
+-- and a row must keep saying what was true when it was filed.
+CREATE TABLE IF NOT EXISTS puzzle_solutions (
+  solution_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+  puzzle_id     INTEGER NOT NULL,
+  canonical_key TEXT    NOT NULL,
+  key_version   INTEGER NOT NULL,
+  placements    TEXT    NOT NULL,   -- JSON SolutionStep[]
+  events        TEXT,               -- JSON InputEvent[]; NULL for enumerated lines
+  handling      TEXT,               -- JSON Handling; NULL for enumerated lines
+  attack        INTEGER NOT NULL,
+  clears        TEXT    NOT NULL,   -- JSON ClearName[]
+  solved_strict INTEGER NOT NULL,
+  -- 'reference' (the archive's own answer), 'enumerated' (found by the batch
+  -- search, credited to nobody), or 'player'.
+  source        TEXT    NOT NULL,
+  found_by      TEXT,               -- players.id, NULL unless source = 'player'
+  guild_id      TEXT,
+  found_at      INTEGER NOT NULL
+);
+
+-- The dedup itself. A second player finding the same line hits this and is told
+-- it is already known rather than credited again.
+CREATE UNIQUE INDEX IF NOT EXISTS puzzle_solutions_key
+  ON puzzle_solutions (puzzle_id, canonical_key);
+-- The leaderboard reads by finder; the maker view reads by puzzle.
+CREATE INDEX IF NOT EXISTS puzzle_solutions_finder ON puzzle_solutions (found_by);
+CREATE INDEX IF NOT EXISTS puzzle_solutions_puzzle ON puzzle_solutions (puzzle_id);
+
 -- No foreign key on puzzle_id, for the reason day_puzzles gives: club puzzles
 -- live in a JSON file the build rewrites wholesale, not in a table, so there is
 -- no parent row to reference. An override naming an id the archive does not
@@ -398,6 +450,86 @@ CREATE INDEX IF NOT EXISTS puzzle_override_log_puzzle
  * numbers, and a store that had to load and validate a JSON archive to open
  * itself would be untestable without one.
  */
+/** Where a recorded solution came from. Only `player` earns a discovery. */
+export type SolutionSource = "reference" | "enumerated" | "player";
+
+/** A solution about to be filed. */
+export interface NewSolution {
+  readonly puzzleId: number;
+  readonly canonicalKey: string;
+  readonly keyVersion: number;
+  readonly placements: readonly SolutionStep[];
+  /** The log, so the line can be re-verified. Null for an enumerated line. */
+  readonly events: readonly InputEvent[] | null;
+  readonly handling: Handling | null;
+  readonly attack: number;
+  readonly clears: readonly ClearName[];
+  /** Whether it met the puzzle's required clears when it was filed. */
+  readonly solvedStrict: boolean;
+  readonly source: SolutionSource;
+  readonly foundBy: string | null;
+  readonly guildId: string | null;
+}
+
+/** A solution on record, without the log — which no reader needs by default. */
+export interface StoredSolution {
+  readonly solutionId: number;
+  readonly puzzleId: number;
+  readonly canonicalKey: string;
+  readonly keyVersion: number;
+  readonly placements: readonly SolutionStep[];
+  readonly attack: number;
+  readonly clears: readonly ClearName[];
+  readonly solvedStrict: boolean;
+  readonly source: SolutionSource;
+  readonly foundBy: string | null;
+  readonly foundAt: number;
+}
+
+interface StoredSolutionRow {
+  solution_id: number;
+  puzzle_id: number;
+  canonical_key: string;
+  key_version: number;
+  placements: string;
+  attack: number;
+  clears: string;
+  solved_strict: number;
+  source: string;
+  found_by: string | null;
+  found_at: number;
+}
+
+function toStoredSolution(row: StoredSolutionRow): StoredSolution {
+  return {
+    solutionId: row.solution_id,
+    puzzleId: row.puzzle_id,
+    canonicalKey: row.canonical_key,
+    keyVersion: row.key_version,
+    placements: JSON.parse(row.placements) as SolutionStep[],
+    attack: row.attack,
+    clears: JSON.parse(row.clears) as ClearName[],
+    solvedStrict: row.solved_strict === 1,
+    source: row.source as SolutionSource,
+    foundBy: row.found_by,
+    foundAt: row.found_at,
+  };
+}
+
+/** One line of the discovery board. */
+export interface DiscoveryRow {
+  readonly player: PlayerProfile;
+  readonly found: number;
+  readonly latestAt: number;
+}
+
+/** How a puzzle is holding up: distinct lines, and how many miss its goal. */
+export interface SolutionCount {
+  readonly puzzleId: number;
+  readonly total: number;
+  readonly missingGoal: number;
+}
+
 export interface PastDays {
   /** The last day that has been dealt. Everything up to it is history. */
   readonly throughDay: number;
@@ -666,6 +798,115 @@ export class Store {
    * The identifiers are interpolated rather than bound — SQLite cannot bind
    * them — so every caller must pass a literal, never anything from a request.
    */
+  /**
+   * Files a solution, and answers whether it was new.
+   *
+   * The UNIQUE index does the deduplication, in one statement. `ON CONFLICT DO
+   * NOTHING` plus `changes` is the whole novelty check: two players submitting
+   * the same line in the same instant both reach the insert, exactly one gets
+   * `changes === 1`, and the loser is told it is already known rather than
+   * credited for somebody else's discovery. Written as SELECT-then-INSERT it
+   * would be a race, and the race would hand out the credit twice.
+   */
+  recordSolution(entry: NewSolution): { solutionId: number | null; discovered: boolean } {
+    const written = this.db
+      .query(
+        `INSERT INTO puzzle_solutions
+           (puzzle_id, canonical_key, key_version, placements, events, handling,
+            attack, clears, solved_strict, source, found_by, guild_id, found_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+         ON CONFLICT (puzzle_id, canonical_key) DO NOTHING`,
+      )
+      .run(
+        entry.puzzleId,
+        entry.canonicalKey,
+        entry.keyVersion,
+        JSON.stringify(entry.placements),
+        entry.events === null ? null : JSON.stringify(entry.events),
+        entry.handling === null ? null : JSON.stringify(entry.handling),
+        entry.attack,
+        JSON.stringify(entry.clears),
+        entry.solvedStrict ? 1 : 0,
+        entry.source,
+        entry.foundBy,
+        entry.guildId,
+        Date.now(),
+      );
+    return {
+      solutionId: written.changes > 0 ? Number(written.lastInsertRowid) : null,
+      discovered: written.changes > 0,
+    };
+  }
+
+  /**
+   * Who has discovered the most, best first.
+   *
+   * The anti-farm rules live in this query rather than in a stored `credited`
+   * flag, so they can be retuned without a backfill and without re-crediting
+   * anybody. Three of them:
+   *
+   * - only `source = 'player'` counts. The archive's own answers and everything
+   *   the batch enumerator turns up belong to nobody.
+   * - one credit per player per puzzle, ever. Without it a single player who
+   *   scripts variants takes every slot on a loose puzzle — and the archive has
+   *   loose puzzles: #123's enforceable condition is `attack >= 2`, and an
+   *   incomplete search of that four-piece puzzle already found 31 distinct
+   *   lines.
+   * - only lines that met the puzzle's required clears. A discovery that misses
+   *   the goal is evidence for a puzzle maker, not a point.
+   */
+  discoveryBoard(guildId: string | null, limit = 25): DiscoveryRow[] {
+    const scoped = guildId === null ? "" : "AND s.guild_id = ?2";
+    return this.db
+      .query<{ id: string; username: string; avatar_url: string | null; found: number; latest: number }, never[]>(
+        `SELECT p.id, p.username, p.avatar_url,
+                COUNT(*) AS found, MAX(s.found_at) AS latest
+           FROM (SELECT puzzle_id, found_by, guild_id, MIN(found_at) AS found_at
+                   FROM puzzle_solutions
+                  WHERE source = 'player' AND found_by IS NOT NULL AND solved_strict = 1
+                  GROUP BY puzzle_id, found_by) AS s
+           JOIN players p ON p.id = s.found_by
+          WHERE 1 = 1 ${scoped}
+          GROUP BY p.id
+          ORDER BY found DESC, latest ASC
+          LIMIT ?1`,
+      )
+      .all(...(guildId === null ? [limit] : [limit, guildId]) as never[])
+      .map((row) => ({
+        player: { id: row.id, username: row.username, avatarUrl: row.avatar_url },
+        found: row.found,
+        latestAt: row.latest,
+      }));
+  }
+
+  /** Every distinct line on record for one puzzle. The maker's view. */
+  solutionsFor(puzzleId: number): StoredSolution[] {
+    return this.db
+      .query<StoredSolutionRow, [number]>(
+        `SELECT solution_id, puzzle_id, canonical_key, key_version, placements, attack,
+                clears, solved_strict, source, found_by, found_at
+           FROM puzzle_solutions WHERE puzzle_id = ?1 ORDER BY found_at ASC`,
+      )
+      .all(puzzleId)
+      .map(toStoredSolution);
+  }
+
+  /** How many distinct lines each puzzle has, and how many miss its goal. */
+  solutionCounts(): SolutionCount[] {
+    return this.db
+      .query<{ puzzle_id: number; total: number; missing_goal: number }, []>(
+        `SELECT puzzle_id, COUNT(*) AS total,
+                SUM(CASE WHEN solved_strict = 0 THEN 1 ELSE 0 END) AS missing_goal
+           FROM puzzle_solutions GROUP BY puzzle_id ORDER BY total DESC`,
+      )
+      .all()
+      .map((row) => ({
+        puzzleId: row.puzzle_id,
+        total: row.total,
+        missingGoal: row.missing_goal,
+      }));
+  }
+
   private addMissingColumn(
     table: string,
     column: string,
