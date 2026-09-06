@@ -40,12 +40,27 @@ describe("the run's end condition", () => {
     ).toEqual([]);
   });
 
-  test("and the three that exist all use the full condition", () => {
+  test("and every one that exists uses the full condition", () => {
     const source = readFileSync(RUNNER, "utf8");
     const full = [...source.matchAll(/\bsolvesPuzzle\s*\(/g)];
-    // Three today: checkForEnd, the ledger overrun, and the log-full branch. A
-    // bare count so adding a fourth end point is a deliberate act, not a
-    // silent one.
-    expect(full.length).toBeGreaterThanOrEqual(3);
+
+    // Four today: `checkForEnd`, the ledger overrun, `input`'s log-full branch,
+    // and `placeAt`'s — the fourth arriving with #37 and converted when the two
+    // branches met.
+    //
+    // Exact, not `>=`. This test exists so that adding an end point is a
+    // deliberate act rather than a silent one, and a `>=` cannot fail on an
+    // addition at all — it went stale the moment the fourth site landed and
+    // would have tolerated a fifth, or the deletion of one, in silence. If this
+    // fails, count the run-ending branches in `runner.ts`: if the new number is
+    // right, say so here; if it is not, the new branch needs the full
+    // condition.
+    expect(
+      full.length,
+      "The number of run-ending decisions in runner.ts changed. Each one must ask\n" +
+        "`solvesPuzzle(this.attack, this.clears, this.puzzle)` — a run has to continue\n" +
+        "past the attack target while a required clear is outstanding, or the puzzle\n" +
+        "cannot be solved at all. Update this count once the new site is converted.",
+    ).toBe(4);
   });
 });
