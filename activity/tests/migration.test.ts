@@ -14,6 +14,7 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { archiveCounts, readPublishedArchive } from "../server/archive-rows";
 import { Store, type PastDays, type RunResult } from "../server/db";
 import type { SubmissionDraft } from "../server/submissions";
 import { COMMUNITY_ID_BASE } from "../shared/puzzle";
@@ -403,6 +404,10 @@ describe("writing down what a day dealt", () => {
       // appear — or one that appeared and was never meant to — shows up here
       // and nowhere else.
       expect(named("table")).toEqual([
+        // The club's puzzle archive, synced from the sheet. Rows arrive
+        // unpublished, so a database that grows this table serves exactly what
+        // it served before until an officer publishes something.
+        "archive_puzzles",
         "day_puzzles",
         "day_rush",
         "players",
@@ -427,6 +432,8 @@ describe("writing down what a day dealt", () => {
       ]);
       // The runs rebuild happens on the same start; its indexes must survive it.
       expect(named("index")).toEqual([
+        // Partial, on published_at: the boot read's only question.
+        "archive_published",
         "puzzle_override_log_puzzle",
         // One credit per discovery: `_key` is UNIQUE and is the whole novelty
         // test, so if it ever fails to appear the leaderboard silently starts
@@ -731,6 +738,55 @@ describe("the submissions table", () => {
       const third = store.recordSubmission(draft("Third"));
       store.acceptSubmission(third.submissionId, officer);
       expect(store.submission(third.submissionId)!.puzzleId).toBe(COMMUNITY_ID_BASE + 2);
+    } finally {
+      store.close();
+    }
+  });
+});
+
+describe("the archive table arriving on a deployed database", () => {
+  test("appears on a database of the old shape, with its rows intact", () => {
+    // The production database predates archive_puzzles entirely. It is declared
+    // in SCHEMA rather than as a hand-written step, so this is really a test
+    // that `CREATE TABLE IF NOT EXISTS` on an existing file adds the table and
+    // disturbs nothing beside it — the property every other table here relies
+    // on and none of them checks.
+    const legacy = new Database(path, { create: true });
+    legacy.run(LEGACY_SCHEMA);
+    legacy.run(
+      "INSERT INTO players (id, username, avatar_url, updated_at) VALUES ('p1', 'someone', NULL, 1)",
+    );
+    legacy.run(
+      `INSERT INTO runs (day, player_id, guild_id, puzzle_id, solved, attack, target_attack,
+                         duration_ms, resets, pieces_placed, clears, created_at)
+       VALUES (1, 'p1', NULL, 7, 1, 4, 4, 1000, 0, 3, '[]', 100)`,
+    );
+    legacy.close();
+
+    const store = new Store(path);
+    try {
+      const db = new Database(path);
+      try {
+        expect(
+          db
+            .query<{ name: string }, []>(
+              "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'archive_puzzles'",
+            )
+            .get()?.name,
+        ).toBe("archive_puzzles");
+
+        // Empty, unpublished, and therefore serving nobody — a database that
+        // upgrades into this state must play exactly as it did before.
+        expect(archiveCounts(db)).toEqual({ published: 0, pending: 0 });
+        expect(readPublishedArchive(db)).toEqual([]);
+
+        // And the rows that were already there survived.
+        expect(
+          db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM runs").get()?.n,
+        ).toBe(1);
+      } finally {
+        db.close();
+      }
     } finally {
       store.close();
     }
