@@ -27,6 +27,7 @@ import aiohttp
 import discord
 from discord import app_commands
 
+import changelog
 import puzzle_recap
 
 log = logging.getLogger(__name__)
@@ -176,6 +177,43 @@ async def puzzle_command(interaction: discord.Interaction):
     message = await interaction.followup.send(
         f"Today's puzzle is up. {launch}", embed=embed, wait=True)
     _remember_play(interaction, day, message)
+    await _announce_new_version(interaction)
+
+
+async def _announce_new_version(interaction: discord.Interaction) -> None:
+    """
+    Tells a server what changed, the first time somebody runs `/puzzle` on a
+    build it has not heard about.
+
+    Here rather than on a timer or at boot because a deploy should not wake a
+    channel up. It rides along behind the thing somebody actually asked for, and
+    only the first person to ask sees it arrive.
+
+    **No pings**, explicitly: this is an announcement nobody opted into, and the
+    text is written by us rather than by a player, so the one thing it must not
+    do is notify a room. `AllowedMentions.none()` rather than trusting the
+    content — a future release note containing `@everyone` would otherwise be a
+    server-wide ping shipped in a string literal.
+
+    Best effort, like `_remember_play`: a server missing a changelog is a
+    nuisance, and raising here would cost the player the puzzle they asked for.
+    The claim happens before the send, so a failure loses that announcement
+    rather than repeating it — see `changelog.claim_announcement`.
+    """
+    if recap_db is None or interaction.guild_id is None:
+        return
+    try:
+        message = changelog.announcement_for(recap_db, interaction.guild_id)
+    except sqlite3.Error:
+        log.warning("could not read the changelog state", exc_info=True)
+        return
+    if not message:
+        return
+    try:
+        await interaction.followup.send(
+            message, allowed_mentions=discord.AllowedMentions.none())
+    except discord.HTTPException:
+        log.warning("could not post the changelog", exc_info=True)
 
 
 def _remember_play(interaction: discord.Interaction, day: int,

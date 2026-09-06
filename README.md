@@ -98,6 +98,36 @@ how fast, who missed, and how long the server's run of solves is. It happens
 once per server per day, and only in servers that announced the puzzle in the
 first place, because the reply needs something to reply to.
 
+### Versions, and how a server hears about them
+
+The bot carries a version — `beta 0.1` at the time of writing — in
+`client/changelog.py`, next to the list of what each one changed.
+
+**A server is told the first time somebody runs `/puzzle` on a build it has not
+heard about**, as a plain message behind the puzzle embed. Not on a timer and
+not at boot: a deploy should not wake a channel up, so the note rides along
+behind something a person actually asked for, and only the first person to ask
+sees it arrive. It sends with `AllowedMentions.none()`, so a release note can
+never ping a room however it is worded.
+
+**It names every version the server missed, not just the newest one.**
+Production pulls when somebody deploys, which may be several releases after the
+last deploy — announcing only the tip would drop the middle ones silently. Past
+three releases the message says how many older ones it is not listing, because a
+server that has never heard from the bot is owed the entire history and nobody
+typing `/puzzle` asked to read it.
+
+Releasing is adding a `Release` at the top of `RELEASES`; `VERSION` follows it,
+and a test fails if it does not. Order in that tuple *is* the version order —
+comparing `beta 0.10` against `beta 0.9` as text is wrong and as numbers is a
+parser nobody needs.
+
+What each server has been told lives in `bot_versions`, one row per guild, and
+the claim is taken before the message is sent. A send that fails therefore loses
+that announcement rather than repeating it, which is the right way round: a
+changelog posted twice is worse than one posted never, and the next release will
+say what this one would have.
+
 ### `/report` — a bug, without a GitHub account
 
 ```
