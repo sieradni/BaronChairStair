@@ -153,6 +153,20 @@ describe("a replay cannot become a scored run", () => {
     ).toBe(true);
   });
 
+  test("and it starts its own clock rather than the filed run's", () => {
+    const source = readFileSync(APP, "utf8");
+    const replay = bodyOf(source, "replaySheet");
+
+    // `sittings` is keyed by puzzle, so replaying the same one inherits the
+    // filed run's openedAt and restart tally and the practice card reports a
+    // time nobody played.
+    expect(
+      /sittings\.delete\(/.test(replay),
+      "replaySheet must clear this puzzle's sitting, or the replay inherits the\n" +
+        "clock and restart tally of the run already filed against it.",
+    ).toBe(true);
+  });
+
   test("and that path marks the sheet unscored", () => {
     const source = readFileSync(APP, "utf8");
     const open = bodyOf(source, "openArchivePuzzle");

@@ -488,6 +488,16 @@ export class App {
   private async replaySheet(): Promise<void> {
     const id = this.sheet?.puzzle.id;
     if (id === undefined) return;
+    // A replay starts its own clock. `sittings` is keyed by puzzle, so that a
+    // detour into practice and back cannot hand the daily a fresh clock and a
+    // zeroed restart tally — a free place at the top of a board sorted by time.
+    // Replaying the *same* puzzle inherits that sitting, and the practice card
+    // then reports the minutes since the puzzle was first opened rather than
+    // the run just played.
+    //
+    // Safe to drop precisely here, and nowhere else: this puzzle's scored run
+    // is already filed, so there is no longer a time for the tally to protect.
+    this.sittings.delete(id);
     await this.openArchivePuzzle(id);
   }
 
