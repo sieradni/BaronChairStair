@@ -904,6 +904,24 @@ export class Store {
       .map(toStoredSolution);
   }
 
+  /**
+   * How many distinct lines one puzzle has on record.
+   *
+   * Separate from {@link solutionsFor} because this one is asked on the run
+   * submit path, once per solved run, and the rows it would otherwise count
+   * carry an input log apiece — roughly 8 KB each, read and parsed to arrive at
+   * a number the index already knows.
+   */
+  countSolutions(puzzleId: number): number {
+    return (
+      this.db
+        .query<{ n: number }, [number]>(
+          `SELECT COUNT(*) AS n FROM puzzle_solutions WHERE puzzle_id = ?1`,
+        )
+        .get(puzzleId)?.n ?? 0
+    );
+  }
+
   /** How many distinct lines each puzzle has, and how many miss its goal. */
   solutionCounts(): SolutionCount[] {
     return this.db

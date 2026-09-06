@@ -354,6 +354,69 @@ async function errorOf(response: Response): Promise<string> {
  * somebody cloning this repo sees a suite that passes rather than one that
  * looks broken by their own checkout.
  */
+describe.skipIf(!hasSolutions)("what a solved run teaches the archive", () => {
+  /** Plays today's easy puzzle by its own answer, and returns the response. */
+  async function playTheAnswer(token: string): Promise<{
+    run: { solved: boolean };
+    discovery: { isNew: boolean; known: number } | null;
+  }> {
+    const daily = (await (await get("/api/daily", token)).json()) as {
+      puzzles: { tier: string; puzzle: PuzzlePrompt }[];
+    };
+    const today = archive.find((puzzle) => puzzle.id === daily.puzzles[0]!.puzzle.id)!;
+    const response = await post(
+      "/api/daily/run",
+      { tier: "easy", events: solvingLog(today), resets: 0 },
+      token,
+    );
+    return (await response.json()) as never;
+  }
+
+  test("solving it puts the line on record", async () => {
+    // Deliberately not "the first player discovers it". That is true, and it is
+    // proved against the store in `tests/solution-store.test.ts` where it can
+    // be stated without depending on nothing above here having played this
+    // puzzle first. What this file is for is the wiring: a run that solved
+    // reaches the table at all.
+    const played = await playTheAnswer(await guestToken());
+
+    expect(played.run.solved).toBe(true);
+    expect(played.discovery).not.toBeNull();
+    expect(played.discovery!.known).toBeGreaterThan(0);
+  });
+
+  test("the next player to play the same line has not", async () => {
+    // The whole point of the table. A second player repeating the answer is
+    // not a discovery, and paying them for it would make the leaderboard a
+    // measure of who played most rather than who found most.
+    await playTheAnswer(await guestToken());
+    const second = await playTheAnswer(await guestToken());
+
+    expect(second.discovery).not.toBeNull();
+    expect(second.discovery!.isNew).toBe(false);
+  });
+
+  test("a run that solved nothing files nothing", async () => {
+    const token = await guestToken();
+    const body = (await (
+      await post("/api/daily/run", { tier: "medium", events: [], resets: 0 }, token)
+    ).json()) as { discovery: unknown };
+
+    expect(body.discovery).toBeNull();
+  });
+
+  test("the discovery board is a board, and it is the guild's own", async () => {
+    const token = await guestToken();
+    await playTheAnswer(token);
+    const body = (await (await get("/api/discoveries", token)).json()) as {
+      board: { player: { id: string }; found: number }[];
+    };
+
+    expect(Array.isArray(body.board)).toBe(true);
+    for (const row of body.board) expect(row.found).toBeGreaterThan(0);
+  });
+});
+
 describe.skipIf(!hasSolutions)("puzzle rush", () => {
   let token = "";
   let practiceRush: RushStartBody;
