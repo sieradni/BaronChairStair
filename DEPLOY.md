@@ -43,7 +43,19 @@ the half worth having your full attention.
 
 **Python 3.10 or newer.** `client/discord_bot.py` exits at start-up on anything older,
 with a message naming the version it found. Its dependencies are `discord.py`,
-`aiohttp` and `python-dotenv`.
+`aiohttp`, `python-dotenv` and `matplotlib`.
+
+`matplotlib` is not optional and is easy to miss: `discord_bot.py:114` imports
+`presence_tracker`, which imports it at module scope, so the bot does not start
+without it — it is not only needed by the graph command that uses it.
+
+**The replay commands need one more thing.** `/highlights` and
+`build_snapshots.py` spawn a TypeScript bridge (`server/server.ts`) that imports
+`@haelp/teto`, so run `bun install` **at the repository root** once. Everything
+else runs on Python alone. Bun can resolve the package on its own when there is
+no `node_modules` at all, so a fresh box may work without this — run it anyway,
+so the version is the one `bun.lock` pins rather than whatever the registry
+serves at the moment somebody asks for a replay.
 
 Use the interpreter that actually runs the bot, not a bare `python3` — a system
 interpreter usually has none of these installed:
@@ -135,13 +147,20 @@ Stop the old process before starting the new one. **Two instances on one token
 double-handle every command**, which presents as the bot answering everything twice.
 
 Before restarting, confirm every module the bot imports still parses. `discord_bot.py`
-imports all of these at module scope, so a syntax error in any one of them is a start-up
-crash rather than a degraded feature:
+imports seven of the files under `client/` at module scope, so a syntax error in any one
+of them is a start-up crash rather than a degraded feature:
 
 ```sh
-<venv-python> -m py_compile client/discord_bot.py client/report_commands.py \
-  client/report_text.py client/puzzle_commands.py client/puzzle_recap.py sync_guilds.py
+<venv-python> -m py_compile client/*.py sync_guilds.py
 ```
+
+**A glob, not a list**, and for the reason the section above exists. The list this
+replaces named six files and missed four that `discord_bot.py` imports at module scope —
+`build_snapshots`, `render`, `teto_client`, and `presence_tracker`, which is the very
+import this page has just finished explaining is easy to miss. With a syntax error in
+`presence_tracker.py` the old command exited 0 while the bot could not start, which is
+precisely the failure it is run to catch. The glob compiles a few files the bot does not
+import, which costs nothing, and cannot fall out of step as modules are added.
 
 **A new slash command needs a restart to appear.** The command tree is synced by
 `_sync_global_commands()`, called from the `on_ready` handler and nowhere else — there

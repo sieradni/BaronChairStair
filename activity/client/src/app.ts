@@ -65,6 +65,16 @@ const COUNTDOWN_TICK_MS = 1000;
 const CLOCK_TICK_MS = 100;
 const TOAST_MS = 2200;
 
+/**
+ * How long the verdict badge stays on a board that has a solution to read.
+ *
+ * Long enough to take in "Solved!" and the score under it; short enough that
+ * anybody who came to step through the answer never has to dismiss it. The duel
+ * clears at 900ms and the rush at 380ms — this one carries a number, so it sits
+ * a little longer than either.
+ */
+const BADGE_LINGER_MS = 1800;
+
 export class App {
   private readonly masthead = createMasthead(() => this.showHome());
   private readonly credits = createCredits();
@@ -94,6 +104,15 @@ export class App {
   private readonly settingsDialog;
   private readonly verdict;
   private readonly walkthrough = createWalkthroughPanel();
+  /**
+   * The pending auto-dismiss of the verdict badge, if one is running.
+   *
+   * Held so it can be cancelled. A timer that outlived its badge would hide the
+   * *next* one — solve, press "Play again", solve again inside the window, and
+   * the second verdict vanishes on the first one's clock.
+   */
+  private badgeLinger: number | null = null;
+
   /** Undoes the pointer attachment; nothing else ever needs it. */
   private readonly detachPointerPlay: () => void;
 
@@ -236,6 +255,7 @@ export class App {
 
     this.verdict = createVerdictPanel({
       onRetry: () => this.startRun(),
+      onReplay: () => void this.replaySheet(),
       onToggleLeaderboard: () => this.toggleLeaderboard(),
       onPractice: () => void this.startPractice(),
       onBackToDaily: () => this.returnToDaily(),
@@ -469,6 +489,38 @@ export class App {
     } catch (error) {
       this.toast(error instanceof ApiError ? error.message : "Could not open the archive");
     }
+  }
+
+  /**
+   * Plays the sheet on the board again, unscored.
+   *
+   * Offered once a daily is filed, where "Try again" is withdrawn because the
+   * run that counts is already on the leaderboard. A player who has just solved
+   * one wants to try the line they thought of afterwards, or show somebody, or
+   * simply enjoy it a second time — and the alternative on the card is "Random
+   * puzzle", which is not this puzzle.
+   *
+   * Routed through `openArchivePuzzle` rather than `startRun`, because that is
+   * the path that already means "play this one unscored": it sets
+   * `scored: false`, so the run cannot be filed and nothing on the board moves.
+   * `lockedPuzzleIds` lets it through — a solved sheet is not locked, and the
+   * lock exists to stop a *rehearsal before filing*, which is precisely the
+   * thing that has already happened here.
+   */
+  private async replaySheet(): Promise<void> {
+    const id = this.sheet?.puzzle.id;
+    if (id === undefined) return;
+    // A replay starts its own clock. `sittings` is keyed by puzzle, so that a
+    // detour into practice and back cannot hand the daily a fresh clock and a
+    // zeroed restart tally — a free place at the top of a board sorted by time.
+    // Replaying the *same* puzzle inherits that sitting, and the practice card
+    // then reports the minutes since the puzzle was first opened rather than
+    // the run just played.
+    //
+    // Safe to drop precisely here, and nowhere else: this puzzle's scored run
+    // is already filed, so there is no longer a time for the tally to protect.
+    this.sittings.delete(id);
+    await this.openArchivePuzzle(id);
   }
 
   private async openArchivePuzzle(id: number): Promise<void> {
@@ -810,7 +862,7 @@ export class App {
         onRoundOver: (winnerId, duel, solution, nextRoundAt) => {
           this.duelState = duel;
           this.input.setGameInputEnabled(false);
-          this.badge.show(winnerId === self(), winnerId === self() ? "Round won" : "Round lost");
+          this.stampBadge(winnerId === self(), winnerId === self() ? "Round won" : "Round lost");
           window.setTimeout(() => this.badge.hide(), 900);
           this.duelIntermissionAt = nextRoundAt;
           // Both players watch it, the loser most of all: it is the only look
@@ -1040,7 +1092,7 @@ export class App {
           this.relayout();
         },
         onSolved: (snapshot) => {
-          this.badge.show(true, `${snapshot.solved} solved`);
+          this.stampBadge(true, `${snapshot.solved} solved`);
           window.setTimeout(() => this.badge.hide(), 380);
         },
         onFinish: (summary) => void this.finishRush(summary),
@@ -1067,7 +1119,7 @@ export class App {
   private async finishRush(summary: RushSummary): Promise<void> {
     const ticket = this.rushTicket;
     this.input.setGameInputEnabled(false);
-    this.badge.show(summary.solved > 0, `${summary.solved} solved`);
+    this.stampBadge(summary.solved > 0, `${summary.solved} solved`);
     if (!ticket) return;
 
     try {
@@ -1356,7 +1408,7 @@ export class App {
     solution: readonly SolutionStep[] | null,
   ): void {
     this.input.setGameInputEnabled(false);
-    this.badge.show(run.solved, `${run.attack} / ${run.targetAttack} attack`);
+    this.stampBadge(run.solved, `${run.attack} / ${run.targetAttack} attack`);
     this.presentVerdict(
       {
         day: run.day,
@@ -1385,13 +1437,30 @@ export class App {
   private attachWalkthrough(puzzle: PuzzlePrompt, solution: readonly SolutionStep[]): void {
     this.solutionPlayer = new SolutionPlayer(puzzle, solution, BOARD_HEIGHT);
     this.walkthrough.bind(this.solutionPlayer, (stepped) => {
-      // The badge lands on the board and stays there, which is right for a
-      // result and wrong the moment the board becomes something to read. The
-      // first press of the walkthrough is where it stops being a verdict and
-      // starts being in the way of the answer it is sitting on top of.
+      // A fast player who reaches for the controls before the badge has cleared
+      // itself. Still worth keeping alongside the timer below: pressing a step
+      // is an unambiguous "I am reading the board now".
       if (stepped) this.badge.hide();
       if (this.solutionPlayer) this.renderer.draw(this.solutionPlayer.view());
     });
+    // And it clears itself, because a solution appearing IS the player asking to
+    // read the board.
+    //
+    // Hiding it only on the first press was half the fix: the walkthrough is
+    // attached in the same breath as the badge is shown, so the two arrive
+    // together and the stamp sits over the middle of the field — squares the
+    // solution is about — until something is pressed. A player stepping through
+    // an answer should not have to dismiss the verdict first.
+    //
+    // A timer rather than hiding it outright, because the badge is the answer
+    // to "did I solve it" and that deserves its moment. The duel and the rush
+    // already clear theirs at 900ms and 380ms; this one lingers longer because
+    // it carries a score to read, not just a word.
+    this.clearBadgeLinger();
+    this.badgeLinger = window.setTimeout(() => {
+      this.badgeLinger = null;
+      this.badge.hide();
+    }, BADGE_LINGER_MS);
     replaceChildren(
       this.hud.right,
       this.hud.panels.goal,
@@ -1456,7 +1525,22 @@ export class App {
 
   /** The badge names what happened; the subtitle says how close it was. */
   private showBadge(solved: boolean, snapshot: RunSnapshot): void {
-    this.badge.show(solved, `${snapshot.attack} / ${snapshot.targetAttack} attack`);
+    this.stampBadge(solved, `${snapshot.attack} / ${snapshot.targetAttack} attack`);
+  }
+
+  /**
+   * Puts a verdict on the board, and cancels any auto-dismiss still pending.
+   *
+   * One way in, because the auto-dismiss added for the walkthrough is a timer
+   * with no idea which badge it was started for. Cancelling it only where it is
+   * *set* leaves it able to reach the next one: solve a daily, press "Play
+   * again", and a verdict landing inside the window is wiped by the previous
+   * run's clock. Every `badge.show` in this file goes through here so that
+   * cannot depend on which path showed it.
+   */
+  private stampBadge(ok: boolean, text: string): void {
+    this.clearBadgeLinger();
+    this.badge.show(ok, text);
   }
 
   // ── Chrome ─────────────────────────────────────────────────────────────────
@@ -1572,10 +1656,20 @@ export class App {
     this.settingsDialog.open(this.settings.value.handling, this.settings.value.keybinds);
   }
 
+  /** Stops a pending auto-dismiss, so it cannot reach a later badge. */
+  private clearBadgeLinger(): void {
+    if (this.badgeLinger === null) return;
+    window.clearTimeout(this.badgeLinger);
+    this.badgeLinger = null;
+  }
+
   /** Frees the pointer capture and the last active run's frame loop. */
   dispose(): void {
     this.detachPointerPlay();
     this.disposeActiveMode();
+    // A timer outliving the app it was started in fires against a badge that
+    // is no longer on screen.
+    this.clearBadgeLinger();
   }
 
   private readonly relayout = (): void => {
