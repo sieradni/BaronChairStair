@@ -324,8 +324,14 @@ root and fill in what you need:
 ## Contributing
 
 `main` is protected. It takes a pull request and one approving review from
-someone other than the author — no direct pushes, no force pushes, no deleting
-the branch. Branch off `main`, open a PR, get a review.
+someone other than the author — GitHub refuses a self-approval, so a solo change
+still needs a second pair of eyes. No force pushes, and the branch cannot be
+deleted. Branch off `main`, open a PR, get a review.
+
+Administrators are exempt (`enforce_admins` is off), so the rule is a default
+rather than a wall: an owner can push straight to `main` if something is on
+fire. Worth knowing before assuming the history cannot have been written any
+other way.
 
 ---
 
