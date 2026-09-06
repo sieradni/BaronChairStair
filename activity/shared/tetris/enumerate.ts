@@ -153,6 +153,8 @@ interface Walker {
   readonly puzzle: Puzzle;
   readonly limits: SearchLimits;
   readonly deadline: number;
+  /** The soft-drop rate the run is being planned at. */
+  readonly sdf: number;
   readonly seen: Set<string>;
   readonly lines: FoundLine[];
   /** Canonical keys of the lines already kept, so permutations count once. */
@@ -285,13 +287,23 @@ function completesARow(engine: Engine, cells: TargetCells): boolean {
   return false;
 }
 
-/** Plays a route out on the live engine and reads what the lock scored. */
+/**
+ * Plays a route out on the live engine and reads what the lock scored.
+ *
+ * `sdf` and `softDrops` are what #44 added to `ticksForRoute`: below the
+ * instant soft drop a held drop descends `0.05 × sdf` rows a frame, so the key
+ * has to stay down for as many frames as the planned descent needs. At the
+ * default they change nothing, which is why omitting them typechecked as a
+ * two-argument call right up until the two branches met.
+ */
 function play(
   engine: Engine,
   route: readonly MoveKey[],
+  sdf: number,
+  softDrops: readonly number[],
   lastLock: () => LockRes | null,
 ): { readonly clear: ClearName | null; readonly attack: number } | null {
-  for (const batch of ticksForRoute(route, engine.frame)) {
+  for (const batch of ticksForRoute(route, engine.frame, sdf, softDrops)) {
     engine.tick(batch as never);
   }
   const lock = lastLock();
@@ -318,6 +330,8 @@ interface Branch {
    * identical answer.
    */
   readonly route: readonly MoveKey[];
+  /** The descent of each soft drop in `route`, as the planner measured it. */
+  readonly softDrops: readonly number[];
 }
 
 /**
@@ -350,15 +364,20 @@ function childrenOf(walker: Walker, owed: Owed): Branch[] {
         // worth asking where a row actually comes out. On a puzzle board most
         // placements are quiet stacking, and asking anyway was the whole cost
         // of the search.
-        const route = completesARow(engine, cells)
-          ? planner.placementAt(cells)?.route
-          : (planner.plainRouteTo(cells) ?? planner.placementAt(cells)?.route);
+        // `plainRouteTo` answers with a route and no descents, which is right:
+        // it is only taken where nothing clears, and a quiet placement lands on
+        // the same squares however long the drop was held. `ticksForRoute` then
+        // falls back to one held tick per drop, its documented minimum.
+        const best = completesARow(engine, cells) ? planner.placementAt(cells) : null;
+        const plain = best ? null : (planner.plainRouteTo(cells) ?? null);
+        const fallback = best ?? (plain ? null : planner.placementAt(cells));
+        const route = best?.route ?? plain ?? fallback?.route;
+        const softDrops = best?.softDrops ?? fallback?.softDrops ?? [];
         if (!route) continue;
-        const placement = { route };
         const resting = engine.snapshot();
-        const outcome = play(engine, placement.route, walker.lastLock);
+        const outcome = play(engine, route, walker.sdf, softDrops, walker.lastLock);
         engine.fromSnapshot(resting);
-        if (outcome) found.push({ cells, piece, holdFirst, route: placement.route, ...outcome });
+        if (outcome) found.push({ cells, piece, holdFirst, route, softDrops, ...outcome });
       }
     } finally {
       engine.fromSnapshot(before);
@@ -405,7 +424,7 @@ function walk(
     const before = engine.snapshot();
     try {
       if (branch.holdFirst) engine.hold(false, true);
-      const outcome = play(engine, branch.route, walker.lastLock);
+      const outcome = play(engine, branch.route, walker.sdf, branch.softDrops, walker.lastLock);
       if (!outcome) continue;
       walk(
         walker,
@@ -461,6 +480,7 @@ export function searchSolutions(
     puzzle,
     limits: settled,
     deadline: started + settled.maxMillis,
+    sdf: handling.sdf,
     seen: new Set(),
     lines: [],
     keys: new Set(),
