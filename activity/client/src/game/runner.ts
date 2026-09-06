@@ -501,7 +501,6 @@ export class PuzzleRun {
     // held — so a plan built before the shift would commit a route to a square
     // the piece has since left, and the drag would land somewhere the preview
     // never showed.
-    this.currentPlanner();
     const target = this.currentPlanner().targetAt(spot.column, spot.row, this.aim?.cells ?? null);
     this.aim = { cells: target, legal: this.searchPlacement(target) !== null };
     // The hollow is the contract — paint it now rather than whenever the next

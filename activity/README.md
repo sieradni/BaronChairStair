@@ -717,6 +717,12 @@ placement exactly like a typed one, and a square reachable only by a kick is
 placed with the kick that reaches it — the spin credit follows the route, not
 the finger.
 
+Kick and tuck seats need the instant soft drop, which is the default
+(`Settings > sdf`, 41). Turn it down and a route that descends mid-way no longer
+descends far enough to reach those seats, so the drag refuses them rather than
+guessing: the outline stays dashed and nothing is placed. The keyboard reaches
+every one of them at any setting.
+
 Spins work the same way: tap first to set the rotation — twice for a TSD —
 then drag to the slot, and the engine credits what the route earned. While a
 drag is under way the piece shows where it would land: a solid outline on a
