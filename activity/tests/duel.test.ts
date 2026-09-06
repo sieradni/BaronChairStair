@@ -1444,6 +1444,9 @@ describe.skipIf(!hasSolutions)("a puzzle duel rests between rounds", () => {
     const { host, guest } = await playPuzzleDuel(3);
     const round = await host.take("round");
     await guest.take("round");
+    // Read before the round can end, because that is what `nextRoundAt` is
+    // measured from.
+    const beforeTheRoundEnded = Date.now();
     claim(host, round);
 
     const won = await host.take("roundOver");
@@ -1451,7 +1454,18 @@ describe.skipIf(!hasSolutions)("a puzzle duel rests between rounds", () => {
     expect(won.solution).not.toBeNull();
     expect(won.solution!.length).toBeGreaterThan(0);
     expect(lost.solution).toEqual(won.solution);
-    expect(won.nextRoundAt).toBeGreaterThan(Date.now() - 1);
+
+    // `nextRoundAt` is `Date.now() + intermissionMs` taken when the round
+    // ended, and these tests run with a one-millisecond intermission — so
+    // comparing it against `Date.now()` *here* asserted that the test reached
+    // this line within about two milliseconds of the round ending. It lost that
+    // race 13 times in 40 on an idle machine and rather more under load.
+    //
+    // What the line is for is that the server said when the next round starts
+    // rather than sending null, which is the last round's answer. Anchored to a
+    // reading taken before the round ended, that holds however slow the run is.
+    expect(won.nextRoundAt).not.toBeNull();
+    expect(won.nextRoundAt!).toBeGreaterThanOrEqual(beforeTheRoundEnded);
   });
 
   test("the last round of a match has nothing to wait for", async () => {
