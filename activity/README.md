@@ -71,13 +71,29 @@ It answers two different questions and only one of them is a proof.
 - **"My condition is loose."** One alternate is enough. A puzzle finishable by a
   line its author did not intend usually has a condition that says less than the
   sentence beside it.
-- **"My condition is tight."** Only an `exhausted` search may say this. Every
-  other `stopped:` reason means the budget ran out with ground unexplored, and
-  the report always says which — a truncated search read as a clean bill of
-  health is the one failure this tool must not produce.
+- **"My condition is tight."** Only an `exhausted` search that found at least one
+  line may say this. Every other `stopped:` reason means the budget ran out with
+  ground unexplored, and the report always says which — a truncated search read
+  as a clean bill of health is the one failure this tool must not produce.
+- **"Nobody can finish it."** An exhausted search that found *no* line has proved
+  the puzzle unsolvable. That is its own answer and reported as `NOBODY CAN
+  SOLVE`, because counted among the tight ones it would be a clean bill of health
+  for the most broken puzzle there is.
 
-Puzzles of about six pieces or fewer exhaust in seconds; nothing longer does, so
-most of the archive can be reported on but never cleared. `--seconds` raises the
+**Exhausting is rarer than "short puzzles finish" suggests.** Measured across the
+archive at a twenty-second budget: every puzzle of three pieces or fewer
+exhausts, four-piece 5 times in 8, five-piece 4 in 8, six-piece 1 in 10, and
+nothing of seven or more ever does. So most of the archive can be reported on but
+never cleared.
+
+**And "exhausted" is scoped to the default soft drop.** The reachability walk
+drops a piece with `Tetromino.softDrop`, which falls all the way to rest — what
+the engine does at `sdf 41`, the default, and not what it does below it, where a
+held drop descends `0.05 × sdf` rows a frame and the piece can stop part-way and
+slide under an overhang. Comparing that walk against a one-row-step walk over the
+first piece of all 138 puzzles, 4 boards already have seats only the step walk
+reaches. So it is a proof about a player on the default handling, which is nearly
+everybody, and not about one who has turned it down. `--seconds` raises the
 per-puzzle budget, `--only 15,37` narrows it, and `--write` files what it finds
 as `enumerated` rows credited to nobody — which is what stops the first player
 to *play* one of those lines being paid for rediscovering it.

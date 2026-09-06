@@ -18,8 +18,15 @@
  * can offer it. Every other way of stopping means the search ran out of budget
  * with ground left unexplored, and the report says which — because the failure
  * that matters here is a maker reading a truncated search as a clean bill of
- * health. Nothing past about six pieces exhausts in any reasonable time, so
- * most of the archive can only ever be reported on, never cleared.
+ * health. And an exhausted search that found *nothing* is a third answer again —
+ * the puzzle cannot be finished at all — reported loudly rather than counted
+ * among the tight ones.
+ *
+ * Exhausting is rarer than "short puzzles finish" suggests: measured at a
+ * twenty-second budget, every puzzle of three pieces or fewer exhausts,
+ * four-piece 5 times in 8, six-piece 1 in 10, and nothing of seven or more. It
+ * is also scoped to the default soft drop — see
+ * `RoutePlanner.restingPlacements`.
  *
  * `--write` files what it finds as `enumerated` rows, which are credited to
  * nobody: they seed the archive with what is already known so that the first
@@ -114,6 +121,29 @@ export function judge(puzzle: Puzzle, report: SearchReport): Verdict {
 }
 
 /**
+ * What a search actually established about a puzzle.
+ *
+ * `unsolvable` is its own answer and not a flavour of `tight`. A search that
+ * exhausted the position and found **no** line has proved the puzzle cannot be
+ * finished at all — and counting that as "provably tight, nothing else exists"
+ * hands a maker a clean bill of health for a puzzle nobody can solve, which is
+ * the worst thing this tool can say. It is reachable: a goal naming a clear the
+ * board cannot make produces exactly this, and `requiredClears` now ships on
+ * 112 of 138 puzzles.
+ */
+export type Verdict_ =
+  | "unsolvable"
+  | "tight"
+  | "loose"
+  | "incomplete";
+
+export function verdictOf(verdict: Verdict): Verdict_ {
+  if (verdict.report.stoppedBy !== "exhausted") return "incomplete";
+  if (verdict.report.lines.length === 0) return "unsolvable";
+  return verdict.alternates.length > 0 ? "loose" : "tight";
+}
+
+/**
  * The one line that matters per puzzle.
  *
  * `exhausted` with nothing else found is the only row that says a puzzle is
@@ -137,13 +167,12 @@ function oneLine(goal: string): string {
 function describe(verdict: Verdict): string {
   const { puzzle, report, alternates, refFound } = verdict;
   const complete = report.stoppedBy === "exhausted";
-  const headline = alternates.length > 0
-    ? `${String(alternates.length).padStart(3)} alternate${alternates.length === 1 ? "" : "s"}`.padEnd(
-        14,
-      )
-    : complete
-      ? "only the line   "
-      : "none (partial)  ";
+  const headline = {
+    unsolvable: "NOBODY CAN SOLVE",
+    tight: "only the line   ",
+    loose: `${String(alternates.length).padStart(3)} alternate${alternates.length === 1 ? "" : "s"}`.padEnd(16),
+    incomplete: "none (partial)  ",
+  }[verdictOf(verdict)];
   const note = complete ? "exhausted" : `stopped: ${report.stoppedBy}`;
   const missing = refFound === false ? "  [!] did not re-find the answer on file" : "";
   return (
@@ -217,8 +246,9 @@ function main(): void {
   }
 
   const exhausted = verdicts.filter((v) => v.report.stoppedBy === "exhausted");
-  const loose = verdicts.filter((v) => v.alternates.length > 0);
-  const tight = exhausted.filter((v) => v.alternates.length === 0);
+  const loose = verdicts.filter((v) => verdictOf(v) === "loose");
+  const tight = verdicts.filter((v) => verdictOf(v) === "tight");
+  const unsolvable = verdicts.filter((v) => verdictOf(v) === "unsolvable");
   const lost = verdicts.filter((v) => v.refFound === false);
 
   const many = (count: number, one: string, more: string): string =>
@@ -227,8 +257,18 @@ function main(): void {
   console.log(`\n${many(verdicts.length, "puzzle", "puzzles")} searched.`);
   console.log(`  ${many(loose.length, "has", "have")} a line the author did not write down`);
   console.log(
-    `  ${many(tight.length, "is", "are")} provably tight — searched to exhaustion, nothing else exists`,
+    `  ${many(tight.length, "is", "are")} provably tight — searched to exhaustion, ` +
+      "nothing else solves it",
   );
+  if (unsolvable.length > 0) {
+    // Louder than a finding, because it is not a fact about the condition — it
+    // is a puzzle nobody can finish, and it was sitting in the "tight" count.
+    console.log(
+      `\n  [!!] ${many(unsolvable.length, "puzzle", "puzzles")} CANNOT BE SOLVED AT ALL: ` +
+        `${unsolvable.map((v) => `#${v.puzzle.id}`).join(", ")}`,
+    );
+    console.log("       Searched to exhaustion and no line meets the goal.");
+  }
   console.log(
     `  ${many(verdicts.length - exhausted.length, "ran", "ran")} out of budget, ` +
       "and proves nothing either way",

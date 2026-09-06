@@ -304,6 +304,15 @@ export class RoutePlanner {
    * spin seats included, with no second search and no separate notion of
    * reachability to drift from the one the game plays by.
    *
+   * Complete **at the default soft drop**, which is the honest scope.
+   * `Tetromino.softDrop` falls all the way to rest, which is what the engine
+   * does at `sdf 41` and not what it does below it: there a held drop descends
+   * `0.05 × sdf` rows a frame, so a player can stop part-way down and slide
+   * under an overhang. Measured over the first piece of all 138 archive
+   * puzzles, 4 boards have seats only a one-row-step walk reaches. Callers that
+   * turn this into a claim — `searchSolutions`' `"exhausted"` — inherit that
+   * scope and say so.
+   *
    * Keyed by squares rather than by (x, y, rotation): an S piece flat on the
    * floor occupies the same four cells from two rotations, and they are one
    * placement, not two. That is the same equivalence `shared/solution-key.ts`

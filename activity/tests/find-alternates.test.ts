@@ -13,7 +13,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { judge } from "../tools/find-alternates";
+import { judge, verdictOf } from "../tools/find-alternates";
 import type { Puzzle, SolutionStep } from "../shared/puzzle";
 import type { SearchReport } from "../shared/tetris/enumerate";
 
@@ -69,5 +69,47 @@ describe("telling the author's line from the rest", () => {
 
     expect(verdict.alternates).toHaveLength(2);
     expect(verdict.refFound).toBeNull();
+  });
+
+  test("a search that exhausted and found nothing is not 'only the intended line'", () => {
+    // The worst thing this tool can say. A goal naming a clear the board cannot
+    // make exhausts with zero lines — and with no answer key on file (the
+    // ordinary checkout, since data/solutions.json is untracked) `refFound` is
+    // null, so the loud warning never fires either. Counted as "tight" it hands
+    // a maker a clean bill of health for a puzzle nobody can finish.
+    const verdict = judge(puzzleWith(REFERENCE), {
+      lines: [],
+      stoppedBy: "exhausted",
+      nodes: 999,
+      millis: 12,
+    } as unknown as SearchReport);
+
+    expect(verdictOf(verdict)).toBe("unsolvable");
+  });
+
+  test("and with no answer on file it is still not tight", () => {
+    const verdict = judge(puzzleWith(undefined), {
+      lines: [],
+      stoppedBy: "exhausted",
+      nodes: 999,
+      millis: 12,
+    } as unknown as SearchReport);
+
+    expect(verdictOf(verdict)).toBe("unsolvable");
+  });
+
+  test("the three honest verdicts are told apart", () => {
+    const exhausted = (lines: SolutionStep[][]) =>
+      ({ lines: lines.map((placements) => ({ placements, attack: 4, clears: ["tsd"] as const })),
+         stoppedBy: "exhausted", nodes: 1, millis: 1 }) as unknown as SearchReport;
+
+    expect(verdictOf(judge(puzzleWith(REFERENCE), exhausted([REDISCOVERED])))).toBe("tight");
+    expect(verdictOf(judge(puzzleWith(REFERENCE), exhausted([REDISCOVERED, ELSEWHERE])))).toBe("loose");
+    expect(
+      verdictOf(judge(puzzleWith(REFERENCE), reportOf(REDISCOVERED))) === "tight",
+    ).toBe(true);
+    // Budget-limited is never a proof of anything.
+    const partial = { lines: [], stoppedBy: "time", nodes: 5, millis: 20 } as unknown as SearchReport;
+    expect(verdictOf(judge(puzzleWith(REFERENCE), partial))).toBe("incomplete");
   });
 });
