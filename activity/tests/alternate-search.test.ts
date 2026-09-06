@@ -138,10 +138,12 @@ describe("finding every way a puzzle can be solved", () => {
     ).toBe(20);
     // And the named one among them, so the count cannot be satisfied by four
     // lines arriving from somewhere else.
+    // Seats only: `solutionKey` is deliberately the piece and where it came to
+    // rest, with the run's totals asked at the fingerprint level instead.
     const dropped = solutionKey([
-      { piece: "I", cells: [[0, 5], [0, 6], [0, 7], [0, 8]], clear: null, attack: 0 },
-      { piece: "I", cells: [[6, 4], [7, 4], [8, 4], [9, 4]], clear: "single", attack: 0 },
-      { piece: "I", cells: [[9, 0], [9, 1], [9, 2], [9, 3]], clear: "quad", attack: 5 },
+      { piece: "I", cells: [[0, 5], [0, 6], [0, 7], [0, 8]] },
+      { piece: "I", cells: [[6, 4], [7, 4], [8, 4], [9, 4]] },
+      { piece: "I", cells: [[9, 0], [9, 1], [9, 2], [9, 3]] },
     ]);
     expect(report.lines.map((line) => solutionKey(line.placements))).toContain(dropped);
   });
