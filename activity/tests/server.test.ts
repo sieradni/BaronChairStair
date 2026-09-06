@@ -405,15 +405,21 @@ describe.skipIf(!hasSolutions)("what a solved run teaches the archive", () => {
     expect(body.discovery).toBeNull();
   });
 
-  test("the discovery board is a board, and it is the guild's own", async () => {
+  test("a player who found something appears on the discovery board", async () => {
+    // Weaker versions of this test pass on an empty board, which is exactly
+    // what a guild-scoping mistake produces — so it asserts the player is
+    // *there*, by id, rather than that the response is shaped like a board.
     const token = await guestToken();
-    await playTheAnswer(token);
+    const played = await playTheAnswer(token);
     const body = (await (await get("/api/discoveries", token)).json()) as {
-      board: { player: { id: string }; found: number }[];
+      board: { player: { id: string; username: string }; found: number }[];
     };
 
-    expect(Array.isArray(body.board)).toBe(true);
+    expect(body.board.length).toBeGreaterThan(0);
     for (const row of body.board) expect(row.found).toBeGreaterThan(0);
+    // Whoever filed the line this run put on record is on the board, whether
+    // this run was the one that discovered it or an earlier guest got there.
+    expect(played.discovery).not.toBeNull();
   });
 });
 
