@@ -113,6 +113,19 @@ function judge(puzzle: Puzzle, report: SearchReport): Verdict {
  * stopped early, and both are spelled out rather than left to be inferred from
  * a count of zero.
  */
+/**
+ * A goal on one line.
+ *
+ * Three of the archive's goals carry a line break — an author's parenthetical
+ * about the setup, and in one case a 74-piece queue pasted underneath — and
+ * this report is a line per puzzle that people scan and grep. Printed raw they
+ * split a row in two, and the half carrying the warning marker arrives with no
+ * puzzle number in front of it.
+ */
+function oneLine(goal: string): string {
+  return goal.replace(/\s+/g, " ").trim();
+}
+
 function describe(verdict: Verdict): string {
   const { puzzle, report, alternates, refFound } = verdict;
   const complete = report.stoppedBy === "exhausted";
@@ -129,7 +142,7 @@ function describe(verdict: Verdict): string {
     `#${String(puzzle.id).padStart(3)} ${String(pieceBudget(puzzle)).padStart(2)}p  ` +
     `${headline}  ${note.padEnd(16)} ` +
     `${String(report.nodes).padStart(7)} nodes ${String(Math.round(report.millis)).padStart(6)}ms` +
-    `  ${puzzle.goal}${missing}`
+    `  ${oneLine(puzzle.goal)}${missing}`
   );
 }
 
@@ -227,7 +240,7 @@ function main(): void {
     for (const verdict of [...loose].sort((a, b) => b.alternates.length - a.alternates.length)) {
       console.log(
         `  #${String(verdict.puzzle.id).padStart(3)}  ${String(verdict.alternates.length).padStart(3)} ` +
-          `alternate${verdict.alternates.length === 1 ? "" : "s"}  ${verdict.puzzle.goal}`,
+          `alternate${verdict.alternates.length === 1 ? "" : "s"}  ${oneLine(verdict.puzzle.goal)}`,
       );
     }
   }
