@@ -198,19 +198,25 @@ makes this easy; nothing else about dev should reach production.
 
 ## Order of work — **planned**
 
-0. **Decide what a changed puzzle means** (rule 4b). Blocks everything else.
-1. **Schema and sync.** `archive_puzzles` table; `tools/sync-archive.ts`
-   pulling both tabs over `gviz`, decoding and replaying exactly as
-   `build-puzzles.ts` does, upserting rows as unpublished. Seeded from the
-   existing 138 so the table starts equal to what is live.
+1. ~~**Schema and sync.**~~ **Done.** `archive_puzzles` in `db.ts`, queries in
+   `server/archive-rows.ts`, and `bun run sync-archive`. The decode-and-replay
+   both tools share came out of `build-puzzles.ts` into
+   `tools/decode-archive.ts`, verified by rebuilding the committed files
+   byte-for-byte.
 
-   Two details the build already has and the sync must keep: it reads its own
-   previous output to **carry frozen clear requirements forward** (112 of 138
-   carry across today), and it reads sheet columns **by position**, so a column
-   inserted in either tab shifts every field silently. The sync should match on
-   header names instead.
-2. **Public read endpoints.** `GET /api/archive`, `GET /api/archive/:id`,
-   solutions included. No key.
+   Rule 4b is enforced rather than waiting on a decision: the sync **refuses**
+   to change a published puzzle's content, reports the drift and exits 1. So
+   the question below is no longer blocking — a sync can be run today, safely,
+   and the twelve drifted puzzles simply will not move until somebody says so.
+
+   Still inherited from the build and not yet fixed: sheet columns are read
+   **by position**, so a column inserted in either tab shifts every field
+   silently. Matching on header names is the fix.
+2. **Public read endpoints.** Note `/api/archive` and `/api/archive/:id`
+   already exist and are **not** these: both sit behind `requireSession`, and
+   the detail route gates the answer through `maySeeSolution`. The public,
+   key-less, solution-bearing endpoints are new paths beside them, not a
+   relaxation of these — relaxing them is precisely rule 1's failure.
 3. **The activity reads the table.** `PuzzleArchive.load` sources from the
    database, with the committed JSON as the seed. Run endpoints unchanged.
 4. **Retire the duplicates.** `activity/data/solutions.json`, and the website's
@@ -229,6 +235,8 @@ Publishing the 62 new puzzles is a step of its own, taken deliberately, after
   a per-puzzle intent that predates it, and it should be honoured or explicitly
   retired rather than ignored.
 - **Rule 4b** — whether a published puzzle's content may change under its id.
+  No longer urgent: the sync refuses and reports, so the answer can wait. What
+  is waiting on it is #8, #7 and #109, which will not update until it is given.
 
 ## Naming
 
