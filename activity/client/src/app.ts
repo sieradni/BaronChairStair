@@ -64,6 +64,16 @@ const COUNTDOWN_TICK_MS = 1000;
 const CLOCK_TICK_MS = 100;
 const TOAST_MS = 2200;
 
+/**
+ * How long the verdict badge stays on a board that has a solution to read.
+ *
+ * Long enough to take in "Solved!" and the score under it; short enough that
+ * anybody who came to step through the answer never has to dismiss it. The duel
+ * clears at 900ms and the rush at 380ms — this one carries a number, so it sits
+ * a little longer than either.
+ */
+const BADGE_LINGER_MS = 1800;
+
 export class App {
   private readonly masthead = createMasthead(() => this.showHome());
   private readonly credits = createCredits();
@@ -92,6 +102,15 @@ export class App {
   private readonly settingsDialog;
   private readonly verdict;
   private readonly walkthrough = createWalkthroughPanel();
+  /**
+   * The pending auto-dismiss of the verdict badge, if one is running.
+   *
+   * Held so it can be cancelled. A timer that outlived its badge would hide the
+   * *next* one — solve, press "Play again", solve again inside the window, and
+   * the second verdict vanishes on the first one's clock.
+   */
+  private badgeLinger: number | null = null;
+
   /** Undoes the pointer attachment; nothing else ever needs it. */
   private readonly detachPointerPlay: () => void;
 
@@ -1374,13 +1393,30 @@ export class App {
   private attachWalkthrough(puzzle: PuzzlePrompt, solution: readonly SolutionStep[]): void {
     this.solutionPlayer = new SolutionPlayer(puzzle, solution, BOARD_HEIGHT);
     this.walkthrough.bind(this.solutionPlayer, (stepped) => {
-      // The badge lands on the board and stays there, which is right for a
-      // result and wrong the moment the board becomes something to read. The
-      // first press of the walkthrough is where it stops being a verdict and
-      // starts being in the way of the answer it is sitting on top of.
+      // A fast player who reaches for the controls before the badge has cleared
+      // itself. Still worth keeping alongside the timer below: pressing a step
+      // is an unambiguous "I am reading the board now".
       if (stepped) this.badge.hide();
       if (this.solutionPlayer) this.renderer.draw(this.solutionPlayer.view());
     });
+    // And it clears itself, because a solution appearing IS the player asking to
+    // read the board.
+    //
+    // Hiding it only on the first press was half the fix: the walkthrough is
+    // attached in the same breath as the badge is shown, so the two arrive
+    // together and the stamp sits over the middle of the field — squares the
+    // solution is about — until something is pressed. A player stepping through
+    // an answer should not have to dismiss the verdict first.
+    //
+    // A timer rather than hiding it outright, because the badge is the answer
+    // to "did I solve it" and that deserves its moment. The duel and the rush
+    // already clear theirs at 900ms and 380ms; this one lingers longer because
+    // it carries a score to read, not just a word.
+    this.clearBadgeLinger();
+    this.badgeLinger = window.setTimeout(() => {
+      this.badgeLinger = null;
+      this.badge.hide();
+    }, BADGE_LINGER_MS);
     replaceChildren(
       this.hud.right,
       this.hud.panels.goal,
@@ -1543,6 +1579,13 @@ export class App {
   }
 
   /** Frees the pointer capture and the last active run's frame loop. */
+  /** Stops a pending auto-dismiss, so it cannot reach a later badge. */
+  private clearBadgeLinger(): void {
+    if (this.badgeLinger === null) return;
+    window.clearTimeout(this.badgeLinger);
+    this.badgeLinger = null;
+  }
+
   dispose(): void {
     this.detachPointerPlay();
     this.disposeActiveMode();
