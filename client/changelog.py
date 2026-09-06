@@ -44,7 +44,8 @@ RELEASES: tuple[Release, ...] = (
             "Your progress toward those clears shows on the board while you play.",
             "Solved a daily? **Play again** replays it unscored, so your filed run stands.",
             "The **Solved!** stamp now clears itself once there is a solution to read.",
-            "`/report` now answers in the channel rather than only to whoever sent it.",
+            "`/report` now answers in the channel rather than only to whoever sent it, "
+            "and allows 15 reports an hour instead of 3.",
         ),
     ),
 )
