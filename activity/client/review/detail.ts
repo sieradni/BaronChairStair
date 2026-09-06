@@ -157,9 +157,11 @@ function goalPanel(submission: SubmissionDetail): HTMLElement {
     el("p", {
       class: "review__note",
       text:
-        "Those are the clears the author's solve made, in order. Nothing on the server " +
-        "reads the goal — you are the check. Step the solution above if the list and the " +
-        "sentence do not obviously agree.",
+        "Those are the clears the author's solve made, in order. The server reads the " +
+        "sentence too, and freezes what it can count as this puzzle's rule — but only " +
+        "where the author's own solve satisfies it, and it cannot read every wording. " +
+        "You are still the check on whether the sentence and the list agree: step the " +
+        "solution above if they do not obviously.",
     }),
   );
 }

@@ -242,15 +242,37 @@ export function withOverride(puzzle: Puzzle, override: OverrideFields): Puzzle {
  * prevent — the page would say one thing and the server hold another.
  */
 function rederived(puzzle: Puzzle, goal: string): readonly ClearRequirement[] {
+  // What the puzzle is held to today. Every path that cannot *establish* a new
+  // requirement returns this rather than nothing, because the alternative is a
+  // wording fix silently un-enforcing a puzzle that already has runs against
+  // it — the exact re-scoping `targetAttack` is kept out of OVERRIDABLE_FIELDS
+  // to prevent, and the invariant `server/submissions.ts` states in as many
+  // words: what the author solved is what everybody else is held to.
+  const frozen = puzzle.requiredClears ?? [];
+
   const wanted = parseGoalLoosely(goal)?.clears ?? [];
-  if (wanted.length === 0) return [];
+  if (wanted.length === 0) {
+    // The new wording names nothing a count can hold. That is a fact about the
+    // sentence, not a decision to stop enforcing — "Clear a TSD" corrected to
+    // "Clear a T-Spin Double" is the same puzzle, and the parser simply has no
+    // alias for the long form.
+    if (frozen.length > 0) {
+      console.warn(
+        `[puzzle] the corrected goal for ${puzzle.id} names no countable clear, so its ` +
+          `existing requirement stands (${frozen.map((e) => `${e.count} ${e.clear}`).join(", ")}). ` +
+          "The wording and the rule now differ; fix the wording or the puzzle.",
+      );
+    }
+    return frozen;
+  }
 
   const answer = puzzle.solution;
   if (!answer) {
-    // No answer key on this box — `data/solutions.json` is untracked, so this is
-    // an ordinary deployment rather than a broken one. Nothing to gate against
-    // means nothing to enforce.
-    return [];
+    // No answer key on this box — `data/solutions.json` is untracked, so this
+    // is an ordinary deployment rather than a broken one. It means the new
+    // requirement cannot be *gated*, which is a reason not to adopt it — not a
+    // reason to throw away one that was already gated when it was written.
+    return frozen;
   }
   const short = clearShortfall(
     answer.flatMap((step) => (step.clear ? [step.clear] : [])),
@@ -259,10 +281,11 @@ function rederived(puzzle: Puzzle, goal: string): readonly ClearRequirement[] {
   if (short.length > 0) {
     console.warn(
       `[puzzle] the corrected goal for ${puzzle.id} asks for clears its own solution does not ` +
-        `make (short ${short.map((entry) => `${entry.count} ${entry.clear}`).join(", ")}); serving it with ` +
-        "no clear requirement. Fix the wording or the puzzle.",
+        `make (short ${short.map((entry) => `${entry.count} ${entry.clear}`).join(", ")}); keeping ` +
+        `the requirement it already had${frozen.length > 0 ? ` (${frozen.map((e) => `${e.count} ${e.clear}`).join(", ")})` : " (none)"}. ` +
+        "Fix the wording or the puzzle.",
     );
-    return [];
+    return frozen;
   }
   return wanted;
 }
