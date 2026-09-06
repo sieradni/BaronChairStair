@@ -3,7 +3,7 @@
  * on the left, what the puzzle wants and what is coming on the right.
  */
 
-import type { Mino, PuzzlePrompt } from "@shared/puzzle";
+import { clearShortfall, type ClearName, type ClearRequirement, type Mino, type PuzzlePrompt } from "@shared/puzzle";
 import type { RunSnapshot } from "../game/runner";
 import { pieceGlyph } from "../render/piece-glyph";
 import { el, formatDuration, panel, replaceChildren, stat } from "./dom";
@@ -26,12 +26,16 @@ export interface Hud {
   setHistory(canUndo: boolean, canRedo: boolean): void;
   update(snapshot: RunSnapshot): void;
   /** Freezes the meter at a finished run's total. */
-  showFinal(attack: number, targetAttack: number): void;
+  /** @param clears what the run actually made, so an unmet requirement still shows. */
+  showFinal(attack: number, targetAttack: number, clears?: readonly ClearName[]): void;
 }
 
 const QUEUE_PREVIEW_LIMIT = 7;
 
 /** Names players actually say, for the "so far" line. */
+/** Pips drawn before a long requirement gives up and adds a "+". */
+const MAX_PROGRESS_PIPS = 8;
+
 const CLEAR_LABELS: Readonly<Record<string, string>> = {
   single: "single",
   double: "double",
@@ -80,10 +84,26 @@ export function createHud(callbacks: HudCallbacks): Hud {
 
   const left = el("div", { class: "rail rail--left" }, holdPanel, progressPanel);
 
+  /** The clears the puzzle on the board demands. Set by `setPuzzle`. */
+  let required: readonly ClearRequirement[] = [];
+
   // ── Right rail ─────────────────────────────────────────────────────────────
   const goalText = el("p", { class: "goal__text", text: "—" });
   const goalSub = el("p", { class: "goal__sub", text: "" });
-  const goalPanel = panel("Goal", { class: "panel--tinted" }, goalText, goalSub);
+  /**
+   * How the required clears are going, one row each.
+   *
+   * In the goal panel rather than beside the attack meter, because it is the
+   * goal that is being tracked — "2 of 3 TSDs" answers the sentence directly
+   * above it, and the attack bar answers a different question that a puzzle
+   * with a clear requirement no longer decides on its own.
+   *
+   * Absent entirely on a puzzle that requires nothing, which is every puzzle
+   * when `GOAL_ENFORCEMENT` is not `on`: the prompt withholds the requirement,
+   * so the panel is exactly what it always was.
+   */
+  const goalProgress = el("div", { class: "goal__progress", attrs: { hidden: true } });
+  const goalPanel = panel("Goal", { class: "panel--tinted" }, goalText, goalProgress, goalSub);
 
   const meterValue = el("span", { class: "meter__value", text: "0" });
   const meterOf = el("span", { class: "meter__of", text: "of 0 sent" });
@@ -101,11 +121,93 @@ export function createHud(callbacks: HudCallbacks): Hud {
 
   const right = el("div", { class: "rail" }, goalPanel, meterPanel, queuePanel);
 
-  function paintMeter(attack: number, target: number): void {
+  /** The clears this puzzle still owes, as a phrase. Empty when it owes none. */
+  function owed(clears: readonly ClearName[]): string {
+    return clearShortfall(clears, required)
+      .map((entry) => `${entry.count} more ${CLEAR_LABELS[entry.clear] ?? entry.clear}`)
+      .join(", ");
+  }
+
+  /**
+   * One row per required clear: what it is, how many, and how far.
+   *
+   * Counted from the run's own `clears` rather than from the shortfall, because
+   * a player wants "2 of 3", not "1 to go" — the same number the goal sentence
+   * used, moving. Overshoot is clamped in the readout: a fourth TSD on a goal of
+   * three still reads 3 of 3 rather than 4 of 3, which would look like a fault.
+   *
+   * Pips as well as the count, because the count is read and the pips are
+   * *seen* — mid-run, with a piece falling, the row has to be legible at a
+   * glance rather than parsed.
+   */
+  function paintProgress(clears: readonly ClearName[]): void {
+    if (required.length === 0) {
+      goalProgress.hidden = true;
+      replaceChildren(goalProgress);
+      return;
+    }
+    const made = new Map<ClearName, number>();
+    for (const clear of clears) made.set(clear, (made.get(clear) ?? 0) + 1);
+
+    goalProgress.hidden = false;
+    replaceChildren(
+      goalProgress,
+      ...required.map((entry) => {
+        const done = Math.min(made.get(entry.clear) ?? 0, entry.count);
+        const met = done >= entry.count;
+        return el(
+          "div",
+          {
+            class: `goal__need${met ? " goal__need--met" : ""}`,
+            // The row is three separate scraps of text on screen; read one by
+            // one that is not a sentence. Said once, properly, for a reader who
+            // is not looking at it.
+            attrs: {
+              role: "status",
+              "aria-label": `${done} of ${entry.count} ${CLEAR_LABELS[entry.clear] ?? entry.clear}${met ? ", done" : ""}`,
+            },
+          },
+          el("span", { class: "goal__need-name", text: CLEAR_LABELS[entry.clear] ?? entry.clear }),
+          el(
+            "span",
+            { class: "pips", attrs: { "aria-hidden": "true" } },
+            // Capped so a goal of thirty does not draw thirty pips across a
+            // 200px rail; the count beside it stays exact either way.
+            // The archive's own difficulty pips, reused rather than reinvented —
+            // same shape, same weight, and a reader who has learnt one has
+            // learnt the other.
+            ...Array.from({ length: Math.min(entry.count, MAX_PROGRESS_PIPS) }, (_, i) =>
+              el("span", { class: `pips__dot${i < done ? " pips__dot--on" : ""}` }),
+            ),
+            entry.count > MAX_PROGRESS_PIPS ? el("span", { class: "pips__plus", text: "+" }) : null,
+          ),
+          el("span", {
+            class: "goal__need-count",
+            attrs: { "aria-hidden": "true" },
+            text: `${done} / ${entry.count}`,
+          }),
+        );
+      }),
+    );
+  }
+
+  /**
+   * The bar, and whether the target is actually *met*.
+   *
+   * Attack alone used to light it green, which under a clear requirement is the
+   * meter telling the player they are done while the run carries on and the
+   * server disagrees. The caption carries the reason, because a full bar that
+   * is not green is a puzzle, not an answer.
+   */
+  function paintMeter(attack: number, target: number, still = ""): void {
     const ratio = target === 0 ? 0 : Math.min(1, attack / target);
     meterValue.textContent = String(attack);
     meterFill.style.width = `${ratio * 100}%`;
-    meter.classList.toggle("meter--met", attack >= target && target > 0);
+    // Still gated on the clears — a full bar that is not a solve must not read
+    // as one — but the caption goes back to answering the attack question. What
+    // is outstanding is now a row in the goal panel, said properly.
+    meter.classList.toggle("meter--met", attack >= target && target > 0 && still === "");
+    meterOf.textContent = `of ${target} sent`;
   }
 
   function renderHold(piece: Mino | null, locked: boolean): void {
@@ -157,15 +259,21 @@ export function createHud(callbacks: HudCallbacks): Hud {
 
     setPuzzle(puzzle) {
       const pieces = puzzle.queue.length + (puzzle.hold ? 1 : 0);
+      // Held for the meter, which has to know what is still owed on every
+      // update. Absent on a puzzle with no requirement, and on every puzzle
+      // while `GOAL_ENFORCEMENT` is not `on` — the prompt withholds it, so the
+      // meter reads exactly as it always did.
+      required = puzzle.requiredClears ?? [];
+      paintProgress([]);
       goalText.textContent = puzzle.goal || "Send as much as the reference line";
       goalSub.textContent = `${puzzle.targetAttack} attack · ${pieces} pieces`;
-      meterOf.textContent = `of ${puzzle.targetAttack} sent`;
       paintMeter(0, puzzle.targetAttack);
     },
     update(snapshot) {
       renderHold(snapshot.hold, snapshot.holdLocked);
       renderQueue(snapshot.upcoming, snapshot.piecesPlaced);
-      paintMeter(snapshot.attack, snapshot.targetAttack);
+      paintMeter(snapshot.attack, snapshot.targetAttack, owed(snapshot.clears));
+      paintProgress(snapshot.clears);
 
       const line = snapshot.clears.map((clear) => CLEAR_LABELS[clear] ?? clear).join(" + ");
       replaceChildren(
@@ -176,8 +284,9 @@ export function createHud(callbacks: HudCallbacks): Hud {
         stat("So far", line || "—"),
       );
     },
-    showFinal(attack, targetAttack) {
-      paintMeter(attack, targetAttack);
+    showFinal(attack, targetAttack, clears = []) {
+      paintMeter(attack, targetAttack, owed(clears));
+      paintProgress(clears);
     },
   };
 }
