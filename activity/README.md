@@ -56,8 +56,51 @@ Useful commands:
 ```sh
 bun test                                 # decoder, verifier, routes, and archive checks
 bun run tools/inspect-puzzle.ts 13 70    # why a given archive entry will not build
+bun run tools/find-alternates.ts --only 15   # other ways a puzzle can be solved
 bun run typecheck
 ```
+
+### Is this puzzle only solvable the way I meant?
+
+`tools/find-alternates.ts` searches a puzzle for lines that meet its goal, using
+the game's own reachability, kick choice and end-of-run rules so that what it
+finds is what a player could actually do.
+
+It answers two different questions and only one of them is a proof.
+
+- **"My condition is loose."** One alternate is enough. A puzzle finishable by a
+  line its author did not intend usually has a condition that says less than the
+  sentence beside it.
+- **"My condition is tight."** Only an `exhausted` search that found at least one
+  line may say this. Every other `stopped:` reason means the budget ran out with
+  ground unexplored, and the report always says which — a truncated search read
+  as a clean bill of health is the one failure this tool must not produce.
+- **"Nobody can finish it."** An exhausted search that found *no* line has proved
+  the puzzle unsolvable. That is its own answer and reported as `NOBODY CAN
+  SOLVE`, because counted among the tight ones it would be a clean bill of health
+  for the most broken puzzle there is.
+
+**Exhausting is rarer than "short puzzles finish" suggests.** Measured across the
+archive at a twenty-second budget: every puzzle of three pieces or fewer
+exhausts, four-piece 5 times in 8, five-piece 4 in 8, six-piece 1 in 10, and
+nothing of seven or more ever does. So most of the archive can be reported on but
+never cleared.
+
+**And "exhausted" is scoped to the default soft drop.** The reachability walk
+drops a piece with `Tetromino.softDrop`, which falls all the way to rest — what
+the engine does at `sdf 41`, the default, and not what it does below it, where a
+held drop descends `0.05 × sdf` rows a frame and the piece can stop part-way and
+slide under an overhang. Comparing that walk against a one-row-step walk over the
+first piece of all 138 puzzles, 4 boards already have seats only the step walk
+reaches. So it is a proof about a player on the default handling, which is nearly
+everybody, and not about one who has turned it down. `--seconds` raises the
+per-puzzle budget, `--only 15,37` narrows it, and `--write` files what it finds
+as `enumerated` rows credited to nobody — which is what stops the first player
+to *play* one of those lines being paid for rediscovering it.
+
+Its findings agree with the archive where the archive has an opinion: puzzle 15's
+goal text reads "Clear 1 TSD (2 solutions)", written by a person years before any
+of this, and an exhaustive search finds exactly two.
 
 **What the suite can and cannot see.** Most of it needs no browser: the engine,
 the verifier, the routes and the duel referee are all plain data in and plain
@@ -170,6 +213,31 @@ itself gave every run the same strictly ascending ladder — which reads as a
 fixed list even when the puzzles on it are new, and on a replay of the same day
 it *was* one. Difficulty still only ever climbs: nothing from an easier band
 arrives after something from a harder one.
+
+### Discoveries
+
+Every solved daily run is filed as a *solution* — the placements, the log they
+were derived from, and what the engine scored them. A run whose line nobody had
+recorded before is a discovery, and the Discoveries board counts them.
+
+**When two solutions are the same solution** is the whole of it. Placements as
+an unordered set, cells sorted within each placement, plus the run's own totals.
+Order is deliberately not part of it: whichever piece finishes the board is the
+one credited with the line, so keying on that made left-then-right and
+right-then-left two discoveries of the same answer.
+
+The rules that stop it being a measure of who plays most live in the query, not
+in a stored flag, so they can be retuned without re-crediting anybody:
+
+- only lines a player actually played — enumerated and reference lines are
+  credited to nobody,
+- only lines that met the goal, not merely the attack target,
+- one credit per player per puzzle, however many ways they find to solve it.
+
+Lines that hit the target attack while missing the required clears are still
+*filed*, and still count for nothing. They are what the review tool's `off-goal`
+badge counts, and they are the clearest evidence a puzzle's condition says less
+than its goal sentence does.
 
 **Everyone gets the same sequence on the same day**, for the run that counts,
 which is the only way the board compares like with like. That is the run that goes on the leaderboard,

@@ -42,6 +42,7 @@ import {
 } from "./auth";
 import { config } from "./config";
 import { enforcingGoals, solvedUnderPolicy } from "./solve-verdict";
+import { recordDiscovery } from "./discoveries";
 import { Store, type StoredRun } from "./db";
 import { DaySchedule, pastDaysOf } from "./schedule";
 import {
@@ -297,11 +298,20 @@ app.post("/api/daily/run", requireSession, async (c) => {
     clears: verified.clears,
   });
 
+  // Filed after the run is recorded, never before: a discovery is a fact about
+  // a run that counted, and nothing in here may cost a player the run they
+  // just earned.
+  const discovery = recordDiscovery(store, puzzle, verified, events, handling, {
+    playerId: session.player.id,
+    guildId: session.guildId,
+  });
+
   return c.json({
     tier,
     run,
     isFirst,
     verified,
+    discovery,
     streak: store.streak(session.player.id, day),
     totalSolved: store.totalSolved(session.player.id),
     // Same rule as every other route: the answer is only ever sent to somebody
@@ -325,6 +335,20 @@ function totalTimeOnPuzzle(claimed: unknown, verifiedMs: number): number {
   const value = typeof claimed === "number" && Number.isFinite(claimed) ? claimed : 0;
   return Math.min(MAX_TOTAL_MS, Math.max(verifiedMs, Math.round(value)));
 }
+
+/**
+ * Who has found the most lines nobody had found before.
+ *
+ * Scoped to the guild the session belongs to, like every other board here: a
+ * club's standings are the club's. The anti-farm rules live in the query rather
+ * than in a stored flag — only lines a player actually played count, only ones
+ * that met the goal, and only one credit per player per puzzle however many
+ * ways they find to solve it.
+ */
+app.get("/api/discoveries", requireSession, (c) => {
+  const session = c.get("session");
+  return c.json({ board: store.discoveryBoard(session.guildId, LEADERBOARD_SIZE) });
+});
 
 app.get("/api/daily/leaderboard", requireSession, (c) => {
   const session = c.get("session");

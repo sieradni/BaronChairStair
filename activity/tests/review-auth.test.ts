@@ -343,6 +343,11 @@ function reviewApp(secret: string): AppRouter {
       acceptSubmission: unreached,
       rejectSubmission: unreached,
       overridesFor: () => [],
+      // Empty, not `unreached`: the puzzle list reads these on the way to
+      // rendering, so throwing here would fail the auth tests for a reason
+      // that has nothing to do with auth.
+      solutionCounts: () => [],
+      solutionsFor: () => [],
       setOverride: unreached,
       clearOverride: unreached,
       acceptedPuzzles: () => [],

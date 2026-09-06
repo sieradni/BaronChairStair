@@ -79,6 +79,7 @@ const CLUB: ReviewPuzzle = {
     set: "tspins 101",
   },
   updatedAt: null,
+  solutions: { total: 0, missingGoal: 0 },
   correctedBy: {},
   history: [],
 };
@@ -104,6 +105,7 @@ const CORRECTED: ReviewPuzzle = {
     set: null,
   },
   updatedAt: new Date(2026, 8, 4, 14, 32).getTime(),
+  solutions: { total: 0, missingGoal: 0 },
   correctedBy: { title: { by: "hannah", at: 1_788_000_000_000 } },
   history: [],
 };
@@ -129,6 +131,7 @@ const PLAYER: ReviewPuzzle = {
     set: null,
   },
   updatedAt: null,
+  solutions: { total: 0, missingGoal: 0 },
   correctedBy: {},
   history: [],
 };
@@ -252,6 +255,39 @@ describe("the archive list", () => {
     expect(meta).toContain("#12");
     expect(meta).toContain("d6");
     expect(meta).toContain("4 pieces");
+  });
+
+  test("a puzzle nobody has solved says nothing about its solutions", () => {
+    const { element } = driveList([CLUB]);
+    const row = find(element, ".review__row");
+
+    // Zero lines on record is not evidence the puzzle is sound, so the row must
+    // not print a reassuring "0 lines" beside a puzzle that has simply never
+    // been played.
+    expect(row.querySelector(".review__flag--loose")).toBeNull();
+    expect(find(row, ".review__row-meta").textContent ?? "").not.toContain("line");
+  });
+
+  test("lines that miss the goal are flagged on the row, not left in a count", () => {
+    // The maker-facing signal of the whole alternate-solutions feature: players
+    // are reaching this puzzle's target attack by lines its stated condition
+    // does not describe. That is a puzzle to fix, so it is a badge and not a
+    // statistic.
+    const loose = { ...CLUB, solutions: { total: 5, missingGoal: 2 } };
+    const { element } = driveList([loose]);
+    const row = find(element, ".review__row");
+
+    expect(find(row, ".review__flag--loose").textContent).toBe("2 off-goal");
+    expect(find(row, ".review__row-meta").textContent ?? "").toContain("5 lines");
+  });
+
+  test("a puzzle every line of which met its goal is not flagged", () => {
+    const sound = { ...CLUB, solutions: { total: 4, missingGoal: 0 } };
+    const { element } = driveList([sound]);
+    const row = find(element, ".review__row");
+
+    expect(row.querySelector(".review__flag--loose")).toBeNull();
+    expect(find(row, ".review__row-meta").textContent ?? "").toContain("4 lines");
   });
 
   /**
