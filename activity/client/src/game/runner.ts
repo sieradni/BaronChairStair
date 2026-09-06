@@ -571,7 +571,7 @@ export class PuzzleRun {
     const lastBatch = batches[batches.length - 1];
     const lastFrame = lastBatch && lastBatch.length > 0 ? lastBatch[lastBatch.length - 1]!.frame : this.engine.frame;
     if (lastFrame > MAX_FRAMES) {
-      this.finish(meetsTarget(this.attack, this.puzzle.targetAttack) ? "solved" : "failed");
+      this.finish(solvesPuzzle(this.attack, this.clears, this.puzzle) ? "solved" : "failed");
       return true;
     }
     // Playing on after an undo is the player choosing this line over the one
