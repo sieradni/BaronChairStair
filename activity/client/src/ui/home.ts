@@ -54,7 +54,12 @@ export interface HomeCallbacks {
 export interface Home {
   readonly element: HTMLElement;
   /** `board` is the leaderboard panel, mounted here rather than owned here. */
-  mountBoard(board: HTMLElement): void;
+  /**
+   * Fills the side column. Variadic because there is more than one board now
+   * and they share the column — the day's, which resets every morning, and the
+   * discoveries, which only move when somebody finds something new.
+   */
+  mountBoard(...boards: readonly HTMLElement[]): void;
   update(
     day: number,
     entries: readonly DailyEntry[],
@@ -83,9 +88,14 @@ function countWord(count: number): string {
  * The state of the day, in one sentence under the heading.
  *
  * The streak is spent as a *reason* inside a sentence and never printed as a
- * tally, for the same reason as above: it is already a number in the masthead,
- * and what it is for — any one of the three keeps it — is the part a player
- * who has not solved anything yet does not know.
+ * tally: what it is for — any one of the three keeps it — is the part a player
+ * does not already know from a number.
+ *
+ * It has to appear in every branch, which it did not. The sentence naming it
+ * used to be the untouched-day one only, because the streak was also a tally in
+ * the masthead and this line just gave it a purpose. That tally is gone, so the
+ * moment a player filed anything their streak stopped being shown anywhere at
+ * all — on the one screen whose job is to say where the day stands.
  *
  * A filed miss is over. `showDailyTier` routes any entry with a run to its
  * sign-off, so "left to play" counts the entries with no run at all rather
@@ -106,14 +116,22 @@ function dayNote(entries: readonly DailyEntry[], streak: number): string {
         : "Solve any one of them to start a streak.")
     );
   }
+  // Safe once anything is solved, and still riding on the rest until then —
+  // which is the whole reason a player wants to know the number today.
+  const held = streak > 0 ? ` Your ${streak}-day streak is safe.` : "";
+  const riding =
+    streak > 0 ? ` Your ${streak}-day streak needs one of them.` : "";
+
   if (left > 0) {
     return solved > 0
-      ? `${countWord(solved)} solved, ${countWord(left).toLowerCase()} left to play.`
-      : `${countWord(left)} left to play.`;
+      ? `${countWord(solved)} solved, ${countWord(left).toLowerCase()} left to play.${held}`
+      : `${countWord(left)} left to play.${riding}`;
   }
   return solved === total
-    ? "All three done. Back tomorrow."
-    : `Today is filed. ${countWord(solved)} of three solved.`;
+    ? `All three done. Back tomorrow.${held}`
+    : solved > 0
+      ? `Today is filed. ${countWord(solved)} of three solved.${held}`
+      : "Today is filed, with none solved.";
 }
 
 interface Ways {
@@ -272,8 +290,8 @@ export function createHome(callbacks: HomeCallbacks): Home {
 
   return {
     element,
-    mountBoard(board) {
-      replaceChildren(side, board);
+    mountBoard(...boards) {
+      replaceChildren(side, ...boards);
     },
     update(day, entries, streak, started) {
       dayNumber.textContent = `#${day}`;

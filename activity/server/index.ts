@@ -13,7 +13,6 @@ import { HTTPException } from "hono/http-exception";
 import {
   decodeBoard,
   ENGINE_ROWS,
-  meetsTarget,
   pieceBudget,
   type Puzzle,
   toListing,
@@ -42,6 +41,8 @@ import {
   verifyGuild,
 } from "./auth";
 import { config } from "./config";
+import { enforcingGoals, solvedUnderPolicy } from "./solve-verdict";
+import { recordDiscovery } from "./discoveries";
 import { Store, type StoredRun } from "./db";
 import { DaySchedule, pastDaysOf } from "./schedule";
 import {
@@ -255,7 +256,7 @@ app.get("/api/daily", requireSession, (c) => {
     resetsAt,
     puzzles: DAILY_TIERS.map((tier) => ({
       tier,
-      puzzle: archive.prompt(puzzles[tier]),
+      puzzle: archive.prompt(puzzles[tier], enforcingGoals()),
       run: runs[tier] ?? null,
       // Gated per tier, not per day, and then per puzzle. Solving the easy one
       // must not hand over the hard one's answer — with one run a day that
@@ -287,7 +288,7 @@ app.post("/api/daily/run", requireSession, async (c) => {
   const verified = verifyRun(setup, handling, events);
 
   const { run, isFirst } = store.recordRun(day, tier, puzzle.id, session.player, session.guildId, {
-    solved: meetsTarget(verified.attack, puzzle.targetAttack),
+    solved: solvedUnderPolicy(verified.attack, verified.clears, puzzle, "daily"),
     attack: verified.attack,
     targetAttack: puzzle.targetAttack,
     durationMs: verified.durationMs,
@@ -297,11 +298,20 @@ app.post("/api/daily/run", requireSession, async (c) => {
     clears: verified.clears,
   });
 
+  // Filed after the run is recorded, never before: a discovery is a fact about
+  // a run that counted, and nothing in here may cost a player the run they
+  // just earned.
+  const discovery = recordDiscovery(store, puzzle, verified, events, handling, {
+    playerId: session.player.id,
+    guildId: session.guildId,
+  });
+
   return c.json({
     tier,
     run,
     isFirst,
     verified,
+    discovery,
     streak: store.streak(session.player.id, day),
     totalSolved: store.totalSolved(session.player.id),
     // Same rule as every other route: the answer is only ever sent to somebody
@@ -325,6 +335,20 @@ function totalTimeOnPuzzle(claimed: unknown, verifiedMs: number): number {
   const value = typeof claimed === "number" && Number.isFinite(claimed) ? claimed : 0;
   return Math.min(MAX_TOTAL_MS, Math.max(verifiedMs, Math.round(value)));
 }
+
+/**
+ * Who has found the most lines nobody had found before.
+ *
+ * Scoped to the guild the session belongs to, like every other board here: a
+ * club's standings are the club's. The anti-farm rules live in the query rather
+ * than in a stored flag — only lines a player actually played count, only ones
+ * that met the goal, and only one credit per player per puzzle however many
+ * ways they find to solve it.
+ */
+app.get("/api/discoveries", requireSession, (c) => {
+  const session = c.get("session");
+  return c.json({ board: store.discoveryBoard(session.guildId, LEADERBOARD_SIZE) });
+});
 
 app.get("/api/daily/leaderboard", requireSession, (c) => {
   const session = c.get("session");
@@ -520,7 +544,7 @@ app.get("/api/archive/:id", requireSession, (c) => {
   const puzzle = archive.get(Number.parseInt(c.req.param("id") ?? "", 10));
   if (!puzzle) throw new HTTPException(404, { message: "No such puzzle" });
   return c.json({
-    puzzle: archive.prompt(puzzle),
+    puzzle: archive.prompt(puzzle, enforcingGoals()),
     // `?? null` for the same reason as `earnedSolution`: an absent
     // `data/solutions.json` must read as "no solution", not as no field.
     solution: maySeeSolution(c.get("session"), puzzle.id) ? (puzzle.solution ?? null) : null,
@@ -702,7 +726,7 @@ app.post("/api/rush/start", requireSession, async (c) => {
     day,
     durationMs: RUSH_DURATION_MS,
     skips: RUSH_SKIPS,
-    puzzles: sequenceFor(ticket).map((puzzle) => archive.prompt(puzzle)),
+    puzzles: sequenceFor(ticket).map((puzzle) => archive.prompt(puzzle, enforcingGoals())),
   });
 });
 
@@ -738,7 +762,10 @@ app.post("/api/rush/run", requireSession, async (c) => {
       handling,
       segment.events,
     );
-    return { solved: meetsTarget(verified.attack, puzzle.targetAttack), durationMs: verified.durationMs };
+    return {
+      solved: solvedUnderPolicy(verified.attack, verified.clears, puzzle, "rush"),
+      durationMs: verified.durationMs,
+    };
   });
 
   // A puzzle is left behind by solving it or by skipping it — a dead board just

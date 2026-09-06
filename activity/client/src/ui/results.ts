@@ -51,6 +51,15 @@ export function createVerdictBadge(): VerdictBadge {
 
 export interface VerdictHandlers {
   readonly onRetry: () => void;
+  /**
+   * Play a *filed* sheet again, unscored.
+   *
+   * Separate from {@link onRetry}, which restarts an attempt that is still the
+   * player's to file. Once a daily is filed the run on the board is the one
+   * that counts, so playing it again is practice on the same puzzle and cannot
+   * move what is recorded.
+   */
+  readonly onReplay: () => void;
   readonly onToggleLeaderboard: () => void;
   readonly onPractice: () => void;
   readonly onBackToDaily: () => void;
@@ -108,8 +117,20 @@ export function createVerdictPanel(handlers: VerdictHandlers): VerdictPanel {
                 text: "Today's puzzle",
                 on: { click: () => handlers.onBackToDaily() },
               }),
+          // Solved, and filed: the attempt is over, so the offer is to play it
+          // again rather than to try again — the second would suggest the
+          // result is still in play. Unsolved and still the player's to file:
+          // "Try again", which is exactly what it does.
+          //
+          // A filed miss gets both, and they are different things: retry the
+          // sheet that is still open, or replay one already closed.
           fields.solved
-            ? null
+            ? el("button", {
+                class: "btn",
+                text: "Play again",
+                title: "Play this puzzle again. Your filed run stands — this one is not recorded.",
+                on: { click: () => handlers.onReplay() },
+              })
             : el("button", {
                 class: "btn",
                 text: "Try again",
@@ -131,7 +152,15 @@ export function createVerdictPanel(handlers: VerdictHandlers): VerdictPanel {
 
 export interface WalkthroughPanel {
   readonly element: HTMLElement;
-  bind(player: SolutionPlayer, onChange: () => void): void;
+  /**
+   * @param onChange called whenever the board behind this panel should be
+   *   redrawn. `stepped` is true only when the player moved the solution
+   *   themselves, and false for the first render that happens as the panel is
+   *   built. The caller needs the difference: the verdict badge
+   *   sits on the board, and it should survive landing on a solve and then get
+   *   out of the way the moment somebody starts stepping through it.
+   */
+  bind(player: SolutionPlayer, onChange: (stepped: boolean) => void): void;
 }
 
 const CLEAR_LABELS: Readonly<Record<ClearName, string>> = {
@@ -157,7 +186,7 @@ export function createWalkthroughPanel(): WalkthroughPanel {
       const stepLabel = el("span", { class: "walkthrough__step" });
       const caption = el("div", { class: "walkthrough__caption" });
 
-      const render = () => {
+      const render = (stepped: boolean) => {
         const current = player.current;
         stepLabel.textContent = `${Math.min(player.position + 1, player.stepCount)} / ${player.stepCount}`;
         replaceChildren(
@@ -172,7 +201,7 @@ export function createWalkthroughPanel(): WalkthroughPanel {
               })
             : null,
         );
-        onChange();
+        onChange(stepped);
       };
 
       const control = (label: string, title: string, action: () => void) =>
@@ -183,7 +212,7 @@ export function createWalkthroughPanel(): WalkthroughPanel {
           on: {
             click: () => {
               action();
-              render();
+              render(true);
             },
           },
         });
@@ -209,7 +238,9 @@ export function createWalkthroughPanel(): WalkthroughPanel {
           text: "One solution on file — there may well be others.",
         }),
       );
-      render();
+      // Not a step: this is the panel drawing itself for the first time, and a
+      // result the player has not moved off yet.
+      render(false);
     },
   };
 }

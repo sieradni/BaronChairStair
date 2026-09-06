@@ -19,6 +19,7 @@ import { Window } from "happy-dom";
 import { activeRun } from "../client/src/game/active-run";
 import { createHome } from "../client/src/ui/home";
 import { createDailyBoard } from "../client/src/ui/daily-board";
+import { createDiscoveryBoard } from "../client/src/ui/discovery-board";
 import { boardGlyph } from "../client/src/render/piece-glyph";
 import { MINO_INK, PAPER } from "../client/src/render/skin";
 import { withRush } from "../client/src/ui/daily-board";
@@ -374,6 +375,45 @@ describe("the front door", () => {
     ).toBe("Today is filed. Two of three solved.");
   });
 
+  /**
+   * The streak has to survive being extended.
+   *
+   * Every case above passes streak 0, which is the one value that prints
+   * nothing — so the sentences that name it were shipped with no coverage at
+   * all. The masthead used to carry the number and this line only gave it a
+   * purpose; with the masthead gone, these sentences are the only place a
+   * player sees it, and a wrong one is worse than none.
+   */
+  test("names the streak in every state, not only before the day starts", () => {
+    const solvedOne = [entry("easy", 2, solvedRun), entry("medium", 6, null), entry("hard", 11, null)];
+    const missedOne = [entry("easy", 2, missedRun), entry("medium", 6, null), entry("hard", 11, null)];
+    const allDone = [entry("easy", 2, solvedRun), entry("medium", 6, solvedRun), entry("hard", 11, solvedRun)];
+
+    // Solved something: it is safe, and saying so is the point of the number.
+    expect(note(home(solvedOne, { streak: 6 }))).toBe(
+      "One solved, two left to play. Your 6-day streak is safe.",
+    );
+    expect(note(home(allDone, { streak: 6 }))).toBe("All three done. Back tomorrow. Your 6-day streak is safe.");
+
+    // Nothing solved yet and chances left: still riding on them.
+    expect(note(home(missedOne, { streak: 6 }))).toBe(
+      "Two left to play. Your 6-day streak needs one of them.",
+    );
+
+    // No streak, no sentence about one — in every branch.
+    expect(note(home(solvedOne))).toBe("One solved, two left to play.");
+    expect(note(home(missedOne))).toBe("Two left to play.");
+    expect(note(home(allDone))).toBe("All three done. Back tomorrow.");
+  });
+
+  test("a day filed with nothing solved says so, rather than counting to zero", () => {
+    const noneSolved = [entry("easy", 2, missedRun), entry("medium", 6, missedRun), entry("hard", 11, missedRun)];
+    expect(note(home(noneSolved))).toBe("Today is filed, with none solved.");
+    // No streak claim either way: there is nothing safe and nothing left to
+    // save it with.
+    expect(note(home(noneSolved, { streak: 6 }))).toBe("Today is filed, with none solved.");
+  });
+
   test("a sheet opens its own tier, not the one it sits at", () => {
     const picked: string[] = [];
     const made = home(unplayed(), { onPick: (tier) => picked.push(tier) });
@@ -508,6 +548,51 @@ describe("the front door", () => {
     expect(window.getComputedStyle(board.element as never).minHeight).toBe("0");
   });
 
+  test("both boards share the side column", () => {
+    // Two different questions — how did the server do today, and who has found
+    // something nobody had — and the column holds them at once rather than
+    // making one a tab behind the other.
+    const made = home(unplayed());
+    const day = createDailyBoard();
+    const found = createDiscoveryBoard();
+    made.mountBoard(day.element, found.element);
+    const side = made.element.querySelector(".home__side")!;
+
+    expect(side.contains(day.element as never)).toBe(true);
+    expect(side.contains(found.element as never)).toBe(true);
+  });
+
+  test("an empty discovery board is a standing offer, not an emptiness", () => {
+    // On most servers this is empty for a long time, and that is not a failure
+    // state — so the card asks for something rather than reporting nothing.
+    const found = createDiscoveryBoard();
+
+    expect(found.element.querySelector(".note")!.textContent).toBe(
+      "No new lines yet. Solve a puzzle a way nobody has, and this is where it lands.",
+    );
+    expect(found.element.querySelectorAll(".board-list__row")).toHaveLength(0);
+  });
+
+  test("the discovery board ranks finders and marks the reader's own row", () => {
+    const found = createDiscoveryBoard();
+    found.update(
+      [
+        { player: { id: "a", username: "ada" }, found: 3, latestAt: 1 },
+        { player: { id: "b", username: "bo" }, found: 1, latestAt: 2 },
+      ] as never,
+      "b",
+    );
+    const rows = [...found.element.querySelectorAll(".board-list__row")];
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.querySelector(".board-list__name")!.textContent).toBe("ada");
+    expect(rows[0]!.querySelector(".board-list__score")!.textContent).toBe("3 lines");
+    // Singular, because "1 lines" is the kind of thing a club notices.
+    expect(rows[1]!.querySelector(".board-list__score")!.textContent).toBe("1 line");
+    expect(rows[0]!.classList.contains("board-list__row--self")).toBe(false);
+    expect(rows[1]!.classList.contains("board-list__row--self")).toBe(true);
+  });
+
   test("the left column fills by arithmetic, and the hero is the only elastic", () => {
     // The complaint this screen was rebuilt for: a card that filled the window
     // with a third of a window of content. Everything here is sized by what is
@@ -601,6 +686,21 @@ describe("a board drawn as a picture", () => {
 
   test("takes its shape from the board's own depth", () => {
     expect(boardGlyph(Array(14).fill("..........")).getAttribute("viewBox")).toBe("0 0 100 140");
+  });
+});
+
+describe("the playfield field keeps gestures usable", () => {
+  test("the field keeps the browser's hands off pointer gestures", () => {
+    // The whole mobile feature turns on this one declaration: without it a
+    // drag pans the page and the piece never follows the finger. happy-dom
+    // cascades real stylesheets, so the contract is checkable here.
+    const style = window.document.createElement("style");
+    style.textContent = readFileSync("client/src/styles/sheet.css", "utf8");
+    window.document.head.append(style);
+    const field = window.document.createElement("div");
+    field.className = "field";
+    window.document.body.append(field);
+    expect(window.getComputedStyle(field as never).touchAction).toBe("none");
   });
 });
 

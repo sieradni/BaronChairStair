@@ -179,6 +179,16 @@ body {
  */
 .review__flag { margin-left: 6px; }
 
+/*
+ * The one badge on this row that reports a fault rather than a fact. A puzzle
+ * solvable by lines its goal does not describe is a puzzle to fix, so it is
+ * coloured like the other things in this app that want an officer to stop.
+ */
+.review__flag--loose {
+  background: var(--warn);
+  color: var(--cream);
+}
+
 /* The list the goal is read against, so it is set in the goal's own weight. */
 .review__clears {
   margin: 0;

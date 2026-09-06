@@ -16,10 +16,12 @@ import type { ArchiveListing } from "@shared/puzzle";
 import { filterArchive } from "@shared/archive-filter";
 import { ApiError } from "./api";
 import { InputRouter } from "./game/input";
+import { attachPointerPlay } from "./game/pointer";
 import { type LocalAction, keyName } from "@shared/keybinds";
 import { RushSession, type RushSummary } from "./game/rush";
 import { PuzzleRun, type RunSnapshot } from "./game/runner";
 import { createDailyBoard } from "./ui/daily-board";
+import { createDiscoveryBoard } from "./ui/discovery-board";
 import { createHome } from "./ui/home";
 import type { DailyTier } from "@shared/daily";
 import { activeRun, type PlayMode } from "./game/active-run";
@@ -63,6 +65,16 @@ const COUNTDOWN_TICK_MS = 1000;
 const CLOCK_TICK_MS = 100;
 const TOAST_MS = 2200;
 
+/**
+ * How long the verdict badge stays on a board that has a solution to read.
+ *
+ * Long enough to take in "Solved!" and the score under it; short enough that
+ * anybody who came to step through the answer never has to dismiss it. The duel
+ * clears at 900ms and the rush at 380ms — this one carries a number, so it sits
+ * a little longer than either.
+ */
+const BADGE_LINGER_MS = 1800;
+
 export class App {
   private readonly masthead = createMasthead(() => this.showHome());
   private readonly credits = createCredits();
@@ -73,6 +85,7 @@ export class App {
   private readonly badge = createVerdictBadge();
   private readonly leaderboard = createLeaderboardPanel();
   private readonly dailyBoard = createDailyBoard();
+  private readonly discoveryBoard = createDiscoveryBoard();
   private readonly canvas = el("canvas", {
     class: "field",
     attrs: { role: "img", "aria-label": "Puzzle playfield" },
@@ -91,6 +104,17 @@ export class App {
   private readonly settingsDialog;
   private readonly verdict;
   private readonly walkthrough = createWalkthroughPanel();
+  /**
+   * The pending auto-dismiss of the verdict badge, if one is running.
+   *
+   * Held so it can be cancelled. A timer that outlived its badge would hide the
+   * *next* one — solve, press "Play again", solve again inside the window, and
+   * the second verdict vanishes on the first one's clock.
+   */
+  private badgeLinger: number | null = null;
+
+  /** Undoes the pointer attachment; nothing else ever needs it. */
+  private readonly detachPointerPlay: () => void;
 
   private readonly rushPanel = createRushPanel(() => this.rush?.giveUp());
   private readonly rushBoard = createRushBoard();
@@ -231,6 +255,7 @@ export class App {
 
     this.verdict = createVerdictPanel({
       onRetry: () => this.startRun(),
+      onReplay: () => void this.replaySheet(),
       onToggleLeaderboard: () => this.toggleLeaderboard(),
       onPractice: () => void this.startPractice(),
       onBackToDaily: () => this.returnToDaily(),
@@ -284,6 +309,25 @@ export class App {
     });
 
     this.settings.subscribe((next) => this.input.setKeybinds(next.keybinds));
+
+    // Tap to rotate, drag to place, long-press to hold — on a finger or a
+    // mouse, through the one run the player is looking at.
+    this.detachPointerPlay = attachPointerPlay(this.canvas, {
+      spotAt: (x, y) => this.renderer.spotAt(x, y),
+      aim: (spot) => this.activeRun?.aimAt(spot),
+      commit: (spot) => {
+        const run = this.activeRun;
+        if (!run) return;
+        run.aimAt(spot);
+        if (!run.placeAt()) this.toast(this.refusalFor());
+      },
+      unaim: () => this.activeRun?.clearAim(),
+      rotate: () => this.activeRun?.tap("rotateCW"),
+      hold: () => this.runHold(),
+    });
+
+    // The hold bay is a label, not a control; hold lives on the long-press
+    // gesture and, on a keyboard, wherever the player has bound it.
   }
 
   // ── Boot ───────────────────────────────────────────────────────────────────
@@ -292,6 +336,7 @@ export class App {
     this.mount();
     this.input.attach();
     window.addEventListener("resize", this.relayout);
+    window.addEventListener("beforeunload", () => this.dispose());
     new ResizeObserver(this.relayout).observe(this.stage);
     this.startCountdown();
 
@@ -302,7 +347,6 @@ export class App {
       return;
     }
 
-    this.masthead.setStreak(this.daily.streak, this.daily.totalSolved);
     this.showHome();
   }
 
@@ -344,7 +388,8 @@ export class App {
       // its side of the wire.
       this.startedToday(),
     );
-    this.home.mountBoard(this.dailyBoard.element);
+    this.home.mountBoard(this.dailyBoard.element, this.discoveryBoard.element);
+    void this.loadDiscoveries();
     // `full` rather than `wide`+`fill`: two columns want the deck's whole width,
     // and they want a row exactly as tall as the screen so the board beside the
     // day can scroll inside itself instead of stretching the page.
@@ -444,6 +489,38 @@ export class App {
     } catch (error) {
       this.toast(error instanceof ApiError ? error.message : "Could not open the archive");
     }
+  }
+
+  /**
+   * Plays the sheet on the board again, unscored.
+   *
+   * Offered once a daily is filed, where "Try again" is withdrawn because the
+   * run that counts is already on the leaderboard. A player who has just solved
+   * one wants to try the line they thought of afterwards, or show somebody, or
+   * simply enjoy it a second time — and the alternative on the card is "Random
+   * puzzle", which is not this puzzle.
+   *
+   * Routed through `openArchivePuzzle` rather than `startRun`, because that is
+   * the path that already means "play this one unscored": it sets
+   * `scored: false`, so the run cannot be filed and nothing on the board moves.
+   * `lockedPuzzleIds` lets it through — a solved sheet is not locked, and the
+   * lock exists to stop a *rehearsal before filing*, which is precisely the
+   * thing that has already happened here.
+   */
+  private async replaySheet(): Promise<void> {
+    const id = this.sheet?.puzzle.id;
+    if (id === undefined) return;
+    // A replay starts its own clock. `sittings` is keyed by puzzle, so that a
+    // detour into practice and back cannot hand the daily a fresh clock and a
+    // zeroed restart tally — a free place at the top of a board sorted by time.
+    // Replaying the *same* puzzle inherits that sitting, and the practice card
+    // then reports the minutes since the puzzle was first opened rather than
+    // the run just played.
+    //
+    // Safe to drop precisely here, and nowhere else: this puzzle's scored run
+    // is already filed, so there is no longer a time for the tally to protect.
+    this.sittings.delete(id);
+    await this.openArchivePuzzle(id);
   }
 
   private async openArchivePuzzle(id: number): Promise<void> {
@@ -559,6 +636,17 @@ export class App {
   private showPlayfield(): void {
     this.showColumns(this.hud.left, this.stage, this.hud.right);
     this.relayout();
+  }
+
+  /** Swaps the falling piece into hold, wherever a run is live. */
+  private runHold(): void {
+    this.activeRun?.tap("hold");
+  }
+
+  /** One place that updates the undo/redo affordances after a placement. */
+  private syncHistory(): void {
+    const run = this.activeRun;
+    this.hud.setHistory(run?.canUndo ?? false, run?.canRedo ?? false);
   }
 
   /**
@@ -774,7 +862,7 @@ export class App {
         onRoundOver: (winnerId, duel, solution, nextRoundAt) => {
           this.duelState = duel;
           this.input.setGameInputEnabled(false);
-          this.badge.show(winnerId === self(), winnerId === self() ? "Round won" : "Round lost");
+          this.stampBadge(winnerId === self(), winnerId === self() ? "Round won" : "Round lost");
           window.setTimeout(() => this.badge.hide(), 900);
           this.duelIntermissionAt = nextRoundAt;
           // Both players watch it, the loser most of all: it is the only look
@@ -1004,7 +1092,7 @@ export class App {
           this.relayout();
         },
         onSolved: (snapshot) => {
-          this.badge.show(true, `${snapshot.solved} solved`);
+          this.stampBadge(true, `${snapshot.solved} solved`);
           window.setTimeout(() => this.badge.hide(), 380);
         },
         onFinish: (summary) => void this.finishRush(summary),
@@ -1031,7 +1119,7 @@ export class App {
   private async finishRush(summary: RushSummary): Promise<void> {
     const ticket = this.rushTicket;
     this.input.setGameInputEnabled(false);
-    this.badge.show(summary.solved > 0, `${summary.solved} solved`);
+    this.stampBadge(summary.solved > 0, `${summary.solved} solved`);
     if (!ticket) return;
 
     try {
@@ -1181,7 +1269,7 @@ export class App {
       },
       onFinish: (snapshot, events) => void this.finishRun(snapshot, events),
       // A placement is the only thing that changes what there is to undo.
-      onLock: () => this.hud.setHistory(this.run?.canUndo ?? false, this.run?.canRedo ?? false),
+      onLock: () => this.syncHistory(),
     },
     carriedResets,
     this.sheetOpenedAt);
@@ -1242,13 +1330,22 @@ export class App {
         resets: snapshot.resets,
         totalMs: snapshot.elapsedMs,
       });
-      this.masthead.setStreak(response.streak, response.totalSolved);
       // Remember the filed sheet so returning from practice restores it.
       // Only the tier that was filed. The other two are untouched — and their
       // solutions must stay null, or filing the easy one would reveal them.
       if (this.daily) {
         this.daily = {
           ...this.daily,
+          // The run that just landed is what moves these, and the response is
+          // the only place the new values exist — `api.daily()` runs once, at
+          // boot. They used to be spent immediately on the masthead tallies, so
+          // nothing needed to keep them; with those gone and the front page
+          // naming the streak in its own sentence, not carrying them here left
+          // that sentence printing the number from before the solve. A player
+          // extending a 6-day streak was told it was 6, and a player starting
+          // one today was told to start one.
+          streak: response.streak,
+          totalSolved: response.totalSolved,
           puzzles: this.daily.puzzles.map((entry) =>
             entry.tier === response.tier
               ? { ...entry, run: response.run, solution: response.solution }
@@ -1259,6 +1356,14 @@ export class App {
       this.presentVerdict(this.toShareFields(snapshot, response.run), response.run);
       this.leaderboard.update(response.leaderboard, this.connection.player.id);
       this.attachWalkthrough(sheet.puzzle, response.solution);
+      if (response.discovery?.isNew) {
+        // Only for a line nobody had. Saying "one of 4 known" to everybody else
+        // would turn a discovery into a scoreboard nobody asked for, and would
+        // quietly tell a player how many answers a puzzle has — which is the
+        // reveal the whole archive is careful not to give away.
+        this.toast("New line! Nobody had solved it this way.");
+        void this.loadDiscoveries();
+      }
       if (!response.isFirst) this.toast("Today's sheet was already filed");
     } catch (error) {
       this.presentVerdict(this.toShareFields(snapshot), null);
@@ -1303,7 +1408,7 @@ export class App {
     solution: readonly SolutionStep[] | null,
   ): void {
     this.input.setGameInputEnabled(false);
-    this.badge.show(run.solved, `${run.attack} / ${run.targetAttack} attack`);
+    this.stampBadge(run.solved, `${run.attack} / ${run.targetAttack} attack`);
     this.presentVerdict(
       {
         day: run.day,
@@ -1325,15 +1430,37 @@ export class App {
   private presentVerdict(fields: ShareFields, run: StoredRun | null): void {
     this.verdict.update(fields, run, { scored: this.sheet?.scored ?? true });
     replaceChildren(this.hud.left, this.verdict.element, this.leaderboard.element);
-    this.hud.showFinal(fields.attack, fields.targetAttack);
+    this.hud.showFinal(fields.attack, fields.targetAttack, fields.clears);
     this.relayout();
   }
 
   private attachWalkthrough(puzzle: PuzzlePrompt, solution: readonly SolutionStep[]): void {
     this.solutionPlayer = new SolutionPlayer(puzzle, solution, BOARD_HEIGHT);
-    this.walkthrough.bind(this.solutionPlayer, () => {
+    this.walkthrough.bind(this.solutionPlayer, (stepped) => {
+      // A fast player who reaches for the controls before the badge has cleared
+      // itself. Still worth keeping alongside the timer below: pressing a step
+      // is an unambiguous "I am reading the board now".
+      if (stepped) this.badge.hide();
       if (this.solutionPlayer) this.renderer.draw(this.solutionPlayer.view());
     });
+    // And it clears itself, because a solution appearing IS the player asking to
+    // read the board.
+    //
+    // Hiding it only on the first press was half the fix: the walkthrough is
+    // attached in the same breath as the badge is shown, so the two arrive
+    // together and the stamp sits over the middle of the field — squares the
+    // solution is about — until something is pressed. A player stepping through
+    // an answer should not have to dismiss the verdict first.
+    //
+    // A timer rather than hiding it outright, because the badge is the answer
+    // to "did I solve it" and that deserves its moment. The duel and the rush
+    // already clear theirs at 900ms and 380ms; this one lingers longer because
+    // it carries a score to read, not just a word.
+    this.clearBadgeLinger();
+    this.badgeLinger = window.setTimeout(() => {
+      this.badgeLinger = null;
+      this.badge.hide();
+    }, BADGE_LINGER_MS);
     replaceChildren(
       this.hud.right,
       this.hud.panels.goal,
@@ -1371,6 +1498,25 @@ export class App {
     }
   }
 
+  /**
+   * The discovery board, fetched apart from the day's.
+   *
+   * Its own request rather than a field on the leaderboard response, because it
+   * is the one board here that does not change when a day does: it moves only
+   * when somebody finds a line nobody had, which is rare enough that tying it
+   * to the daily refresh would mostly re-fetch an identical list. Failing
+   * quietly for the same reason the board beside it does — an empty card is a
+   * better morning than an error where a name should be.
+   */
+  private async loadDiscoveries(): Promise<void> {
+    try {
+      const { board } = await this.connection.api.discoveries();
+      this.discoveryBoard.update(board, this.connection.player.id);
+    } catch {
+      // A standing offer is not worth an error message.
+    }
+  }
+
   private toggleLeaderboard(): void {
     const showing = !this.leaderboard.element.hidden;
     this.leaderboard.setVisible(!showing);
@@ -1379,7 +1525,22 @@ export class App {
 
   /** The badge names what happened; the subtitle says how close it was. */
   private showBadge(solved: boolean, snapshot: RunSnapshot): void {
-    this.badge.show(solved, `${snapshot.attack} / ${snapshot.targetAttack} attack`);
+    this.stampBadge(solved, `${snapshot.attack} / ${snapshot.targetAttack} attack`);
+  }
+
+  /**
+   * Puts a verdict on the board, and cancels any auto-dismiss still pending.
+   *
+   * One way in, because the auto-dismiss added for the walkthrough is a timer
+   * with no idea which badge it was started for. Cancelling it only where it is
+   * *set* leaves it able to reach the next one: solve a daily, press "Play
+   * again", and a verdict landing inside the window is wiped by the previous
+   * run's clock. Every `badge.show` in this file goes through here so that
+   * cannot depend on which path showed it.
+   */
+  private stampBadge(ok: boolean, text: string): void {
+    this.clearBadgeLinger();
+    this.badge.show(ok, text);
   }
 
   // ── Chrome ─────────────────────────────────────────────────────────────────
@@ -1495,6 +1656,22 @@ export class App {
     this.settingsDialog.open(this.settings.value.handling, this.settings.value.keybinds);
   }
 
+  /** Stops a pending auto-dismiss, so it cannot reach a later badge. */
+  private clearBadgeLinger(): void {
+    if (this.badgeLinger === null) return;
+    window.clearTimeout(this.badgeLinger);
+    this.badgeLinger = null;
+  }
+
+  /** Frees the pointer capture and the last active run's frame loop. */
+  dispose(): void {
+    this.detachPointerPlay();
+    this.disposeActiveMode();
+    // A timer outliving the app it was started in fires against a badge that
+    // is no longer on screen.
+    this.clearBadgeLinger();
+  }
+
   private readonly relayout = (): void => {
     const rows = BOARD_HEIGHT;
     const box = this.stage.getBoundingClientRect();
@@ -1519,6 +1696,21 @@ export class App {
     };
     tick();
     setInterval(tick, COUNTDOWN_TICK_MS);
+  }
+
+  /**
+   * Why a drag would not place, in the player's terms.
+   *
+   * There is no soft-drop case here, deliberately. Placement timing is a
+   * function of the live handling — a mid-route descent is held for exactly
+   * the frames it needs at whatever `sdf` the player set — so the planner's
+   * answer no longer depends on the slider, and a refusal means the same
+   * thing at every setting: nothing reaches that square. (It used to lie
+   * twice: once by refusing seats a slow soft drop could reach, then by
+   * blaming the slider when it did.)
+   */
+  private refusalFor(): string {
+    return "No way to place the piece there";
   }
 
   private toast(message: string): void {

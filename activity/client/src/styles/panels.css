@@ -44,6 +44,52 @@
   letter-spacing: -0.01em;
 }
 
+/*
+ * How the goal's required clears are going, one row each.
+ *
+ * Between the goal sentence and its meta line, because it is the sentence being
+ * tracked. Absent entirely on a puzzle that requires nothing — which is every
+ * puzzle until `GOAL_ENFORCEMENT` is on — so the panel is unchanged for anybody
+ * not being held to a clear.
+ */
+.goal__progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0 0;
+}
+
+.goal__need {
+  display: grid;
+  /* Name, pips, count — the count hard right so the column reads down even when
+     the names differ in width. */
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.goal__need-name {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.goal__need-count {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+}
+
+/* Done. The one row a glance should find, so it takes the full ink. */
+.goal__need--met .goal__need-name,
+.goal__need--met .goal__need-count {
+  color: var(--ink);
+  font-weight: 500;
+}
+
 .goal__sub {
   margin: 0;
   font-family: var(--mono);

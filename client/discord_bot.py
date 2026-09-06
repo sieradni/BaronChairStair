@@ -113,6 +113,7 @@ from build_snapshots import build_rounds
 from render import top_attack_bursts
 import presence_tracker
 import puzzle_commands
+import changelog
 import puzzle_recap
 from puzzle_commands import puzzle_command
 import report_commands
@@ -363,6 +364,16 @@ try:
 except sqlite3.Error as e:
     recap_error = f"{type(e).__name__}: {e}"
     print(f"puzzle recap disabled: {recap_error}", file=sys.stderr)
+
+# bot_versions, owned by client/changelog.py. Same policy again: without the
+# table nobody is told what changed, and `/puzzle` carries on regardless.
+try:
+    changelog.init_db(db)
+    puzzle_commands.version_db = db
+    changelog_error = None
+except sqlite3.Error as e:
+    changelog_error = f"{type(e).__name__}: {e}"
+    print(f"version announcements disabled: {changelog_error}", file=sys.stderr)
 
 # presence_samples, owned by client/presence_tracker.py. A schema mismatch
 # disables presence tracking instead of taking the whole bot down with it --
