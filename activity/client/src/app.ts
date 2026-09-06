@@ -8,7 +8,7 @@
  */
 
 import { BOARD_HEIGHT, type PuzzlePrompt, type SolutionStep } from "@shared/puzzle";
-import { SDF_INSTANT, type Handling } from "@shared/tetris/handling";
+import type { Handling } from "@shared/tetris/handling";
 import type { InputEvent } from "@shared/tetris/verify";
 import type { Connection } from "./discord";
 import type { DailyEntry, DailyResponse, RushState, StoredRun } from "./api";
@@ -1577,18 +1577,16 @@ export class App {
   /**
    * Why a drag would not place, in the player's terms.
    *
-   * "No way to place the piece there" is true at the default soft drop and a
-   * lie below it: there *is* a way — the keyboard reaches that square, and at
-   * `sdf 41` so does the drag. A route that descends mid-way needs the instant
-   * drop to descend far enough, so turning the slider down quietly costs the
-   * kick and tuck seats. A player who has done that deserves to be told which
-   * of the two things went wrong rather than that the square is impossible.
+   * There is no soft-drop case here, deliberately. Placement timing is a
+   * function of the live handling — a mid-route descent is held for exactly
+   * the frames it needs at whatever `sdf` the player set — so the planner's
+   * answer no longer depends on the slider, and a refusal means the same
+   * thing at every setting: nothing reaches that square. (It used to lie
+   * twice: once by refusing seats a slow soft drop could reach, then by
+   * blaming the slider when it did.)
    */
   private refusalFor(): string {
-    const { sdf } = this.settings.value.handling;
-    return sdf < SDF_INSTANT
-      ? `Kick and tuck placements need instant soft drop — yours is ${sdf}×. Raise it in Settings, or type this one.`
-      : "No way to place the piece there";
+    return "No way to place the piece there";
   }
 
   private toast(message: string): void {
