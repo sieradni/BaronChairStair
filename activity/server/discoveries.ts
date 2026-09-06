@@ -66,24 +66,49 @@ export function recordDiscovery(
   }));
   const outcome = { attack: verified.attack, clears: verified.clears };
 
-  const { discovered } = store.recordSolution({
-    puzzleId: puzzle.id,
-    canonicalKey: solutionFingerprint(placements, outcome),
-    keyVersion: SOLUTION_KEY_VERSION,
-    placements,
-    // The log, so the line can be re-proved later through `verifyRun` — the
-    // same path that trusted it in the first place. Replaying the placements
-    // instead would reject the cleverest discoveries, which is why
-    // `server/review-routes.ts` already refuses to do that.
-    events,
-    handling,
-    attack: verified.attack,
-    clears: verified.clears,
-    solvedStrict: solvesPuzzle(verified.attack, verified.clears, puzzle),
-    source: "player",
-    foundBy: finder.playerId,
-    guildId: finder.guildId,
-  });
+  // Nothing here may cost a player the run they just earned. The run is already
+  // recorded by the time this is called, so a throw would take the *response*
+  // down while the row stands — the player sees an error, loses the verdict,
+  // the solution and the leaderboard that came with it, and is told nothing
+  // about a run that in fact counted. A discovery is a nicety on top of that;
+  // it is never worth the run.
+  //
+  // Caught here rather than at the call site so every future caller inherits
+  // it, and reported rather than swallowed: a store that cannot write is a real
+  // fault and somebody has to be able to find it.
+  let discovered = false;
+  try {
+    discovered = store.recordSolution({
+      puzzleId: puzzle.id,
+      canonicalKey: solutionFingerprint(placements, outcome),
+      keyVersion: SOLUTION_KEY_VERSION,
+      placements,
+      // The log, so the line can be re-proved later through `verifyRun` — the
+      // same path that trusted it in the first place. Replaying the placements
+      // instead would reject the cleverest discoveries, which is why
+      // `server/review-routes.ts` already refuses to do that.
+      events,
+      handling,
+      attack: verified.attack,
+      clears: verified.clears,
+      solvedStrict: solvesPuzzle(verified.attack, verified.clears, puzzle),
+      source: "player",
+      foundBy: finder.playerId,
+      guildId: finder.guildId,
+    }).discovered;
+  } catch (error) {
+    console.error(
+      `[discovery] could not record a solution to puzzle ${puzzle.id}: ${String(error)}`,
+    );
+    return null;
+  }
 
-  return { isNew: discovered, known: store.countSolutions(puzzle.id) };
+  try {
+    return { isNew: discovered, known: store.countSolutions(puzzle.id) };
+  } catch (error) {
+    // The row is written; only the count failed. Say what is true rather than
+    // discarding a discovery that happened.
+    console.error(`[discovery] could not count solutions for puzzle ${puzzle.id}: ${String(error)}`);
+    return { isNew: discovered, known: 0 };
+  }
 }
