@@ -10,7 +10,7 @@ but it is now one part of four:
 | | |
 |---|---|
 | **The bot** — `client/` | Slash commands: replay highlights, the daily puzzle, server activity graphs, an internship tracker |
-| **The activity** — `activity/` | A Discord Activity: one modern Tetris puzzle a day, plus a five-minute puzzle rush. Has [its own README](activity/README.md) |
+| **The activity** — `activity/` | A Discord Activity: three modern Tetris puzzles a day, a five-minute puzzle rush, 1v1, and a builder for writing new ones. Has [its own README](activity/README.md) |
 | **The engine bridge** — `server/`, `client/teto_client.py` | A Bun process wrapping the TETR.IO engine, spoken to over NDJSON from Python |
 | **The internship tracker** — `internship_poller.py` | Unrelated to Tetris; it lives here because the bot fronts it |
 
@@ -27,7 +27,10 @@ BaronChairStair/
 │   ├── build_snapshots.py    replay JSON → per-round board snapshots
 │   ├── render.py             attack-burst highlight boards
 │   ├── presence_tracker.py   samples who is online, every 10 minutes
-│   ├── puzzle_commands.py    the /puzzle group; talks to the activity server
+│   ├── puzzle_commands.py    the /puzzle command; talks to the activity server
+│   ├── report_commands.py    /report — files a GitHub issue for a player
+│   ├── report_text.py        what a report looks like once published
+│   ├── test_report_text.py   `python3 -m unittest discover -s client`
 │   └── puzzle_recap.py       yesterday's results, replied to yesterday's post
 ├── activity/                 the Discord Activity (own README, own tests)
 ├── internship_poller.py      Greenhouse / Lever / Ashby / Workday poller
@@ -45,8 +48,14 @@ Run from `client/`, so the sibling modules import cleanly:
 
 ```bash
 pip install discord.py python-dotenv aiohttp matplotlib
+bun install        # once, at the repo root — the replay parser behind
+                   # /highlights and build_snapshots.py needs @haelp/teto
 cd client && python discord_bot.py
 ```
+
+Everything except the replay commands runs on Python alone; without the
+bridge, `/highlights` fails with an unexpected-error message from the
+spawned process.
 
 The token comes from `.env` at the repo root — copy `example.env` and fill it
 in. `.env` values override shell exports, which is usually what you want when a
@@ -69,22 +78,84 @@ line up in Discord's proportional font.
 ### `/puzzle` — the daily puzzle
 
 ```
-/puzzle play          today's sheet, and a link that opens the activity
-/puzzle standings     today's leaderboard for this server
-/puzzle rush          today's five-minute rush board for this server
-/puzzle help          what the daily is and how it is scored
+/puzzle               today's three sheets, and a link that opens the activity
 ```
 
-The bot owns none of the game. It reads four endpoints on the activity server
-and formats what comes back, so the two can never disagree about a score.
-Needs `PUZZLE_APP_ID`, `PUZZLE_API` and `PUZZLE_API_KEY`; without them the
-commands still register and explain what is missing rather than failing shut.
+One command, not a group. It used to be four; the other three rendered in
+Discord what the activity now shows on its own front screen — boards, rush and
+the rules all live one click away — and each was a second place for a board to
+be wrong. The one job left is the one Discord is actually for: announcing the
+day in a channel, with a way in.
+
+The bot owns none of the game. It reads the activity server and formats what
+comes back, so the two can never disagree about a score. Needs
+`PUZZLE_APP_ID`, `PUZZLE_API` and `PUZZLE_API_KEY`; without them the command
+still registers and explains what is missing rather than failing shut.
 
 Once a day, after the puzzle turns over, the bot replies to that server's own
-`/puzzle play` message with how yesterday went — who solved it and how fast,
-who missed, and how long the server's run of solves is. It happens once per
-server per day, and only in servers that announced the puzzle in the first
-place, because the reply needs something to reply to.
+`/puzzle` message with how yesterday went — who solved which of the three and
+how fast, who missed, and how long the server's run of solves is. It happens
+once per server per day, and only in servers that announced the puzzle in the
+first place, because the reply needs something to reply to.
+
+### Versions, and how a server hears about them
+
+The bot carries a version — `beta 0.1` at the time of writing — in
+`client/changelog.py`, next to the list of what each one changed.
+
+**A server is told the first time somebody runs `/puzzle` on a build it has not
+heard about**, as a plain message behind the puzzle embed. Not on a timer and
+not at boot: a deploy should not wake a channel up, so the note rides along
+behind something a person actually asked for, and only the first person to ask
+sees it arrive. It sends with `AllowedMentions.none()`, so a release note can
+never ping a room however it is worded.
+
+**It names every version the server missed, not just the newest one.**
+Production pulls when somebody deploys, which may be several releases after the
+last deploy — announcing only the tip would drop the middle ones silently. Past
+three releases the message says how many older ones it is not listing, because a
+server that has never heard from the bot is owed the entire history and nobody
+typing `/puzzle` asked to read it — and it is trimmed by *length* as well, since
+counting releases is not counting characters. Before that cap existed, three
+releases of eight wordy notes rendered to 2,029 characters, which Discord
+rejects outright; the same input now fits.
+
+Releasing is adding a `Release` at the top of `RELEASES`; `VERSION` follows it,
+and a test fails if it does not. Order in that tuple *is* the version order —
+comparing `beta 0.10` against `beta 0.9` as text is wrong and as numbers is a
+parser nobody needs.
+
+What each server has been told lives in `bot_versions`, one row per guild, and
+the claim is taken before the message is sent — the write is what stops a second
+caller, so it has to happen where two callers can still both be running.
+
+A send that fails therefore loses those notes **permanently**: the row already
+says the server has heard, and the next release names only what came after it.
+That is a trade, not a mitigation, and it is the right one only because nobody
+depends on a changelog. Something that mattered would claim after the send and
+dedupe instead.
+
+### `/report` — a bug, without a GitHub account
+
+```
+/report category:<Bugged puzzle | UI issue | …> description:<what happened>
+```
+
+Files a GitHub issue on the player's behalf, so somebody can say "puzzle 46 is
+unsolvable" without making an account. The title is their Discord display name
+and the category; the body is what they wrote, followed by a line saying who
+sent it and from which server.
+
+Its own command rather than `/puzzle report`: Discord will not let a command be
+both invocable and a group, and `/puzzle` is the one people already type.
+
+Needs `GITHUB_TOKEN` and `GITHUB_REPO`; without them the command still
+registers and explains what is missing. **It publishes text typed by anybody in
+the server, under the bot's identity, to whatever repository you name** — so the
+token should be fine-grained, scoped to Issues on that one repository, and able
+to do nothing else. `@mentions` and `#references` are defanged so a report
+cannot become a stranger's notification, the description is capped, and one
+player may file three reports an hour.
 
 ### `/activity` — who is around
 
@@ -124,9 +195,10 @@ invocations still resolve and the picker looks unchanged.
 ## The daily puzzle activity
 
 `activity/` is a self-contained Bun + TypeScript app served as a Discord
-Activity: one puzzle a day from the club's archive, scored on the server by
-replaying the keys you actually pressed, plus a five-minute puzzle rush and an
-explorer for the whole archive.
+Activity: three puzzles a day from the club's archive — an easy, a medium and a
+hard — scored on the server by replaying the keys you actually pressed, plus a
+five-minute puzzle rush, 1v1 duels, an explorer for the whole archive, and a
+builder that writes Blueprint codes for new puzzles.
 
 It has its own README, its own tests, and its own `.env`. Start there:
 
@@ -222,13 +294,15 @@ the picker shows every command twice — which is what `check_dupes.py` detects.
 | Tool | Version | Install |
 |------|---------|---------|
 | **Bun** | ≥ 1.2 | `curl -fsSL https://bun.sh/install \| bash` |
-| **Python** | ≥ 3.9 | https://python.org |
+| **Python** | ≥ 3.10 | https://python.org |
 
 `bun install` at the repo root pulls `@haelp/teto` for the engine bridge;
 `activity/` has its own dependencies and its own `bun install`.
 
 Python needs `discord.py`, `python-dotenv`, `aiohttp` and `matplotlib`. The
-engine bridge itself uses only the standard library.
+Python side of the engine bridge (`client/teto_client.py`) uses only the
+standard library; the bridge server itself is TypeScript and needs
+`@haelp/teto` (installed by `bun install` above).
 
 ---
 

@@ -8,6 +8,7 @@
  */
 
 import { BOARD_HEIGHT, type PuzzlePrompt, type SolutionStep } from "@shared/puzzle";
+import type { Handling } from "@shared/tetris/handling";
 import type { InputEvent } from "@shared/tetris/verify";
 import type { Connection } from "./discord";
 import type { DailyEntry, DailyResponse, RushState, StoredRun } from "./api";
@@ -15,14 +16,15 @@ import type { ArchiveListing } from "@shared/puzzle";
 import { filterArchive } from "@shared/archive-filter";
 import { ApiError } from "./api";
 import { InputRouter } from "./game/input";
+import { attachPointerPlay } from "./game/pointer";
 import { type LocalAction, keyName } from "@shared/keybinds";
 import { RushSession, type RushSummary } from "./game/rush";
 import { PuzzleRun, type RunSnapshot } from "./game/runner";
-import { createDailyMenu } from "./ui/daily-tiers";
 import { createDailyBoard } from "./ui/daily-board";
+import { createDiscoveryBoard } from "./ui/discovery-board";
 import { createHome } from "./ui/home";
 import type { DailyTier } from "@shared/daily";
-import { activeRun } from "./game/active-run";
+import { activeRun, type PlayMode } from "./game/active-run";
 import { SolutionPlayer } from "./game/solution-player";
 import { BoardRenderer } from "./render/board";
 import type { SettingsStore } from "./settings";
@@ -36,6 +38,11 @@ import {
   createWalkthroughPanel,
 } from "./ui/results";
 import { createExplorer } from "./ui/explorer";
+import { createBuilder, type Builder } from "./ui/builder";
+import type { SubmissionVerdict } from "./ui/builder-submit";
+import type { SubmissionBody } from "./ui/builder-state";
+import { createStartedPuzzles, type StartedPuzzles } from "./started";
+import { lockedPuzzleIds } from "./daily-lock";
 import { DuelClient } from "./game/duel";
 import {
   createDuelIntro,
@@ -45,6 +52,7 @@ import {
 } from "./ui/duel";
 import {
   createRushBoard,
+  createRushRecords,
   createRushIntro,
   createRushPanel,
   createRushResultCard,
@@ -57,6 +65,16 @@ const COUNTDOWN_TICK_MS = 1000;
 const CLOCK_TICK_MS = 100;
 const TOAST_MS = 2200;
 
+/**
+ * How long the verdict badge stays on a board that has a solution to read.
+ *
+ * Long enough to take in "Solved!" and the score under it; short enough that
+ * anybody who came to step through the answer never has to dismiss it. The duel
+ * clears at 900ms and the rush at 380ms — this one carries a number, so it sits
+ * a little longer than either.
+ */
+const BADGE_LINGER_MS = 1800;
+
 export class App {
   private readonly masthead = createMasthead(() => this.showHome());
   private readonly credits = createCredits();
@@ -67,6 +85,7 @@ export class App {
   private readonly badge = createVerdictBadge();
   private readonly leaderboard = createLeaderboardPanel();
   private readonly dailyBoard = createDailyBoard();
+  private readonly discoveryBoard = createDiscoveryBoard();
   private readonly canvas = el("canvas", {
     class: "field",
     attrs: { role: "img", "aria-label": "Puzzle playfield" },
@@ -85,9 +104,26 @@ export class App {
   private readonly settingsDialog;
   private readonly verdict;
   private readonly walkthrough = createWalkthroughPanel();
+  /**
+   * The pending auto-dismiss of the verdict badge, if one is running.
+   *
+   * Held so it can be cancelled. A timer that outlived its badge would hide the
+   * *next* one — solve, press "Play again", solve again inside the window, and
+   * the second verdict vanishes on the first one's clock.
+   */
+  private badgeLinger: number | null = null;
+
+  /** Undoes the pointer attachment; nothing else ever needs it. */
+  private readonly detachPointerPlay: () => void;
 
   private readonly rushPanel = createRushPanel(() => this.rush?.giveUp());
   private readonly rushBoard = createRushBoard();
+  private readonly rushRecords = createRushRecords((scope) => {
+    this.rushScope = scope;
+    void this.loadRushRecords();
+  });
+  /** Which population the record book is showing. Not a day; it never resets. */
+  private rushScope: import("./api").RushScope = "global";
   private readonly rushIntro;
   private readonly rushResult;
   private readonly explorer;
@@ -117,16 +153,37 @@ export class App {
   private rushSkips = 0;
   private rushRanked = true;
   private rushState: RushState | null = null;
-  private mode: "daily" | "rush" | "explore" | "duel" = "daily";
+  private mode: PlayMode = "daily";
   private solutionPlayer: SolutionPlayer | null = null;
-  private readonly dailyMenu = createDailyMenu((tier) => this.showDailyTier(tier));
   private readonly home = createHome({
-    onDaily: () => this.showDailyMenu(),
+    // Straight onto a board. There was a chooser between the two — the same
+    // three rows, one click deeper — and folding it into the front door is
+    // half of what this screen is for.
+    onPick: (tier) => this.showDailyTier(tier),
     onRush: () => this.enterRush(),
     onDuel: () => this.enterDuel(),
     onExplore: () => this.enterExplorer(),
-    onPlayTier: (tier) => this.showDailyTier(tier),
+    onBuild: () => this.enterBuilder(),
   });
+  /**
+   * Built on first use, then kept for the session.
+   *
+   * Two hundred grid cells is not something a player who never opens the
+   * builder should pay for at boot — and once it exists it holds the board
+   * being laid out, which has to survive a trip to the front door and back.
+   */
+  private builder: Builder | null = null;
+  /**
+   * The draft being played inside the builder, and the puzzle it was compiled
+   * from.
+   *
+   * Kept apart from `run` on purpose. A test is scored by nobody, files
+   * nothing and belongs to no day, so letting it borrow the daily's run would
+   * put a draft on the leaderboard's clock — and every one of `finishRun`'s
+   * branches reads a `sheet` that a draft has no business having.
+   */
+  private builderRun: PuzzleRun | null = null;
+  private builderPuzzle: PuzzlePrompt | null = null;
   private daily: DailyResponse | null = null;
   /**
    * Which of the day's three is on the board.
@@ -152,6 +209,13 @@ export class App {
    * per puzzle so a detour into practice cannot reset the daily's numbers.
    */
   private readonly sittings = new Map<number, { openedAt: number; resets: number }>();
+  /**
+   * Which of the day's three this player has opened, across sessions.
+   *
+   * Assigned in the constructor rather than here because it is keyed on the
+   * player, and a field initialiser cannot see a constructor parameter.
+   */
+  private readonly started: StartedPuzzles;
   /** When the current puzzle was put in front of the player. */
   private sheetOpenedAt = Date.now();
   /** Keeps the clock moving before the first input and between attempts. */
@@ -163,10 +227,12 @@ export class App {
     private readonly connection: Connection,
     private readonly settings: SettingsStore,
   ) {
+    this.started = createStartedPuzzles(connection.player.id);
     this.input = new InputRouter(settings.value.keybinds, {
       onGameKey: (key, down) => {
         if (this.mode === "duel") this.duel?.input(key, down);
         else if (this.mode === "rush") this.rush?.input(key, down);
+        else if (this.mode === "build") this.builderRun?.input(key, down);
         else this.run?.input(key, down);
       },
       onLocalAction: (action) => this.handleLocalAction(action),
@@ -189,6 +255,7 @@ export class App {
 
     this.verdict = createVerdictPanel({
       onRetry: () => this.startRun(),
+      onReplay: () => void this.replaySheet(),
       onToggleLeaderboard: () => this.toggleLeaderboard(),
       onPractice: () => void this.startPractice(),
       onBackToDaily: () => this.returnToDaily(),
@@ -242,6 +309,25 @@ export class App {
     });
 
     this.settings.subscribe((next) => this.input.setKeybinds(next.keybinds));
+
+    // Tap to rotate, drag to place, long-press to hold — on a finger or a
+    // mouse, through the one run the player is looking at.
+    this.detachPointerPlay = attachPointerPlay(this.canvas, {
+      spotAt: (x, y) => this.renderer.spotAt(x, y),
+      aim: (spot) => this.activeRun?.aimAt(spot),
+      commit: (spot) => {
+        const run = this.activeRun;
+        if (!run) return;
+        run.aimAt(spot);
+        if (!run.placeAt()) this.toast(this.refusalFor());
+      },
+      unaim: () => this.activeRun?.clearAim(),
+      rotate: () => this.activeRun?.tap("rotateCW"),
+      hold: () => this.runHold(),
+    });
+
+    // The hold bay is a label, not a control; hold lives on the long-press
+    // gesture and, on a keyboard, wherever the player has bound it.
   }
 
   // ── Boot ───────────────────────────────────────────────────────────────────
@@ -250,6 +336,7 @@ export class App {
     this.mount();
     this.input.attach();
     window.addEventListener("resize", this.relayout);
+    window.addEventListener("beforeunload", () => this.dispose());
     new ResizeObserver(this.relayout).observe(this.stage);
     this.startCountdown();
 
@@ -260,16 +347,9 @@ export class App {
       return;
     }
 
-    this.masthead.setStreak(this.daily.streak, this.daily.totalSolved);
     this.showHome();
   }
 
-  /**
-   * The front door: what the day looks like, where to go, and a board.
-   *
-   * Every mode leaves through here now, and the activity opens on it. Four
-   * things to do is one too many for a row of small buttons in the furniture.
-   */
   /**
    * The prologue every screen shares.
    *
@@ -289,49 +369,53 @@ export class App {
     this.badge.hide();
   }
 
+  /**
+   * The front door: the day's three, where else to go, and a board.
+   *
+   * Every mode leaves through here and the activity opens on it, so it is the
+   * screen most often looked at and the one that had least on it. It is now
+   * also the chooser — pressing one of the three goes straight to a board.
+   */
   private showHome(): void {
     if (!this.daily) return;
     this.leaveForScreen();
-    this.home.update(this.daily.day, this.daily.puzzles, this.daily.streak);
-    this.home.mountBoard(this.dailyBoard.element);
-    this.showScreen({ wide: true, fill: true }, this.home.element);
+    this.home.update(
+      this.daily.day,
+      this.daily.puzzles,
+      this.daily.streak,
+      // What the server cannot know: a daily run is filed only when it solves,
+      // so a puzzle somebody opened and walked away from looks untouched from
+      // its side of the wire.
+      this.startedToday(),
+    );
+    this.home.mountBoard(this.dailyBoard.element, this.discoveryBoard.element);
+    void this.loadDiscoveries();
+    // `full` rather than `wide`+`fill`: two columns want the deck's whole width,
+    // and they want a row exactly as tall as the screen so the board beside the
+    // day can scroll inside itself instead of stretching the page.
+    this.showScreen({ full: true }, this.home.element);
     void this.loadLeaderboard();
-  }
-
-  /**
-   * The day's three, to choose between.
-   *
-   * Where the daily now opens, and where it comes back to. Dropping somebody
-   * straight onto one of three puzzles picks for them, and picks the same one
-   * every day — which is the easy one, for a player who might have wanted the
-   * hard one, or the reverse.
-   */
-  private showDailyMenu(): void {
-    if (!this.daily) return;
-    this.leaveForScreen();
-    this.dailyMenu.update(this.daily.day, this.daily.puzzles);
-    this.showScreen({ wide: true, fill: true }, this.dailyMenu.element);
   }
 
   /**
    * Puts one of the day's three on the board.
    *
-   * The single funnel for it: the sheet, the credits strip, the goal panel, the
-   * picker's own highlight and whether a filed run is shown all have to agree
-   * about which puzzle is in front of the player, and they only do that if one
-   * place sets them.
+   * The single funnel for it: the sheet, the credits strip, the goal panel and
+   * whether a filed run is shown all have to agree about which puzzle is in
+   * front of the player, and they only do that if one place sets them.
    */
   private showDailyTier(tier: DailyTier): void {
     if (!this.daily) return;
-    // Clicking the tier you are already playing is a no-op, not a restart.
-    // Both the home row and the chooser can raise it, and rebuilding here
-    // throws away an attempt in progress.
+    // Clicking the tier you are already playing is a no-op, not a restart:
+    // rebuilding here would throw away an attempt in progress. It cannot fire
+    // from the front door, which arrives through `leaveForScreen` with the run
+    // already disposed, but the masthead and the wordmark are one press away.
     if (tier === this.dailyTier && this.run) return;
     this.dailyTier = tier;
     const entry = this.dailyEntry;
     if (!entry) return;
     this.sheet = { puzzle: entry.puzzle, solution: entry.solution, scored: true };
-    this.credits.update({ day: this.daily.day, puzzle: entry.puzzle });
+    this.credits.update(entry.puzzle);
     this.hud.setPuzzle(entry.puzzle);
     // Rebuilt rather than left alone: a filed tier puts the walkthrough in this
     // rail, and switching from it to an unplayed one would otherwise keep the
@@ -355,31 +439,31 @@ export class App {
 
   // ── Practice ───────────────────────────────────────────────────────────────
 
-  /** Picks a sheet from the archive at random and plays it unscored. */
-  /**
-   * Today's puzzle, while it is still the player's to file.
-   *
-   * Practising it before filing would be a free rehearsal for the one run that
-   * counts, so it is kept out of the shuffle and shown greyed in the explorer
-   * until the daily is on the board. Afterwards it is just another puzzle.
-   */
+  /** The day's puzzles this player has opened, by id. */
+  private startedToday(): ReadonlySet<number> {
+    const day = this.daily?.day ?? 0;
+    return new Set(
+      (this.daily?.puzzles ?? [])
+        .map((entry) => entry.puzzle.id)
+        .filter((id) => this.started.has(day, id)),
+    );
+  }
+
   /** The one of the day's three currently on the board. */
   private get dailyEntry(): DailyEntry | null {
     return this.daily?.puzzles.find((entry) => entry.tier === this.dailyTier) ?? null;
   }
 
   /**
-   * The puzzles practice will not open, because they have not been filed yet.
+   * The puzzles practice will not open. The rule lives in `daily-lock.ts`.
    *
-   * Three of them now, and each is locked on its own run: rehearsing today's
-   * hard puzzle in the explorer before filing it is the thing this stops, and
-   * solving the easy one does not unlock the other two.
+   * Today's puzzle, while it is still the player's to file: practising it
+   * before filing would be a free rehearsal for the one run that counts, so it
+   * is kept out of the shuffle and shown greyed in the explorer until the
+   * daily is on the board. Afterwards it is just another puzzle.
    */
   private lockedPuzzleIds(): ReadonlySet<number> {
-    const locked = (this.daily?.puzzles ?? [])
-      .filter((entry) => !entry.run)
-      .map((entry) => entry.puzzle.id);
-    return new Set(locked);
+    return lockedPuzzleIds(this.daily?.puzzles ?? []);
   }
 
   private async loadArchive(): Promise<readonly ArchiveListing[]> {
@@ -387,6 +471,7 @@ export class App {
     return this.archive;
   }
 
+  /** Picks a sheet from the archive at random and plays it unscored. */
   private async startPractice(): Promise<void> {
     try {
       const archive = await this.loadArchive();
@@ -406,6 +491,38 @@ export class App {
     }
   }
 
+  /**
+   * Plays the sheet on the board again, unscored.
+   *
+   * Offered once a daily is filed, where "Try again" is withdrawn because the
+   * run that counts is already on the leaderboard. A player who has just solved
+   * one wants to try the line they thought of afterwards, or show somebody, or
+   * simply enjoy it a second time — and the alternative on the card is "Random
+   * puzzle", which is not this puzzle.
+   *
+   * Routed through `openArchivePuzzle` rather than `startRun`, because that is
+   * the path that already means "play this one unscored": it sets
+   * `scored: false`, so the run cannot be filed and nothing on the board moves.
+   * `lockedPuzzleIds` lets it through — a solved sheet is not locked, and the
+   * lock exists to stop a *rehearsal before filing*, which is precisely the
+   * thing that has already happened here.
+   */
+  private async replaySheet(): Promise<void> {
+    const id = this.sheet?.puzzle.id;
+    if (id === undefined) return;
+    // A replay starts its own clock. `sittings` is keyed by puzzle, so that a
+    // detour into practice and back cannot hand the daily a fresh clock and a
+    // zeroed restart tally — a free place at the top of a board sorted by time.
+    // Replaying the *same* puzzle inherits that sitting, and the practice card
+    // then reports the minutes since the puzzle was first opened rather than
+    // the run just played.
+    //
+    // Safe to drop precisely here, and nowhere else: this puzzle's scored run
+    // is already filed, so there is no longer a time for the tally to protect.
+    this.sittings.delete(id);
+    await this.openArchivePuzzle(id);
+  }
+
   private async openArchivePuzzle(id: number): Promise<void> {
     if (this.lockedPuzzleIds().has(id)) {
       this.toast("That is one of today's three — play it on the daily first");
@@ -414,8 +531,13 @@ export class App {
     try {
       const { puzzle, solution } = await this.connection.api.archivePuzzle(id);
       this.sheet = { puzzle, solution, scored: false };
-      this.credits.update({ day: this.daily?.day ?? 0, puzzle });
-      if (this.mode === "explore") this.mode = "daily";
+      this.credits.update(puzzle);
+      // Unconditional. Three things open a puzzle from the archive — the
+      // explorer's list, the random-practice button, and the "play it" link on
+      // the rush result card — and only the first two were ever in `explore`.
+      // From the rush card the mode stayed `rush`, so `activeRun` answered null
+      // and the board that had just been opened took no input at all.
+      this.mode = "daily";
       replaceChildren(this.hud.left, this.hud.panels.hold, this.hud.panels.progress);
       this.showPlayfield();
       this.startRun();
@@ -452,6 +574,12 @@ export class App {
     this.duel?.close();
     this.duel = null;
     this.duelState = null;
+
+    this.endBuilderRun();
+    // Whichever way the screen was left, the builder's board goes back to
+    // being something to paint on rather than a frozen last frame with the
+    // palette still hidden behind it.
+    this.builder?.endTest();
   }
 
   // ── Explorer ───────────────────────────────────────────────────────────────
@@ -484,29 +612,214 @@ export class App {
 
   private returnToDaily(): void {
     if (!this.daily) return;
-    // Home, not the last puzzle and not the chooser. Leaving a rush or a duel
-    // means leaving the thing you were doing, and the front door is where the
-    // next choice gets made.
+    // Home, not the last puzzle. Leaving a rush or a duel means leaving the
+    // thing you were doing, and the front door is where the next choice gets
+    // made — and where the day's three now are.
     this.showHome();
   }
 
-  /** The three-column play layout: rails either side of the board. */
-  private showPlayfield(): void {
+  /**
+   * The three-column layout: rails either side of a centre stage.
+   *
+   * Two things mount this way — the game and the builder — and only the deck
+   * knows the shape, so the shape is written once here. Removing
+   * `deck--screen` is half of it: without that the deck is still the one
+   * stretched column a screen sits in, and the middle of three landed in it
+   * alone with the rails stacked below the fold.
+   */
+  private showColumns(left: HTMLElement, centre: HTMLElement, right: HTMLElement): void {
     this.deck.classList.remove("deck--screen");
-    replaceChildren(this.deck, this.hud.left, this.stage, this.hud.right);
+    replaceChildren(this.deck, left, centre, right);
+  }
+
+  /** The play layout: the HUD rails either side of the game's canvas. */
+  private showPlayfield(): void {
+    this.showColumns(this.hud.left, this.stage, this.hud.right);
     this.relayout();
+  }
+
+  /** Swaps the falling piece into hold, wherever a run is live. */
+  private runHold(): void {
+    this.activeRun?.tap("hold");
+  }
+
+  /** One place that updates the undo/redo affordances after a placement. */
+  private syncHistory(): void {
+    const run = this.activeRun;
+    this.hud.setHistory(run?.canUndo ?? false, run?.canRedo ?? false);
+  }
+
+  /**
+   * The strip credits the puzzle on the board, so it says nothing when there
+   * is no board.
+   *
+   * `showPlayfield` is the only mount that has one, and its four callers set
+   * the credits in the breath before it — so blanking them belongs to the two
+   * mounts that do not: every screen, and the builder. Without it the strip
+   * outlives the board it describes and names yesterday's puzzle at the foot
+   * of the front door.
+   */
+  private clearCredits(): void {
+    this.credits.update(null);
   }
 
   /** One centred column, for a moment when there is nothing to play. */
   private showScreen(
-    options: { wide?: boolean; fill?: boolean },
+    options: { wide?: boolean; full?: boolean; fill?: boolean },
     ...cards: HTMLElement[]
   ): void {
+    this.clearCredits();
     this.deck.classList.add("deck--screen");
-    const modifiers = [options.wide && "screen--wide", options.fill && "screen--fill"]
+    const modifiers = [
+      options.wide && "screen--wide",
+      options.full && "screen--full",
+      options.fill && "screen--fill",
+    ]
       .filter(Boolean)
       .join(" ");
     replaceChildren(this.deck, el("div", { class: `screen ${modifiers}`.trim() }, ...cards));
+  }
+
+  // ── Builder ────────────────────────────────────────────────────────────────
+
+  /**
+   * The authoring screen. No mode of its own: nothing is running behind it, the
+   * keyboard belongs to whatever is focused inside it, and `leaveForScreen`
+   * has already put away the run, rush or duel that was live when Build was
+   * clicked — which is the whole of what a screen has to do here.
+   *
+   * It takes the play layout rather than a centred card, because the board is
+   * what the screen is for and a card gave it a narrow column beside its own
+   * controls. Not `showPlayfield`, which mounts the *game's* HUD and relays out
+   * a canvas that is not on screen; the builder brings its own three parts.
+   * Home and the wordmark still lead out through `showScreen`, which puts
+   * `deck--screen` back.
+   */
+  private enterBuilder(): void {
+    this.leaveForScreen();
+    this.builder ??= createBuilder(
+      {
+        onClose: () => this.showHome(),
+        onTest: (puzzle) => this.startBuilderTest(puzzle),
+        onStopTest: () => this.stopBuilderTest(),
+        onSubmit: (draft) => this.submitPuzzle(draft),
+      },
+      // Read once, at the moment the builder is built, which is safe only
+      // because a connection is made before any screen opens and never
+      // changes afterwards — `connect` hands back one `Connection` for the
+      // life of the page. A guest who signs in reloads the activity.
+      this.connection.guest,
+    );
+    this.clearCredits();
+    this.showColumns(this.builder.left, this.builder.board, this.builder.right);
+  }
+
+  /**
+   * Plays a draft on the builder's own board.
+   *
+   * The app owns the run because it owns the handling and the keyboard, and
+   * because a run built anywhere else would be one `disposeActiveMode` cannot
+   * put away. Nothing else about the screen moves: the deck still holds the
+   * builder's three columns, and the frames go back to it rather than to the
+   * game's canvas, which is not mounted.
+   */
+  private startBuilderTest(puzzle: PuzzlePrompt): void {
+    // Through the same door as every other way out of a test: the run being
+    // replaced here is the one a handling change or the R key just restarted,
+    // and its log is as much a record of what the author did as the last one's.
+    this.endBuilderRun();
+    this.builderPuzzle = puzzle;
+    this.mode = "build";
+    // Read once and carried alongside the log rather than looked up again when
+    // the run ends. `PuzzleRun` freezes handling for the life of an attempt,
+    // and the server replays a whole log under one handling — so an author who
+    // opens the settings between the last piece and Submit would otherwise have
+    // their run replayed under controls they never played it with.
+    const handling = this.settings.value.handling;
+    this.builderRun = new PuzzleRun(puzzle, handling, {
+      onFrame: (view, snapshot) => this.builder?.showTest(view, snapshot),
+      // The end of a run is the only artefact a submission can be built from.
+      // Nothing is filed here — the builder holds it, and holds it only while
+      // the draft it was played on is still the draft on the screen.
+      onFinish: (snapshot, events) => this.keepBuilderSolve(snapshot, events, handling),
+      onLock: () => undefined,
+    });
+    this.input.setGameInputEnabled(true);
+    this.builderRun.renderOnce();
+  }
+
+  private stopBuilderTest(): void {
+    this.endBuilderRun();
+    this.mode = "daily";
+    this.input.setGameInputEnabled(false);
+    this.builder?.endTest();
+  }
+
+  /**
+   * Puts the builder's run away, keeping its log on the way past.
+   *
+   * `dispose` never fires `onFinish`, and every way out of a test but playing
+   * the queue to its end goes through it — Stop, the wordmark, the R key, a
+   * handling change. **An abandoned run counts.** The log is the same artefact
+   * either way: the server derives the target and the reference solution from
+   * what it replays, never from a claim about how the attempt ended, and the
+   * case being protected is the ordinary one — an author whose goal names no
+   * attack figure plays the four pieces that make the shape they wanted out of
+   * a queue of ten and presses Stop, because there is nothing left to show.
+   * Requiring a finished run would lose exactly those, and leave them told to
+   * "play your own puzzle first" having just done it.
+   *
+   * `log()` is the mid-attempt reader a rush already needed for the same
+   * reason, which is why there is nothing new in the runner for this.
+   */
+  private endBuilderRun(): void {
+    const run = this.builderRun;
+    // `run.handling`, not the settings: a handling change is one of the things
+    // that ends a run this way, and by now the settings hold the new one.
+    if (run) this.keepBuilderSolve(run.snapshot(), run.log(), run.handling);
+    run?.dispose();
+    this.builderRun = null;
+    this.builderPuzzle = null;
+  }
+
+  /**
+   * Hands a run's log to the builder, which keeps it for as long as the draft
+   * on the screen is the one it was played on.
+   *
+   * Copied out of the run rather than passed by reference: `log()` hands back
+   * the live array, and a log that changed under the thing holding it would be
+   * a solve for a run nobody watched.
+   *
+   * A run that ends and is then put away arrives here twice carrying the same
+   * events, so this replaces rather than accumulates. Whether a log is worth
+   * keeping at all is the builder's call, not this one's — it is the side that
+   * knows which draft is on the screen.
+   */
+  private keepBuilderSolve(
+    snapshot: RunSnapshot,
+    events: readonly InputEvent[],
+    handling: Handling,
+  ): void {
+    this.builder?.keepSolve({ snapshot, events: [...events], handling });
+  }
+
+  /**
+   * Files a draft the builder compiled.
+   *
+   * The same split `onTest` is under, read the other way: the builder owns the
+   * screen and this owns the network, so what crosses back is the server's own
+   * reading of the run and nothing else. No `toast` and no `try` — a failure
+   * belongs beside the button that caused it rather than in a strip that times
+   * out, and `ApiError` already carries the server's sentence for the builder
+   * to print. Letting the rejection through is how it gets there.
+   *
+   * Nothing about the day, the sheet or the leaderboard moves: a submission is
+   * not a run, files no attempt, and the puzzle does not exist until an officer
+   * says so.
+   */
+  private async submitPuzzle(draft: SubmissionBody): Promise<SubmissionVerdict> {
+    const response = await this.connection.api.submitPuzzle(draft);
+    return { attack: response.verified.attack };
   }
 
   // ── 1v1 ────────────────────────────────────────────────────────────────────
@@ -549,7 +862,7 @@ export class App {
         onRoundOver: (winnerId, duel, solution, nextRoundAt) => {
           this.duelState = duel;
           this.input.setGameInputEnabled(false);
-          this.badge.show(winnerId === self(), winnerId === self() ? "Round won" : "Round lost");
+          this.stampBadge(winnerId === self(), winnerId === self() ? "Round won" : "Round lost");
           window.setTimeout(() => this.badge.hide(), 900);
           this.duelIntermissionAt = nextRoundAt;
           // Both players watch it, the loser most of all: it is the only look
@@ -597,7 +910,7 @@ export class App {
     this.solutionPlayer = null;
     this.badge.hide();
     this.hud.setPuzzle(puzzle);
-    this.credits.update({ day: this.daily?.day ?? 0, puzzle });
+    this.credits.update(puzzle);
     replaceChildren(this.hud.left, this.duelPanel.element, this.hud.panels.hold);
     replaceChildren(this.hud.right, this.hud.panels.goal, this.hud.panels.meter, this.hud.panels.queue);
     this.showPlayfield();
@@ -718,7 +1031,8 @@ export class App {
       best: this.rushState?.best ?? 0,
       playedToday: this.rushState?.run ?? null,
     });
-    this.showScreen({}, this.rushIntro.element, this.rushBoard.element);
+    this.showScreen({}, this.rushIntro.element, this.rushBoard.element, this.rushRecords.element);
+    void this.loadRushRecords();
     void this.loadRushState();
   }
 
@@ -774,11 +1088,11 @@ export class App {
         },
         onPuzzle: (puzzle) => {
           this.hud.setPuzzle(puzzle);
-          this.credits.update({ day: start.day, puzzle });
+          this.credits.update(puzzle);
           this.relayout();
         },
         onSolved: (snapshot) => {
-          this.badge.show(true, `${snapshot.solved} solved`);
+          this.stampBadge(true, `${snapshot.solved} solved`);
           window.setTimeout(() => this.badge.hide(), 380);
         },
         onFinish: (summary) => void this.finishRush(summary),
@@ -805,7 +1119,7 @@ export class App {
   private async finishRush(summary: RushSummary): Promise<void> {
     const ticket = this.rushTicket;
     this.input.setGameInputEnabled(false);
-    this.badge.show(summary.solved > 0, `${summary.solved} solved`);
+    this.stampBadge(summary.solved > 0, `${summary.solved} solved`);
     if (!ticket) return;
 
     try {
@@ -847,7 +1161,8 @@ export class App {
       this.rush?.dispose();
       this.rush = null;
       this.rushTicket = null;
-      this.showScreen({}, this.rushResult.element, this.rushBoard.element);
+      this.showScreen({}, this.rushResult.element, this.rushBoard.element, this.rushRecords.element);
+      void this.loadRushRecords();
     }
   }
 
@@ -937,6 +1252,10 @@ export class App {
     this.sheetOpenedAt = history.openedAt;
 
     this.runningPuzzleId = sheet.puzzle.id;
+    // Opening one of the day's counts, whether or not it is ever finished: a
+    // daily run reaches the server only when it solves, so this is the only
+    // record that a puzzle was ever looked at. Practice is not the day's.
+    if (sheet.scored && this.daily) this.started.add(this.daily.day, sheet.puzzle.id);
     this.run?.dispose();
     this.badge.hide();
     this.leaderboard.setVisible(false);
@@ -950,7 +1269,7 @@ export class App {
       },
       onFinish: (snapshot, events) => void this.finishRun(snapshot, events),
       // A placement is the only thing that changes what there is to undo.
-      onLock: () => this.hud.setHistory(this.run?.canUndo ?? false, this.run?.canRedo ?? false),
+      onLock: () => this.syncHistory(),
     },
     carriedResets,
     this.sheetOpenedAt);
@@ -970,6 +1289,10 @@ export class App {
    * once the puzzle is already finished.
    */
   private restartForNewHandling(): void {
+    if (this.mode === "build") {
+      if (this.replayBuilderTest()) this.toast("Handling changed — test restarted");
+      return;
+    }
     const phase = this.run?.snapshot().phase;
     if (phase !== "ready" && phase !== "playing") return;
     this.startRun();
@@ -1007,13 +1330,22 @@ export class App {
         resets: snapshot.resets,
         totalMs: snapshot.elapsedMs,
       });
-      this.masthead.setStreak(response.streak, response.totalSolved);
       // Remember the filed sheet so returning from practice restores it.
       // Only the tier that was filed. The other two are untouched — and their
       // solutions must stay null, or filing the easy one would reveal them.
       if (this.daily) {
         this.daily = {
           ...this.daily,
+          // The run that just landed is what moves these, and the response is
+          // the only place the new values exist — `api.daily()` runs once, at
+          // boot. They used to be spent immediately on the masthead tallies, so
+          // nothing needed to keep them; with those gone and the front page
+          // naming the streak in its own sentence, not carrying them here left
+          // that sentence printing the number from before the solve. A player
+          // extending a 6-day streak was told it was 6, and a player starting
+          // one today was told to start one.
+          streak: response.streak,
+          totalSolved: response.totalSolved,
           puzzles: this.daily.puzzles.map((entry) =>
             entry.tier === response.tier
               ? { ...entry, run: response.run, solution: response.solution }
@@ -1024,6 +1356,14 @@ export class App {
       this.presentVerdict(this.toShareFields(snapshot, response.run), response.run);
       this.leaderboard.update(response.leaderboard, this.connection.player.id);
       this.attachWalkthrough(sheet.puzzle, response.solution);
+      if (response.discovery?.isNew) {
+        // Only for a line nobody had. Saying "one of 4 known" to everybody else
+        // would turn a discovery into a scoreboard nobody asked for, and would
+        // quietly tell a player how many answers a puzzle has — which is the
+        // reveal the whole archive is careful not to give away.
+        this.toast("New line! Nobody had solved it this way.");
+        void this.loadDiscoveries();
+      }
       if (!response.isFirst) this.toast("Today's sheet was already filed");
     } catch (error) {
       this.presentVerdict(this.toShareFields(snapshot), null);
@@ -1068,7 +1408,7 @@ export class App {
     solution: readonly SolutionStep[] | null,
   ): void {
     this.input.setGameInputEnabled(false);
-    this.badge.show(run.solved, `${run.attack} / ${run.targetAttack} attack`);
+    this.stampBadge(run.solved, `${run.attack} / ${run.targetAttack} attack`);
     this.presentVerdict(
       {
         day: run.day,
@@ -1090,15 +1430,37 @@ export class App {
   private presentVerdict(fields: ShareFields, run: StoredRun | null): void {
     this.verdict.update(fields, run, { scored: this.sheet?.scored ?? true });
     replaceChildren(this.hud.left, this.verdict.element, this.leaderboard.element);
-    this.hud.showFinal(fields.attack, fields.targetAttack);
+    this.hud.showFinal(fields.attack, fields.targetAttack, fields.clears);
     this.relayout();
   }
 
   private attachWalkthrough(puzzle: PuzzlePrompt, solution: readonly SolutionStep[]): void {
     this.solutionPlayer = new SolutionPlayer(puzzle, solution, BOARD_HEIGHT);
-    this.walkthrough.bind(this.solutionPlayer, () => {
+    this.walkthrough.bind(this.solutionPlayer, (stepped) => {
+      // A fast player who reaches for the controls before the badge has cleared
+      // itself. Still worth keeping alongside the timer below: pressing a step
+      // is an unambiguous "I am reading the board now".
+      if (stepped) this.badge.hide();
       if (this.solutionPlayer) this.renderer.draw(this.solutionPlayer.view());
     });
+    // And it clears itself, because a solution appearing IS the player asking to
+    // read the board.
+    //
+    // Hiding it only on the first press was half the fix: the walkthrough is
+    // attached in the same breath as the badge is shown, so the two arrive
+    // together and the stamp sits over the middle of the field — squares the
+    // solution is about — until something is pressed. A player stepping through
+    // an answer should not have to dismiss the verdict first.
+    //
+    // A timer rather than hiding it outright, because the badge is the answer
+    // to "did I solve it" and that deserves its moment. The duel and the rush
+    // already clear theirs at 900ms and 380ms; this one lingers longer because
+    // it carries a score to read, not just a word.
+    this.clearBadgeLinger();
+    this.badgeLinger = window.setTimeout(() => {
+      this.badgeLinger = null;
+      this.badge.hide();
+    }, BADGE_LINGER_MS);
     replaceChildren(
       this.hud.right,
       this.hud.panels.goal,
@@ -1108,6 +1470,16 @@ export class App {
     this.relayout();
   }
 
+  /** The all-time board. Its own call: it does not change when a day does. */
+  private async loadRushRecords(): Promise<void> {
+    try {
+      const { entries, scope } = await this.connection.api.rushRecords(this.rushScope);
+      this.rushRecords.update(entries, scope, this.connection.player.id);
+    } catch {
+      // A record book is not worth an error where somebody's result should be.
+    }
+  }
+
   private async loadLeaderboard(): Promise<void> {
     try {
       const { board, rush } = await this.connection.api.leaderboard();
@@ -1115,10 +1487,33 @@ export class App {
       // One call, two readers: the home screen shows the day whole, and the
       // panel beside a board shows the tier being played.
       this.dailyBoard.update(board, rush, self);
+      // Second reader of the same response: the front door's Rush row says how
+      // busy the mode has been today, which is the one live number any of the
+      // four rows there has and is worth no request of its own.
+      this.home.setRush(rush);
       // The verdict rail's panel wants per-run rows, which the day board no
       // longer carries; it is refreshed from the submit response instead.
     } catch {
       // The result card is still useful without the leaderboard.
+    }
+  }
+
+  /**
+   * The discovery board, fetched apart from the day's.
+   *
+   * Its own request rather than a field on the leaderboard response, because it
+   * is the one board here that does not change when a day does: it moves only
+   * when somebody finds a line nobody had, which is rare enough that tying it
+   * to the daily refresh would mostly re-fetch an identical list. Failing
+   * quietly for the same reason the board beside it does — an empty card is a
+   * better morning than an error where a name should be.
+   */
+  private async loadDiscoveries(): Promise<void> {
+    try {
+      const { board } = await this.connection.api.discoveries();
+      this.discoveryBoard.update(board, this.connection.player.id);
+    } catch {
+      // A standing offer is not worth an error message.
     }
   }
 
@@ -1130,7 +1525,22 @@ export class App {
 
   /** The badge names what happened; the subtitle says how close it was. */
   private showBadge(solved: boolean, snapshot: RunSnapshot): void {
-    this.badge.show(solved, `${snapshot.attack} / ${snapshot.targetAttack} attack`);
+    this.stampBadge(solved, `${snapshot.attack} / ${snapshot.targetAttack} attack`);
+  }
+
+  /**
+   * Puts a verdict on the board, and cancels any auto-dismiss still pending.
+   *
+   * One way in, because the auto-dismiss added for the walkthrough is a timer
+   * with no idea which badge it was started for. Cancelling it only where it is
+   * *set* leaves it able to reach the next one: solve a daily, press "Play
+   * again", and a verdict landing inside the window is wiped by the previous
+   * run's clock. Every `badge.show` in this file goes through here so that
+   * cannot depend on which path showed it.
+   */
+  private stampBadge(ok: boolean, text: string): void {
+    this.clearBadgeLinger();
+    this.badge.show(ok, text);
   }
 
   // ── Chrome ─────────────────────────────────────────────────────────────────
@@ -1156,6 +1566,10 @@ export class App {
       case "reset":
         if (this.mode === "duel") this.duel?.restart();
         else if (this.mode === "rush") this.rush?.restart();
+        // Rebuilt rather than restarted: `restart` refuses on a solved run,
+        // and a draft the author has just solved is exactly the one they want
+        // to play again.
+        else if (this.mode === "build") this.replayBuilderTest();
         else this.restartAttempt();
         return;
       case "skip":
@@ -1195,6 +1609,7 @@ export class App {
       daily: this.run,
       rush: this.rush?.currentRun,
       duel: this.duel?.currentRun,
+      build: this.builderRun,
     });
   }
 
@@ -1230,8 +1645,31 @@ export class App {
     else this.startRun();
   }
 
+  /** The draft on the board again, from the top. False when none is loaded. */
+  private replayBuilderTest(): boolean {
+    if (!this.builderPuzzle) return false;
+    this.startBuilderTest(this.builderPuzzle);
+    return true;
+  }
+
   private openSettings(): void {
     this.settingsDialog.open(this.settings.value.handling, this.settings.value.keybinds);
+  }
+
+  /** Stops a pending auto-dismiss, so it cannot reach a later badge. */
+  private clearBadgeLinger(): void {
+    if (this.badgeLinger === null) return;
+    window.clearTimeout(this.badgeLinger);
+    this.badgeLinger = null;
+  }
+
+  /** Frees the pointer capture and the last active run's frame loop. */
+  dispose(): void {
+    this.detachPointerPlay();
+    this.disposeActiveMode();
+    // A timer outliving the app it was started in fires against a badge that
+    // is no longer on screen.
+    this.clearBadgeLinger();
   }
 
   private readonly relayout = (): void => {
@@ -1258,6 +1696,21 @@ export class App {
     };
     tick();
     setInterval(tick, COUNTDOWN_TICK_MS);
+  }
+
+  /**
+   * Why a drag would not place, in the player's terms.
+   *
+   * There is no soft-drop case here, deliberately. Placement timing is a
+   * function of the live handling — a mid-route descent is held for exactly
+   * the frames it needs at whatever `sdf` the player set — so the planner's
+   * answer no longer depends on the slider, and a refusal means the same
+   * thing at every setting: nothing reaches that square. (It used to lie
+   * twice: once by refusing seats a slow soft drop could reach, then by
+   * blaming the slider when it did.)
+   */
+  private refusalFor(): string {
+    return "No way to place the piece there";
   }
 
   private toast(message: string): void {

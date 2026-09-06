@@ -32,6 +32,18 @@ export type ClearName =
   | "spin"
   | "perfect clear";
 
+/**
+ * A clear a solve has to make, and how many of it.
+ *
+ * Lives here rather than in `shared/goal.ts` so that `Puzzle` can name it
+ * without importing the parser — the parser needs {@link ClearName} from this
+ * file, and the two would otherwise import each other.
+ */
+export interface ClearRequirement {
+  readonly clear: ClearName;
+  readonly count: number;
+}
+
 /** A board row as ten characters: piece letters, `G` for garbage, `.` for empty. */
 export type RowCode = string;
 
@@ -66,6 +78,24 @@ export interface SolutionStep {
   readonly attack: number;
 }
 
+/**
+ * The first id a puzzle a player wrote may take.
+ *
+ * The club's sheet runs 1–140 with gaps, and it keeps allocating; a band well
+ * clear of it means the two allocators never have to know about each other.
+ * The band *is* the record that a puzzle came from a player — there is no
+ * column saying so, because the id is already the answer and a second field
+ * would be a second thing to keep in step.
+ *
+ * A collision here would be silent and terrible rather than loud: the archive
+ * keys puzzles by id into a Map, so a duplicate resolves cleanly for a lookup
+ * while both copies stay in the array the rotation and the rush pool are drawn
+ * from — and `runs.puzzle_id` has no foreign key, so two puzzles' play history
+ * would merge with nothing to complain. `PuzzleArchive` checks for it at the
+ * merge, which is the one place both sources are in the same list.
+ */
+export const COMMUNITY_ID_BASE = 100_000;
+
 export interface Puzzle {
   readonly id: number;
   readonly title: string;
@@ -82,10 +112,40 @@ export interface Puzzle {
   readonly hold: Mino | null;
   /** Garbage the reference solution sends — the score to match. */
   readonly targetAttack: number;
-  /** The reference solution, used for the reveal and to derive the target. */
-  readonly solution: readonly SolutionStep[];
+  /**
+   * Clears a solve must make, on top of reaching {@link targetAttack}.
+   *
+   * The bug this exists for: attack alone does not say *how*. A puzzle meaning
+   * "3 TSDs" is worth 12, and so are three quads — so the intended line was
+   * never the only line, and the archive's own builder already warned authors
+   * about it ("The attack target was reached without every clear the goal
+   * names", `client/src/ui/builder-test.ts`) with no way to hold them to it.
+   *
+   * A floor, not an exact multiset: four TSDs satisfy a requirement of three.
+   * That is the rule the builder has always shown authors, and a reference
+   * solution that happens to make an incidental extra clear stays valid.
+   *
+   * **Absent and empty mean different things.** `undefined` is "nobody has
+   * decided yet" — every puzzle before this field existed. `[]` is "somebody
+   * read the goal and no count can hold it", which is the honest answer for
+   * "c spin", for orderings, and for the combo and B2B goals the vocabulary
+   * cannot express. Both score on attack alone; only one of them is a question
+   * still open.
+   */
+  readonly requiredClears?: readonly ClearRequirement[];
+  /**
+   * The reference solution, used for the reveal.
+   *
+   * Optional because it is not shipped in `data/puzzles.json`, which is a file
+   * in a public repository: an answer key next to the puzzles is an answer key
+   * for anybody. The build writes them to `data/solutions.json`, which is not
+   * tracked, and the server merges that in at load if it is there. A checkout
+   * without it serves and scores every puzzle exactly as before and simply has
+   * no reveal to give.
+   */
+  readonly solution?: readonly SolutionStep[];
   /** Original blueprint codes, so a puzzle can always be traced to the archive. */
-  readonly source: {
+  readonly source?: {
     readonly puzzle: string;
     readonly solution: string;
   };
@@ -111,6 +171,22 @@ export interface ArchiveListing {
    */
   readonly pieces: number;
   readonly targetAttack: number;
+  /**
+   * Whether a player wrote this one and an officer accepted it.
+   *
+   * Said out loud rather than left to be re-derived from {@link
+   * COMMUNITY_ID_BASE} at each place that cares. It is one boolean against a
+   * band check spreading through the explorer, the filter and whatever comes
+   * next — and it is the whole player-facing surface of the feature, because
+   * `author` already carries the name.
+   *
+   * It also marks a target that means something different. A club puzzle's
+   * `targetAttack` comes from `replayPlacements`, which tries every kick route
+   * and keeps the best line; a community one comes from replaying the author's
+   * own keystrokes, so it is what a person actually did — provably reachable,
+   * and beatable.
+   */
+  readonly community: boolean;
 }
 
 export function toListing(puzzle: Puzzle): ArchiveListing {
@@ -123,6 +199,7 @@ export function toListing(puzzle: Puzzle): ArchiveListing {
     set: puzzle.set,
     pieces: pieceBudget(puzzle),
     targetAttack: puzzle.targetAttack,
+    community: puzzle.id >= COMMUNITY_ID_BASE,
   };
 }
 
@@ -144,6 +221,51 @@ export function toPrompt(puzzle: Puzzle): PuzzlePrompt {
  */
 export function meetsTarget(attack: number, targetAttack: number): boolean {
   return attack >= targetAttack;
+}
+
+/**
+ * How far each required clear still has to go. Empty when the goal is met.
+ *
+ * Returns the shortfall rather than a boolean because every caller that needs
+ * the boolean also needs the reason: the runner decides whether to end the run,
+ * the results panel has to say which clear is missing, and a bare `false` sends
+ * both of them back to recount it.
+ *
+ * A floor — `made >= wanted` — so extra clears never fail a solve. Counting is
+ * by name only: a `tsmini` is not a `tsd`, which is the engine's own
+ * distinction and the one place this disagrees with how some authors write.
+ */
+export function clearShortfall(
+  made: readonly ClearName[],
+  required: readonly ClearRequirement[] = [],
+): ClearRequirement[] {
+  if (required.length === 0) return [];
+  const counted = new Map<ClearName, number>();
+  for (const clear of made) counted.set(clear, (counted.get(clear) ?? 0) + 1);
+  return required
+    .map((entry) => ({ clear: entry.clear, count: entry.count - (counted.get(entry.clear) ?? 0) }))
+    .filter((entry) => entry.count > 0);
+}
+
+/**
+ * The whole solve condition: the attack target *and* every clear the goal names.
+ *
+ * The single place that answers "is this solved", so the client's run loop and
+ * the four server verdicts cannot drift apart. They did drift, in a smaller
+ * way, before this existed: the client ended a run on attack alone, which is
+ * why enforcing clears on the server without this function would have made the
+ * affected puzzles unsolvable rather than stricter — the run finished before
+ * the player could make the clear being demanded.
+ */
+export function solvesPuzzle(
+  attack: number,
+  clears: readonly ClearName[],
+  puzzle: Pick<Puzzle, "targetAttack" | "requiredClears">,
+): boolean {
+  return (
+    meetsTarget(attack, puzzle.targetAttack) &&
+    clearShortfall(clears, puzzle.requiredClears).length === 0
+  );
 }
 
 /** Total pieces a player may place — the queue, plus anything pre-held. */

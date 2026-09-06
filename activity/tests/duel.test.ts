@@ -276,7 +276,7 @@ function scoreOf(duel: DuelView, playerId: string): number {
 
 // ── The archive, answers and all ─────────────────────────────────────────────
 
-const archive: Puzzle[] = JSON.parse(readFileSync("data/puzzles.json", "utf8")).puzzles;
+import { archive, hasSolutions, solutionOf } from "./archive";
 
 function setupFor(puzzle: Puzzle) {
   return { board: decodeBoard(puzzle.board, ENGINE_ROWS), queue: puzzle.queue, hold: puzzle.hold };
@@ -308,7 +308,7 @@ function solvingLog(puzzle: Puzzle): InputEvent[] {
     frame += 2;
   };
 
-  for (const step of puzzle.solution.slice(0, pieceBudget(puzzle))) {
+  for (const step of solutionOf(puzzle).slice(0, pieceBudget(puzzle))) {
     if (toLetter(engine.falling.symbol) !== step.piece) {
       tap("hold");
       engine.hold(false, true);
@@ -428,7 +428,16 @@ describe("identity comes from the handshake and nowhere else", () => {
 
 // ── Puzzle duels ─────────────────────────────────────────────────────────────
 
-describe("a puzzle duel deals one puzzle to both players", () => {
+/*
+ * Guarded, like every other block that needs the club's reference answers:
+ * `data/solutions.json` is untracked — an answer key beside the puzzles is an
+ * answer key for everybody — so a fresh clone has boards and no solutions, and
+ * `solutionOf` throws rather than returning one. `tests/archive.ts` states the
+ * rule these blocks were missing: a test that builds a solving log skips, so
+ * somebody cloning this repo sees a suite that passes rather than one that
+ * looks broken by their own checkout.
+ */
+describe.skipIf(!hasSolutions)("a puzzle duel deals one puzzle to both players", () => {
   test("open, join, ready — and both are dealt the same round", async () => {
     const { host, guest } = await playPuzzleDuel(3);
     const forHost = await host.take("round");
@@ -520,7 +529,7 @@ describe("a puzzle duel deals one puzzle to both players", () => {
   });
 });
 
-describe("a round is won by a log that solves it", () => {
+describe.skipIf(!hasSolutions)("a round is won by a log that solves it", () => {
   test("a claim that does not solve it is refused, and takes no round", async () => {
     const { host, guest } = await playPuzzleDuel(3);
     const round = await host.take("round");
@@ -767,13 +776,31 @@ describe("a round is won by a log that solves it", () => {
     // the way in, which is what makes the count above worth anything: it was
     // read, after the round it names had ended, and turned down there before it
     // could be replayed against anything.
-    const refused = "That round is over";
+    //
+    // *Which* refusal depends on where the loser's frame lands in the round
+    // change, and both land before any replay. `endRound` nulls `duel.round`
+    // in the same synchronous block that names the winner, so a claim read
+    // during the rest is told the round is over; one read after the next round
+    // has started names a position that is no longer current and is told so.
+    // Pinning the first of those made this test fail about twice in twelve
+    // runs once the suite grew enough to starve the loser's frame past the
+    // intermission — a fact about how busy the process was, not about the
+    // referee. There is no third outcome: the winner's claim sets `winnerId`
+    // and ends the round without yielding, so the loser can never find a live
+    // round already won and be dropped in silence.
+    const refusals = ["That round is over", "That log was played on another puzzle"];
     const loser = winnerId === host.id ? guest : host;
     const winner = winnerId === host.id ? host : guest;
-    expect(framesOfType(loser.received, "error").map((frame) => frame.message)).toContain(refused);
-    expect(framesOfType(winner.received, "error").map((frame) => frame.message)).not.toContain(
-      refused,
-    );
+    const loserErrors = framesOfType(loser.received, "error").map((frame) => frame.message);
+    const winnerErrors = framesOfType(winner.received, "error").map((frame) => frame.message);
+
+    expect(loserErrors.some((message) => refusals.includes(message))).toBe(true);
+    expect(winnerErrors.some((message) => refusals.includes(message))).toBe(false);
+    // The part that actually matters, and the reason either refusal will do:
+    // the losing log was turned away before the referee replayed it. This is
+    // the message it would have earned had it been run against round two's
+    // puzzle, and it must never appear.
+    expect(loserErrors).not.toContain("That log does not solve this round");
   });
 });
 
@@ -842,7 +869,7 @@ async function solveRush(player: Duellist, frame: RushFrame): Promise<RushFrame>
   return player.take("rush");
 }
 
-describe("a rush duel is one stack walked at two paces", () => {
+describe.skipIf(!hasSolutions)("a rush duel is one stack walked at two paces", () => {
   test("both players open on the same puzzle, one clock and a full hand of skips", async () => {
     const { host, guest } = await lobby(rushDuel());
     host.send({ type: "ready" });
@@ -1059,7 +1086,7 @@ async function hostWinsMatch(rounds: number): Promise<Lobby> {
   return seats;
 }
 
-describe("a finished match is played again only if both ask", () => {
+describe.skipIf(!hasSolutions)("a finished match is played again only if both ask", () => {
   test("one player asking tells them both, and restarts nothing", async () => {
     const { host, guest } = await hostWinsMatch(1);
 
@@ -1208,7 +1235,7 @@ describe("a finished match is played again only if both ask", () => {
   });
 });
 
-describe("a rematch offer outlives neither the players nor the day", () => {
+describe.skipIf(!hasSolutions)("a rematch offer outlives neither the players nor the day", () => {
   test("a disconnect while an offer stands kills the offer", async () => {
     const { host, guest } = await hostWinsMatch(1);
     host.send({ type: "rematch" });
@@ -1409,7 +1436,7 @@ describe("the rules of a room are the host's, and only while it is a room", () =
 
 // ── The pause between rounds ─────────────────────────────────────────────────
 
-describe("a puzzle duel rests between rounds", () => {
+describe.skipIf(!hasSolutions)("a puzzle duel rests between rounds", () => {
   test("the round that ended hands both players its solution", async () => {
     // The loser especially: it is the only look they get at a puzzle that just
     // beat them, and it costs nothing, because a duel never deals a puzzle it

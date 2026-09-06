@@ -1,5 +1,5 @@
 """
-Yesterday's results, posted as a reply to yesterday's ``/puzzle play``.
+Yesterday's results, posted as a reply to yesterday's ``/puzzle``.
 
 The shape is borrowed from the Wordle bot: when the day turns over, whoever
 announced the puzzle gets a reply naming everybody who played, fastest first,
@@ -84,7 +84,7 @@ def record_play(db: sqlite3.Connection, guild_id: int, day: int,
     """
     Remembers where a day was announced. The first announcement wins.
 
-    ``OR IGNORE`` rather than ``OR REPLACE``: running ``/puzzle play`` again
+    ``OR IGNORE`` rather than ``OR REPLACE``: running ``/puzzle`` again
     later in the day, or in a second channel, should not move tomorrow's reply
     away from the message everybody already saw.
     """
@@ -205,15 +205,19 @@ def _daily_lines(rows: list[dict]) -> list[str]:
     if not rows:
         return []
 
+    # No crown on the leader. It was written before the grid was, and a prefix
+    # on one line only is what knocks that line out of alignment: the winner's
+    # three marks started an emoji-width right of everybody else's, so the one
+    # column the recap has ran crooked down the whole message. The board is the
+    # thing being read here, and order already says who won.
     lines = []
-    for index, row in enumerate(rows[:RANKED_SHOWN]):
-        crown = "\N{CROWN} " if index == 0 and row.get("solved", 0) > 0 else ""
+    for row in rows[:RANKED_SHOWN]:
         tail = (
             f" — {format_duration(row.get('totalMs', 0))}"
             if row.get("solved", 0) > 0
             else ""
         )
-        lines.append(f"{crown}{_grid(row.get('marks') or {})} {_mention(row)}{tail}")
+        lines.append(f"{_grid(row.get('marks') or {})} {_mention(row)}{tail}")
 
     rest = rows[RANKED_SHOWN:]
     if rest:
@@ -231,11 +235,13 @@ def _rush_lines(rush: dict) -> list[str]:
     if not ran:
         return []
     lines = ["", "**Rush**"]
-    for index, entry in enumerate(ran[:RUSH_SHOWN]):
+    for entry in ran[:RUSH_SHOWN]:
         count = entry.get("solved", 0)
-        crown = "👑 " if index == 0 else ""
         plural = "" if count == 1 else "s"
-        lines.append(f"{crown}{_mention(entry)} — {count} puzzle{plural}")
+        # Unprefixed, like the daily board above and for the same reason: these
+        # are already in order, and the crown only pushed the first name out of
+        # line with the ones under it.
+        lines.append(f"{_mention(entry)} — {count} puzzle{plural}")
     return lines
 
 

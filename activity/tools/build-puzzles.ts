@@ -13,12 +13,13 @@
  * with no verified target is a puzzle nobody can be scored against.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { BlueprintDecodeError, decodeBlueprint } from "../shared/blueprint/decode";
 import { pieceCells, type Playfield } from "../shared/blueprint/playfield";
 import {
   type BoardCell,
+  type ClearRequirement,
   encodeBoard,
   type Mino,
   type Puzzle,
@@ -35,19 +36,53 @@ const META_SHEET = "Copy of Puzzles Archive - Puzzles.csv";
 interface CliOptions {
   archive: string;
   out: string;
+  solutions: string;
 }
 
 function parseArgs(argv: readonly string[]): CliOptions {
-  const options: CliOptions = { archive: "../tmp", out: "data/puzzles.json" };
+  const options: CliOptions = {
+    archive: "../tmp",
+    out: "data/puzzles.json",
+    solutions: "data/solutions.json",
+  };
   for (let i = 0; i < argv.length; i += 2) {
     const flag = argv[i];
     const value = argv[i + 1];
     if (!value) throw new Error(`Missing value for ${flag}`);
     if (flag === "--archive") options.archive = value;
     else if (flag === "--out") options.out = value;
+    // `--solutions` had a field and a default but no branch, so the only way to
+    // set it was to edit this file — and passing it died on "Unknown flag".
+    else if (flag === "--solutions") options.solutions = value;
     else throw new Error(`Unknown flag ${flag}`);
   }
   return options;
+}
+
+/**
+ * The clear requirements the previous build wrote, by puzzle id.
+ *
+ * Empty when there is no previous file, which is the first-build case and the
+ * fresh-clone case. A puzzle that has since left the sheet simply never gets
+ * looked up; one that is new to the sheet has no entry and stays absent, which
+ * is the honest state — "nobody has decided" rather than "checked, enforcing
+ * nothing".
+ */
+function existingRequirements(path: string): Map<number, ClearRequirement[]> {
+  if (!existsSync(path)) return new Map();
+  try {
+    const previous: Puzzle[] = JSON.parse(readFileSync(path, "utf8")).puzzles;
+    return new Map(
+      previous
+        .filter((puzzle) => puzzle.requiredClears !== undefined)
+        .map((puzzle) => [puzzle.id, [...puzzle.requiredClears!]]),
+    );
+  } catch (error) {
+    // A rebuild is how you recover from a corrupt archive, so this must not be
+    // the thing that stops one. Loud, because the cost is silent un-enforcement.
+    console.warn(`could not read ${path} to carry clear requirements across:`, error);
+    return new Map();
+  }
 }
 
 /** Row lookup keyed by puzzle id, tolerating the archive's stray whitespace. */
@@ -181,7 +216,47 @@ function main(): void {
   }
 
   mkdirSync(dirname(options.out), { recursive: true });
-  writeFileSync(options.out, `${JSON.stringify({ puzzles }, null, 1)}\n`);
+  // Both, not just the prompts. They default to the same directory, so this is
+  // invisible until somebody passes `--out` somewhere else — and then the
+  // prompts are written, the answers throw ENOENT, and the split this function
+  // exists to make has half happened.
+  mkdirSync(dirname(options.solutions), { recursive: true });
+  // Two files, and only one of them is tracked. The answers are the whole game
+  // — a puzzle whose solution sits beside it in a public repository is a puzzle
+  // with a published answer key — so they go to their own file, which
+  // .gitignore keeps out of the repo, and the server merges them back at load.
+  // Carried across rather than rebuilt. `requiredClears` is not derivable from
+  // the club's sheet — it is written by `tools/backfill-required-clears.ts`,
+  // which gates each requirement on the reference solution — so a rebuild that
+  // simply omitted it would silently un-enforce all 111 puzzles that have one.
+  // Nothing would fail: the file would still be valid, the server would still
+  // boot, and every puzzle would quietly go back to being solvable any way that
+  // reaches the attack target. `activity/DEPLOY.md` tells operators to run this
+  // command, so "just do not run it in that order" was never a real defence.
+  const held = existingRequirements(options.out);
+  const prompts = puzzles.map(({ solution: _s, source: _src, ...prompt }) => {
+    const required = held.get(prompt.id);
+    return required === undefined ? prompt : { ...prompt, requiredClears: required };
+  });
+  const kept = prompts.filter((prompt) => prompt.requiredClears?.length).length;
+  if (held.size > 0) {
+    console.log(`carried ${kept} clear requirements across from the previous ${options.out}`);
+  }
+  writeFileSync(options.out, `${JSON.stringify({ puzzles: prompts }, null, 1)}\n`);
+  writeFileSync(
+    options.solutions,
+    `${JSON.stringify(
+      {
+        solutions: puzzles.map((puzzle) => ({
+          id: puzzle.id,
+          solution: puzzle.solution,
+          source: puzzle.source,
+        })),
+      },
+      null,
+      1,
+    )}\n`,
+  );
 
   const goalAgreement = puzzles.filter((p) => goalMatchesSolution(p)).length;
   console.log(`built ${puzzles.length} puzzles -> ${options.out}`);
@@ -201,7 +276,8 @@ function main(): void {
 function goalMatchesSolution(puzzle: Puzzle): boolean {
   const goal = puzzle.goal.toLowerCase();
   const counts = new Map<string, number>();
-  for (const step of puzzle.solution) {
+  // Built here a few lines up, so it is present by construction.
+  for (const step of puzzle.solution ?? []) {
     if (step.clear) counts.set(step.clear, (counts.get(step.clear) ?? 0) + 1);
   }
   const aliases: Record<string, readonly string[]> = {
