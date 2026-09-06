@@ -495,8 +495,14 @@ export class PuzzleRun {
     // Flushing can itself end the attempt: the guard above ticked the log past
     // its frame ceiling, which finishes the run just as the loop would have.
     if (this.phase !== "ready" && this.phase !== "playing") return;
-    if (!this.planner) this.planner = new RoutePlanner(this.engine);
-    const target = this.planner.targetAt(spot.column, spot.row, this.aim?.cells ?? null);
+    // Rebuilt when the piece has moved under it, not only when a key was
+    // pressed. `input()` fires once per physical press and drops the OS repeat,
+    // but DAS and ARR keep shifting the piece every tick while a direction is
+    // held — so a plan built before the shift would commit a route to a square
+    // the piece has since left, and the drag would land somewhere the preview
+    // never showed.
+    this.currentPlanner();
+    const target = this.currentPlanner().targetAt(spot.column, spot.row, this.aim?.cells ?? null);
     this.aim = { cells: target, legal: this.searchPlacement(target) !== null };
     // The hollow is the contract — paint it now rather than whenever the next
     // frame happens to run, so a fast release cannot commit a square whose
@@ -583,10 +589,32 @@ export class PuzzleRun {
   private searchPlacement(cells: TargetCells) {
     this.trialing = true;
     try {
-      return (this.planner ?? new RoutePlanner(this.engine)).placementAt(cells);
+      return this.currentPlanner().placementAt(cells);
     } finally {
       this.trialing = false;
     }
+  }
+
+  /**
+   * The plan for the piece as it is *now*, rebuilding it if the piece has moved.
+   *
+   * The one place a planner is obtained, because the aim and the commit have to
+   * agree about which plan is current and they are separated by however long the
+   * player holds their finger down.
+   *
+   * `input()` drops the plan on a key transition, which looks like enough. It is
+   * not: it fires once per physical press and deliberately ignores the OS
+   * repeat, while the engine's own DAS and ARR keep shifting the piece every
+   * tick for as long as the key stays down. So the piece leaves the square the
+   * plan was walked from with no input this class ever sees, and a commit
+   * against that plan plays a route for a position the piece no longer holds —
+   * the drag lands somewhere the preview never showed.
+   */
+  private currentPlanner(): RoutePlanner {
+    if (!this.planner || !this.planner.matches(this.engine.falling)) {
+      this.planner = new RoutePlanner(this.engine);
+    }
+    return this.planner;
   }
 
   // ── Clock ──────────────────────────────────────────────────────────────────

@@ -252,10 +252,39 @@ export class RoutePlanner {
   private readonly routeCache = new Map<string, MoveKey[][]>();
   private readonly placementCache = new Map<string, Placement | null>();
 
+  /**
+   * The falling piece this plan was built for.
+   *
+   * A plan is only true of the piece it walked from. The caller drops the
+   * planner when the player presses a key — but a *held* direction key does not
+   * press again, and the engine's own DAS/ARR keeps shifting the piece on every
+   * tick, so the piece can leave the square this plan started from without any
+   * input the caller sees. {@link matches} is how a caller notices.
+   */
+  private readonly builtFor: { readonly state: PieceState; readonly symbol: Tetromino["symbol"] };
+
   constructor(private readonly engine: Engine) {
     this.board = engine.board.state;
     this.kickTable = engine.kickTableName;
     this.piece = scratchPiece(engine);
+    this.builtFor = { state: stateOf(engine.falling), symbol: engine.falling.symbol };
+  }
+
+  /**
+   * Whether this plan still describes the piece on the board.
+   *
+   * Cheap enough to ask on every aim: two numbers, a rotation and a symbol.
+   * False means the piece moved under the plan and every cached route in here
+   * is answering about a square the piece has left.
+   */
+  matches(piece: Tetromino): boolean {
+    const now = stateOf(piece);
+    return (
+      piece.symbol === this.builtFor.symbol &&
+      now.rotation === this.builtFor.state.rotation &&
+      now.location[0] === this.builtFor.state.location[0] &&
+      now.location[1] === this.builtFor.state.location[1]
+    );
   }
 
   private states(): Map<string, ReachableState> {
