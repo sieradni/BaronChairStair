@@ -234,6 +234,7 @@ export class App {
 
     this.verdict = createVerdictPanel({
       onRetry: () => this.startRun(),
+      onReplay: () => void this.replaySheet(),
       onToggleLeaderboard: () => this.toggleLeaderboard(),
       onPractice: () => void this.startPractice(),
       onBackToDaily: () => this.returnToDaily(),
@@ -466,6 +467,38 @@ export class App {
     } catch (error) {
       this.toast(error instanceof ApiError ? error.message : "Could not open the archive");
     }
+  }
+
+  /**
+   * Plays the sheet on the board again, unscored.
+   *
+   * Offered once a daily is filed, where "Try again" is withdrawn because the
+   * run that counts is already on the leaderboard. A player who has just solved
+   * one wants to try the line they thought of afterwards, or show somebody, or
+   * simply enjoy it a second time — and the alternative on the card is "Random
+   * puzzle", which is not this puzzle.
+   *
+   * Routed through `openArchivePuzzle` rather than `startRun`, because that is
+   * the path that already means "play this one unscored": it sets
+   * `scored: false`, so the run cannot be filed and nothing on the board moves.
+   * `lockedPuzzleIds` lets it through — a solved sheet is not locked, and the
+   * lock exists to stop a *rehearsal before filing*, which is precisely the
+   * thing that has already happened here.
+   */
+  private async replaySheet(): Promise<void> {
+    const id = this.sheet?.puzzle.id;
+    if (id === undefined) return;
+    // A replay starts its own clock. `sittings` is keyed by puzzle, so that a
+    // detour into practice and back cannot hand the daily a fresh clock and a
+    // zeroed restart tally — a free place at the top of a board sorted by time.
+    // Replaying the *same* puzzle inherits that sitting, and the practice card
+    // then reports the minutes since the puzzle was first opened rather than
+    // the run just played.
+    //
+    // Safe to drop precisely here, and nowhere else: this puzzle's scored run
+    // is already filed, so there is no longer a time for the tally to protect.
+    this.sittings.delete(id);
+    await this.openArchivePuzzle(id);
   }
 
   private async openArchivePuzzle(id: number): Promise<void> {

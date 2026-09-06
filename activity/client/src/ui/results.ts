@@ -51,6 +51,15 @@ export function createVerdictBadge(): VerdictBadge {
 
 export interface VerdictHandlers {
   readonly onRetry: () => void;
+  /**
+   * Play a *filed* sheet again, unscored.
+   *
+   * Separate from {@link onRetry}, which restarts an attempt that is still the
+   * player's to file. Once a daily is filed the run on the board is the one
+   * that counts, so playing it again is practice on the same puzzle and cannot
+   * move what is recorded.
+   */
+  readonly onReplay: () => void;
   readonly onToggleLeaderboard: () => void;
   readonly onPractice: () => void;
   readonly onBackToDaily: () => void;
@@ -108,8 +117,20 @@ export function createVerdictPanel(handlers: VerdictHandlers): VerdictPanel {
                 text: "Today's puzzle",
                 on: { click: () => handlers.onBackToDaily() },
               }),
+          // Solved, and filed: the attempt is over, so the offer is to play it
+          // again rather than to try again — the second would suggest the
+          // result is still in play. Unsolved and still the player's to file:
+          // "Try again", which is exactly what it does.
+          //
+          // A filed miss gets both, and they are different things: retry the
+          // sheet that is still open, or replay one already closed.
           fields.solved
-            ? null
+            ? el("button", {
+                class: "btn",
+                text: "Play again",
+                title: "Play this puzzle again. Your filed run stands — this one is not recorded.",
+                on: { click: () => handlers.onReplay() },
+              })
             : el("button", {
                 class: "btn",
                 text: "Try again",
