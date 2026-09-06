@@ -36,7 +36,7 @@ const SOLVED = {
 const FINDER = { playerId: "p1", guildId: "g1" };
 
 function storeThat(
-  record: () => { solutionId: number | null; discovered: boolean },
+  record: (entry?: never) => { solutionId: number | null; discovered: boolean },
   count: () => number = () => 1,
 ): Store {
   return { recordSolution: record, countSolutions: count } as unknown as Store;
@@ -89,6 +89,27 @@ describe("a failing store cannot cost a player their run", () => {
       isNew: true,
       known: 3,
     });
+  });
+
+  test("a line that missed the goal is filed, but is not announced as a discovery", () => {
+    // The board pays on the goal (`solved_strict = 1`), not on the attack bar
+    // the filing decision uses. Announcing this one would promise a place on a
+    // board that filters it out.
+    const filed: unknown[] = [];
+    const store = storeThat((entry?: unknown) => {
+      filed.push(entry);
+      return { solutionId: 1, discovered: true };
+    });
+    const offGoal = { ...SOLVED, clears: ["quad"] } as unknown as VerifiedRun;
+
+    const discovery = recordDiscovery(store, PUZZLE, offGoal, [], DEFAULT_HANDLING, FINDER);
+
+    expect(discovery).not.toBeNull();
+    expect(discovery!.isNew).toBe(false);
+    // Still recorded — it is exactly the evidence a maker needs that the goal
+    // says less than the puzzle demands.
+    expect(filed).toHaveLength(1);
+    expect((filed[0] as { solvedStrict: boolean }).solvedStrict).toBe(false);
   });
 
   test("a run that did not reach the target is never filed at all", () => {

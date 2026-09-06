@@ -214,6 +214,11 @@ function toVerdict(submission: Submission) {
  * whoever read it looking in the wrong table.
  */
 function idParam(c: Context, named: string): number {
+  // Always the segment called `id`. `named` is only what the refusal calls it,
+  // which is a trap worth naming: a route that declares its parameter as
+  // anything else reads undefined here and answers 400 to every request. That
+  // is not hypothetical — `/api/review/puzzles/:puzzle/solutions` shipped that
+  // way and could not be called at all.
   const raw = c.req.param("id") ?? "";
   const id = /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : Number.NaN;
   if (!Number.isSafeInteger(id)) {
@@ -642,7 +647,7 @@ export function registerReviewRoutes(app: AppRouter, deps: ReviewDependencies): 
    * be re-proved, not so it can be handed out: they are keystroke-level
    * recordings of named players, and nothing on this page needs them.
    */
-  app.get("/api/review/puzzles/:puzzle/solutions", requireReviewer(secret), (c) => {
+  app.get("/api/review/puzzles/:id/solutions", requireReviewer(secret), (c) => {
     const puzzle = correctablePuzzle(c, archive, store);
     return c.json({
       puzzleId: puzzle.id,

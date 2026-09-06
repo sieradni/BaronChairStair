@@ -24,7 +24,15 @@ import type { Handling } from "../shared/tetris/handling";
 
 /** What the player is told about the line they just played. */
 export interface Discovery {
-  /** Nobody had recorded this line before. */
+  /**
+   * Nobody had recorded this line before **and** it will be credited.
+   *
+   * Both halves, because the board pays on the goal and not on the attack
+   * target. A run that reached the number without the clears the goal names is
+   * still filed — it is the evidence a maker needs — but telling the player
+   * "nobody had solved it this way" would promise a place on a board that
+   * filters it out, and they would go looking for a name that never appears.
+   */
   readonly isNew: boolean;
   /** Distinct lines on record for this puzzle, including this one. */
   readonly known: number;
@@ -65,6 +73,9 @@ export function recordDiscovery(
     attack: placement.attack,
   }));
   const outcome = { attack: verified.attack, clears: verified.clears };
+  // The whole goal, not the attack bar the filing decision uses. This is what
+  // `discoveryBoard` filters on, so it is what "new" has to mean.
+  const meetsGoal = solvesPuzzle(verified.attack, verified.clears, puzzle);
 
   // Nothing here may cost a player the run they just earned. The run is already
   // recorded by the time this is called, so a throw would take the *response*
@@ -91,7 +102,7 @@ export function recordDiscovery(
       handling,
       attack: verified.attack,
       clears: verified.clears,
-      solvedStrict: solvesPuzzle(verified.attack, verified.clears, puzzle),
+      solvedStrict: meetsGoal,
       source: "player",
       foundBy: finder.playerId,
       guildId: finder.guildId,
@@ -104,11 +115,11 @@ export function recordDiscovery(
   }
 
   try {
-    return { isNew: discovered, known: store.countSolutions(puzzle.id) };
+    return { isNew: discovered && meetsGoal, known: store.countSolutions(puzzle.id) };
   } catch (error) {
     // The row is written; only the count failed. Say what is true rather than
     // discarding a discovery that happened.
     console.error(`[discovery] could not count solutions for puzzle ${puzzle.id}: ${String(error)}`);
-    return { isNew: discovered, known: 0 };
+    return { isNew: discovered && meetsGoal, known: 0 };
   }
 }
