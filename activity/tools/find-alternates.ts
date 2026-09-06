@@ -85,7 +85,7 @@ function loadPuzzles(): Puzzle[] {
   return puzzles.map((puzzle) => ({ ...puzzle, solution: answers.get(puzzle.id) }));
 }
 
-interface Verdict {
+export interface Verdict {
   readonly puzzle: Puzzle;
   readonly report: SearchReport;
   /** Lines that are not the author's own. */
@@ -94,7 +94,15 @@ interface Verdict {
   readonly refFound: boolean | null;
 }
 
-function judge(puzzle: Puzzle, report: SearchReport): Verdict {
+/**
+ * Splits a search's lines into the author's own and everything else.
+ *
+ * The one decision in this tool that can be wrong in a way nobody would notice:
+ * mistake the reference for an alternate and every puzzle looks broken;
+ * mistake an alternate for the reference and a real finding disappears.
+ * Exported so it can be tested without running a search.
+ */
+export function judge(puzzle: Puzzle, report: SearchReport): Verdict {
   const reference = puzzle.solution && puzzle.solution.length > 0 ? solutionKey(puzzle.solution) : null;
   const alternates = report.lines.filter((line) => solutionKey(line.placements) !== reference);
   return {
@@ -248,4 +256,9 @@ function main(): void {
   else console.log("\nNothing written. Re-run with --write to file these.");
 }
 
-main();
+// Only when this file is what was run. Every other tool here calls `main()`
+// outright, which is fine while nothing imports them — but `judge` is the one
+// decision in this tool that can be wrong without anybody noticing, and a test
+// that imports it to check that would otherwise start a full archive search on
+// the import.
+if (import.meta.main) main();
