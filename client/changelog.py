@@ -60,6 +60,15 @@ VERSION: str = RELEASES[0].version
 #: many older ones it is not listing.
 MAX_RELEASES_IN_MESSAGE = 3
 
+#: The ceiling a Discord message actually has, less room to be wrong about it.
+#:
+#: Counting releases is not counting characters. Three releases of eight wordy
+#: notes measured 2,029 characters, which Discord rejects with a 400 — and since
+#: the claim is taken before the send, a rejected message is one a server never
+#: hears, not one it hears late. So the message is trimmed by length as well as
+#: by release count, and says what it dropped.
+MAX_MESSAGE_CHARS = 1900
+
 
 def releases_since(seen: str | None) -> tuple[Release, ...]:
     """
@@ -94,7 +103,21 @@ def format_announcement(releases: tuple[Release, ...]) -> str:
     if not releases:
         return ""
 
-    shown = releases[:MAX_RELEASES_IN_MESSAGE]
+    # Longest first, then shorter, until one fits. Trimming a rendered string
+    # would cut mid-sentence or mid-release; dropping whole releases and
+    # re-rendering keeps every message a well-formed one that says what it left
+    # out. At worst this is one release, which is why the last line is a plain
+    # truncation rather than another retry.
+    for count in range(min(MAX_RELEASES_IN_MESSAGE, len(releases)), 0, -1):
+        text = _render(releases, count)
+        if len(text) <= MAX_MESSAGE_CHARS:
+            return text
+    return _render(releases, 1)[: MAX_MESSAGE_CHARS - 1].rstrip() + "…"
+
+
+def _render(releases: tuple[Release, ...], count: int) -> str:
+    """The message with `count` releases spelled out and the rest counted."""
+    shown = releases[:count]
     hidden = len(releases) - len(shown)
 
     if len(releases) == 1:

@@ -115,7 +115,9 @@ Production pulls when somebody deploys, which may be several releases after the
 last deploy — announcing only the tip would drop the middle ones silently. Past
 three releases the message says how many older ones it is not listing, because a
 server that has never heard from the bot is owed the entire history and nobody
-typing `/puzzle` asked to read it.
+typing `/puzzle` asked to read it — and it is trimmed by *length* as well, since
+counting releases is not counting characters: three releases of eight wordy
+notes measured 2,029 characters, which Discord rejects outright.
 
 Releasing is adding a `Release` at the top of `RELEASES`; `VERSION` follows it,
 and a test fails if it does not. Order in that tuple *is* the version order —

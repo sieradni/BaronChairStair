@@ -82,6 +82,38 @@ class Announcement(unittest.TestCase):
         self.assertNotIn("change 1\n", text)
         self.assertIn(f"and {9 - changelog.MAX_RELEASES_IN_MESSAGE} earlier updates", text)
 
+    def test_a_message_always_fits_in_a_discord_message(self):
+        """
+        Counting releases is not counting characters.
+
+        Three releases of eight wordy notes measured 2,029 characters, which
+        Discord rejects with a 400 — and the claim is taken before the send, so
+        a rejected message is one a server never hears rather than one it hears
+        late. Capping the release count did not cap the length.
+        """
+        wordy = tuple(
+            Release(f"beta 0.{n}", tuple(
+                f"A fairly wordy change note number {i} explaining what a player will notice."
+                for i in range(8)))
+            for n in range(9, 0, -1))
+
+        text = changelog.format_announcement(wordy)
+
+        self.assertLessEqual(len(text), changelog.MAX_MESSAGE_CHARS)
+        # And it is still a whole message that says what it left out, rather
+        # than a sentence cut in half.
+        self.assertIn("earlier update", text)
+
+    def test_a_single_enormous_release_is_truncated_rather_than_rejected(self):
+        # Nothing left to drop: one release that is on its own too long. Better
+        # a message with an ellipsis than a 400 nobody sees.
+        huge = (Release("beta 9.9", tuple("x" * 300 for _ in range(20))),)
+
+        text = changelog.format_announcement(huge)
+
+        self.assertLessEqual(len(text), changelog.MAX_MESSAGE_CHARS)
+        self.assertTrue(text.endswith("…"))
+
     def test_the_shipped_changelog_is_well_formed(self):
         # The real data, not a fixture: a release with no changes, or a version
         # that repeats, is a mistake nobody would see until a deploy.
