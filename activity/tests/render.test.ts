@@ -19,6 +19,7 @@ import { Window } from "happy-dom";
 import { activeRun } from "../client/src/game/active-run";
 import { createHome } from "../client/src/ui/home";
 import { createDailyBoard } from "../client/src/ui/daily-board";
+import { createDiscoveryBoard } from "../client/src/ui/discovery-board";
 import { boardGlyph } from "../client/src/render/piece-glyph";
 import { MINO_INK, PAPER } from "../client/src/render/skin";
 import { withRush } from "../client/src/ui/daily-board";
@@ -545,6 +546,51 @@ describe("the front door", () => {
     // rather than restate it.
     expect(side.classList.contains("rail")).toBe(true);
     expect(window.getComputedStyle(board.element as never).minHeight).toBe("0");
+  });
+
+  test("both boards share the side column", () => {
+    // Two different questions — how did the server do today, and who has found
+    // something nobody had — and the column holds them at once rather than
+    // making one a tab behind the other.
+    const made = home(unplayed());
+    const day = createDailyBoard();
+    const found = createDiscoveryBoard();
+    made.mountBoard(day.element, found.element);
+    const side = made.element.querySelector(".home__side")!;
+
+    expect(side.contains(day.element as never)).toBe(true);
+    expect(side.contains(found.element as never)).toBe(true);
+  });
+
+  test("an empty discovery board is a standing offer, not an emptiness", () => {
+    // On most servers this is empty for a long time, and that is not a failure
+    // state — so the card asks for something rather than reporting nothing.
+    const found = createDiscoveryBoard();
+
+    expect(found.element.querySelector(".note")!.textContent).toBe(
+      "No new lines yet. Solve a puzzle a way nobody has, and this is where it lands.",
+    );
+    expect(found.element.querySelectorAll(".board-list__row")).toHaveLength(0);
+  });
+
+  test("the discovery board ranks finders and marks the reader's own row", () => {
+    const found = createDiscoveryBoard();
+    found.update(
+      [
+        { player: { id: "a", username: "ada" }, found: 3, latestAt: 1 },
+        { player: { id: "b", username: "bo" }, found: 1, latestAt: 2 },
+      ] as never,
+      "b",
+    );
+    const rows = [...found.element.querySelectorAll(".board-list__row")];
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.querySelector(".board-list__name")!.textContent).toBe("ada");
+    expect(rows[0]!.querySelector(".board-list__score")!.textContent).toBe("3 lines");
+    // Singular, because "1 lines" is the kind of thing a club notices.
+    expect(rows[1]!.querySelector(".board-list__score")!.textContent).toBe("1 line");
+    expect(rows[0]!.classList.contains("board-list__row--self")).toBe(false);
+    expect(rows[1]!.classList.contains("board-list__row--self")).toBe(true);
   });
 
   test("the left column fills by arithmetic, and the hero is the only elastic", () => {

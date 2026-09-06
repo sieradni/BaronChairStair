@@ -54,7 +54,12 @@ export interface HomeCallbacks {
 export interface Home {
   readonly element: HTMLElement;
   /** `board` is the leaderboard panel, mounted here rather than owned here. */
-  mountBoard(board: HTMLElement): void;
+  /**
+   * Fills the side column. Variadic because there is more than one board now
+   * and they share the column — the day's, which resets every morning, and the
+   * discoveries, which only move when somebody finds something new.
+   */
+  mountBoard(...boards: readonly HTMLElement[]): void;
   update(
     day: number,
     entries: readonly DailyEntry[],
@@ -285,8 +290,8 @@ export function createHome(callbacks: HomeCallbacks): Home {
 
   return {
     element,
-    mountBoard(board) {
-      replaceChildren(side, board);
+    mountBoard(...boards) {
+      replaceChildren(side, ...boards);
     },
     update(day, entries, streak, started) {
       dayNumber.textContent = `#${day}`;

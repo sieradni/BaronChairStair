@@ -21,6 +21,7 @@ import { type LocalAction, keyName } from "@shared/keybinds";
 import { RushSession, type RushSummary } from "./game/rush";
 import { PuzzleRun, type RunSnapshot } from "./game/runner";
 import { createDailyBoard } from "./ui/daily-board";
+import { createDiscoveryBoard } from "./ui/discovery-board";
 import { createHome } from "./ui/home";
 import type { DailyTier } from "@shared/daily";
 import { activeRun, type PlayMode } from "./game/active-run";
@@ -74,6 +75,7 @@ export class App {
   private readonly badge = createVerdictBadge();
   private readonly leaderboard = createLeaderboardPanel();
   private readonly dailyBoard = createDailyBoard();
+  private readonly discoveryBoard = createDiscoveryBoard();
   private readonly canvas = el("canvas", {
     class: "field",
     attrs: { role: "img", "aria-label": "Puzzle playfield" },
@@ -366,7 +368,8 @@ export class App {
       // its side of the wire.
       this.startedToday(),
     );
-    this.home.mountBoard(this.dailyBoard.element);
+    this.home.mountBoard(this.dailyBoard.element, this.discoveryBoard.element);
+    void this.loadDiscoveries();
     // `full` rather than `wide`+`fill`: two columns want the deck's whole width,
     // and they want a row exactly as tall as the screen so the board beside the
     // day can scroll inside itself instead of stretching the page.
@@ -1301,6 +1304,14 @@ export class App {
       this.presentVerdict(this.toShareFields(snapshot, response.run), response.run);
       this.leaderboard.update(response.leaderboard, this.connection.player.id);
       this.attachWalkthrough(sheet.puzzle, response.solution);
+      if (response.discovery?.isNew) {
+        // Only for a line nobody had. Saying "one of 4 known" to everybody else
+        // would turn a discovery into a scoreboard nobody asked for, and would
+        // quietly tell a player how many answers a puzzle has — which is the
+        // reveal the whole archive is careful not to give away.
+        this.toast("New line! Nobody had solved it this way.");
+        void this.loadDiscoveries();
+      }
       if (!response.isFirst) this.toast("Today's sheet was already filed");
     } catch (error) {
       this.presentVerdict(this.toShareFields(snapshot), null);
@@ -1415,6 +1426,25 @@ export class App {
       // longer carries; it is refreshed from the submit response instead.
     } catch {
       // The result card is still useful without the leaderboard.
+    }
+  }
+
+  /**
+   * The discovery board, fetched apart from the day's.
+   *
+   * Its own request rather than a field on the leaderboard response, because it
+   * is the one board here that does not change when a day does: it moves only
+   * when somebody finds a line nobody had, which is rare enough that tying it
+   * to the daily refresh would mostly re-fetch an identical list. Failing
+   * quietly for the same reason the board beside it does — an empty card is a
+   * better morning than an error where a name should be.
+   */
+  private async loadDiscoveries(): Promise<void> {
+    try {
+      const { board } = await this.connection.api.discoveries();
+      this.discoveryBoard.update(board, this.connection.player.id);
+    } catch {
+      // A standing offer is not worth an error message.
     }
   }
 
