@@ -104,6 +104,32 @@ describe("the whole archive", () => {
   });
 });
 
+describe("an unrated puzzle", () => {
+  test("reports no difficulty rather than a difficulty of zero", async () => {
+    // The sheet leaves the cell blank for a couple of puzzles, and buildPuzzle
+    // coerces that to 0 because the game's type needs a number. Zero is not a
+    // point on a scale that starts at one, and the website's schema declares
+    // ge=1 — so publishing 0 hands a consumer a value it considers invalid.
+    const db = new Database(DB);
+    try {
+      upsertArchive(db, puzzle(9103, { difficulty: 0, title: "unrated" }), Date.now());
+      publishArchive(db, [9103], "an officer", Date.now());
+    } finally {
+      db.close();
+    }
+
+    const body = (await (await get("/9103")).json()) as { puzzle: { difficulty: number | null } };
+    expect(body.puzzle.difficulty).toBeNull();
+  });
+
+  test("a real difficulty still comes through", async () => {
+    const body = (await (await get(`/${PUBLISHED}`)).json()) as {
+      puzzle: { difficulty: number | null };
+    };
+    expect(body.puzzle.difficulty).toBe(6);
+  });
+});
+
 describe("one puzzle", () => {
   test("comes back by its id", async () => {
     const response = await get(`/${PUBLISHED}`);

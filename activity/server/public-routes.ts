@@ -64,7 +64,17 @@ export interface PublicPuzzle {
   readonly id: number;
   readonly title: string;
   readonly author: string;
-  readonly difficulty: number;
+  /**
+   * The club's own 1-10ish rating, or null when the sheet's cell is blank.
+   *
+   * Null rather than zero. `buildPuzzle` coerces a blank cell to 0 because the
+   * game's `Puzzle` type needs a number and nothing in the game reads it — but
+   * 0 is not a difficulty on a scale that starts at 1, and publishing it as one
+   * makes every consumer either show "difficulty 0" or invent this same rule.
+   * The website's own schema declares `ge=1`, so it would have been refusing a
+   * value this service told it was true.
+   */
+  readonly difficulty: number | null;
   readonly goal: string;
   readonly set: string | null;
   readonly board: readonly string[];
@@ -92,7 +102,7 @@ function toPublic(entry: ArchiveEntry): PublicPuzzle {
     id: puzzle.id,
     title: puzzle.title,
     author: puzzle.author,
-    difficulty: puzzle.difficulty,
+    difficulty: puzzle.difficulty === 0 ? null : puzzle.difficulty,
     goal: puzzle.goal,
     set: puzzle.set,
     board: puzzle.board,
