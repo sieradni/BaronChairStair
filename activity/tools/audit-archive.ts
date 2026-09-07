@@ -41,13 +41,9 @@ import {
   solvesPuzzle,
 } from "../shared/puzzle";
 import { CODES_SHEET, META_SHEET, buildPuzzle, indexById } from "./decode-archive";
+import { readSheetTab, TAB_OF } from "./sheet";
 import { parseCsv } from "./csv";
 
-const SHEET_ID = "1OUA3w3Q1OAajaNLlp74CwrZhnBKRbkeo4hYux_v94QM";
-const TAB_OF: Readonly<Record<string, string>> = {
-  [CODES_SHEET]: "blueprint urls",
-  [META_SHEET]: "Puzzles",
-};
 
 type Verdict = "BROKEN" | "GOAL" | "UNREADABLE" | "OK";
 
@@ -158,16 +154,6 @@ function audit(puzzle: Puzzle): Audit {
   };
 }
 
-async function readTab(from: string | null, sheet: string): Promise<string> {
-  if (from) return readFileSync(join(from, sheet), "utf8");
-  const response = await fetch(
-    `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq` +
-      `?tqx=out:csv&sheet=${encodeURIComponent(TAB_OF[sheet]!)}`,
-  );
-  if (!response.ok) throw new Error(`Sheet tab "${TAB_OF[sheet]}" answered ${response.status}`);
-  return response.text();
-}
-
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const json = argv.includes("--json");
@@ -175,8 +161,8 @@ async function main(): Promise<void> {
   const from = fromAt >= 0 ? resolve(argv[fromAt + 1] ?? "") : null;
 
   const [codesCsv, metaCsv] = await Promise.all([
-    readTab(from, CODES_SHEET),
-    readTab(from, META_SHEET),
+    readSheetTab(from, CODES_SHEET),
+    readSheetTab(from, META_SHEET),
   ]);
   const codesById = indexById(parseCsv(codesCsv).slice(1));
   const metaById = indexById(parseCsv(metaCsv).slice(1));
@@ -199,6 +185,19 @@ async function main(): Promise<void> {
         problems: [`the answer will not replay: ${(error as Error).message}`],
       });
     }
+  }
+
+  // An audit of nothing is a failure, not a pass. A renamed tab makes gviz
+  // answer 200 with the FIRST tab's CSV — well-formed CSV of the wrong data,
+  // which no guard in the reader can distinguish from the real thing. Every id
+  // then fails to parse, the loop never runs, and "0 BROKEN" is the most
+  // dangerous thing this tool could say: a green light on input it never read.
+  if (audits.length === 0) {
+    throw new Error(
+      "audited 0 puzzles — the sheet returned nothing this could read. Check that " +
+        `the tabs are still named "${TAB_OF[CODES_SHEET]}" and "${TAB_OF[META_SHEET]}", ` +
+        "and that the document is still shared with anyone who has the link.",
+    );
   }
 
   // The exit code is set before the early return, not after it: --json is the

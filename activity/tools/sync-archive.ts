@@ -42,10 +42,7 @@ import { upsertArchive, type SyncOutcome } from "../server/archive-rows";
 import type { ClearRequirement, Puzzle } from "../shared/puzzle";
 import { migrateArchive } from "../server/db";
 import { CODES_SHEET, META_SHEET, buildPuzzle, indexById } from "./decode-archive";
-import { parseCsv } from "./csv";
-
-/** The published sheet. Its id is not a secret; the document is world-readable. */
-const SHEET_ID = "1OUA3w3Q1OAajaNLlp74CwrZhnBKRbkeo4hYux_v94QM";
+import { readSheetTab, TAB_OF } from "./sheet";
 
 /**
  * How long to wait for another writer before giving up. Generous: the only
@@ -55,20 +52,8 @@ const SHEET_ID = "1OUA3w3Q1OAajaNLlp74CwrZhnBKRbkeo4hYux_v94QM";
  * Overridable so the test can hold a lock for less than ten seconds.
  */
 const BUSY_TIMEOUT_MS = Number(process.env.SYNC_BUSY_TIMEOUT_MS ?? 10_000);
+import { parseCsv } from "./csv";
 
-/** `gviz` exports one tab as CSV, addressed by tab name rather than by gid. */
-function tabUrl(tab: string): string {
-  return (
-    `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq` +
-    `?tqx=out:csv&sheet=${encodeURIComponent(tab)}`
-  );
-}
-
-/** The tab name behind each of the build script's two filenames. */
-const TAB_OF: Readonly<Record<string, string>> = {
-  [CODES_SHEET]: "blueprint urls",
-  [META_SHEET]: "Puzzles",
-};
 
 interface Options {
   dryRun: boolean;
@@ -104,28 +89,6 @@ function parseArgs(argv: readonly string[]): Options {
   return options;
 }
 
-async function fetchTab(sheet: string): Promise<string> {
-  const tab = TAB_OF[sheet];
-  if (!tab) throw new Error(`No tab known for ${sheet}`);
-  const response = await fetch(tabUrl(tab));
-  if (!response.ok) {
-    // A sheet that stops being publicly readable answers 200 with a sign-in
-    // page rather than 403, so the status alone is not enough — see below.
-    throw new Error(`Sheet tab "${tab}" answered ${response.status}`);
-  }
-  const body = await response.text();
-  if (body.trimStart().startsWith("<")) {
-    throw new Error(
-      `Sheet tab "${tab}" returned HTML, not CSV — the document is probably no ` +
-        "longer shared with anyone who has the link.",
-    );
-  }
-  return body;
-}
-
-async function readTab(options: Options, sheet: string): Promise<string> {
-  return options.from ? readFileSync(join(options.from, sheet), "utf8") : fetchTab(sheet);
-}
 
 interface Report {
   added: number[];
@@ -247,8 +210,8 @@ async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
 
   const [codesCsv, metaCsv] = await Promise.all([
-    readTab(options, CODES_SHEET),
-    readTab(options, META_SHEET),
+    readSheetTab(options.from, CODES_SHEET),
+    readSheetTab(options.from, META_SHEET),
   ]);
   const codesById = indexById(parseCsv(codesCsv).slice(1));
   const metaById = indexById(parseCsv(metaCsv).slice(1));
@@ -266,6 +229,17 @@ async function main(): Promise<void> {
     } catch (error) {
       report.failed.push({ id, reason: (error as Error).message });
     }
+  }
+
+  // Same reasoning as the audit: a renamed tab answers 200 with another tab's
+  // CSV, and every id then fails to parse. Syncing "nothing" over a live
+  // archive must not look like a successful no-op.
+  if (built.length === 0 && report.failed.length === 0) {
+    throw new Error(
+      "the sheet yielded no puzzles at all — nothing was read. Check that the tabs " +
+        `are still named "${TAB_OF[CODES_SHEET]}" and "${TAB_OF[META_SHEET]}", and ` +
+        "that the document is still shared with anyone who has the link.",
+    );
   }
 
   const db = new Database(options.db, { create: true });

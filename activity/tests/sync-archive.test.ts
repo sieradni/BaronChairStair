@@ -228,3 +228,28 @@ describe("when the database is busy", () => {
     }
   });
 });
+
+describe("when the sheet cannot be read", () => {
+  test("syncing nothing over a live archive is a failure, not a no-op", async () => {
+    // A renamed tab answers 200 with another tab's CSV: well-formed, and
+    // entirely the wrong data. Every id fails to parse, and without this guard
+    // the sync reports a clean "added 0, amended 0, unchanged 0".
+    const empty = join(dir, "wrong-tab");
+    cpSync(SHEET, empty, { recursive: true });
+    for (const name of [CODES, "Copy of Puzzles Archive - Puzzles.csv"]) {
+      writeFileSync(join(empty, name), "notes,about\nthis sheet,is documentation\n");
+    }
+
+    const proc = Bun.spawn(["bun", "run", TOOL, "--db", dbPath, "--from", empty], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [out, err] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+
+    expect(await proc.exited).not.toBe(0);
+    expect(out + err).toContain("no puzzles at all");
+  });
+});
