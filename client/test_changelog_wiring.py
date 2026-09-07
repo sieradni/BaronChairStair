@@ -250,14 +250,74 @@ class TheCommandActuallyCallsIt(unittest.TestCase):
         # the thing somebody asked for, and a failure to send it must not
         # displace the puzzle.
         #
-        # Anchored on the send that posts the puzzle — the one whose result is
-        # kept — rather than on the first `followup.send` in the text, which is
-        # the unreachable-server branch further up. Anchored there, this
-        # assertion passed however the two were ordered.
+        # Checked per call site rather than once. There are two now — the
+        # unreachable-server branch announces as well — and an assertion
+        # anchored on `body.index(...)` only ever saw the first, so adding the
+        # second silently moved what was being tested.
+        announces = [
+            i for i in range(len(body))
+            if body.startswith("_announce_new_version", i)
+            and body[i - 6:i] == "await "
+        ]
+        self.assertEqual(
+            len(announces), 2,
+            "expected /puzzle to announce on both the answered and the "
+            "unreachable-server path",
+        )
+        for at in announces:
+            before = body[:at]
+            self.assertIn(
+                "followup.send",
+                before,
+                "the changelog is being sent before the message it rides behind",
+            )
+            # And nothing else may sit between this announce and its send.
+            self.assertLess(
+                before.rindex("followup.send"),
+                at,
+                "the changelog is being sent before the message it rides behind",
+            )
+
+
+class WhenThePuzzleServerIsUnreachable(unittest.TestCase):
+    """
+    That an outage does not also swallow the changelog.
+
+    The announcement is about this bot's version, not the activity's health.
+    It used to sit only on the happy path, so for as long as `/api/today` was
+    unreachable — a dead tunnel, a stopped server — every `/puzzle` answered
+    with the fallback and nobody was ever told what had changed. The claim is
+    made at send time, so nothing was lost, only withheld for the length of the
+    outage.
+    """
+
+    def _command_source(self) -> str:
+        import pathlib
+
+        text = pathlib.Path(puzzle_commands.__file__).read_text()
+        start = text.index("async def puzzle_command(")
+        end = text.index("\ndef ", start)
+        return text[start:end]
+
+    def test_the_fallback_branch_still_announces(self):
+        body = self._command_source()
+        start = body.index("except (PuzzleServerUnavailable")
+        branch = body[start:body.index("embed = discord.Embed", start)]
+        self.assertIn(
+            "_announce_new_version",
+            branch,
+            "an unreachable puzzle server now also silences the changelog, so a "
+            "server hears nothing about a new build for the whole outage",
+        )
+
+    def test_it_announces_after_saying_the_puzzle_is_up(self):
+        body = self._command_source()
+        start = body.index("except (PuzzleServerUnavailable")
+        branch = body[start:body.index("embed = discord.Embed", start)]
         self.assertLess(
-            body.index("message = await interaction.followup.send"),
-            body.index("_announce_new_version"),
-            "the changelog is being sent before the puzzle it rides behind",
+            branch.index("followup.send"),
+            branch.index("_announce_new_version"),
+            "the changelog is jumping ahead of the launch link the player asked for",
         )
 
 
