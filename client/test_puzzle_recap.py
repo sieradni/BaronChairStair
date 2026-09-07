@@ -25,8 +25,28 @@ except ModuleNotFoundError as missing:  # pragma: no cover - depends on the envi
         raise
     puzzle_recap = None
 
+try:
+    import puzzle_commands
+except ModuleNotFoundError as missing:  # pragma: no cover - depends on the environment
+    if missing.name not in {"discord", "aiohttp", "dotenv"}:
+        raise
+    puzzle_commands = None
+
 needs_discord = unittest.skipUnless(
     puzzle_recap is not None, "discord.py is not installed; recap is not importable"
+)
+
+#: Importability is not enough here. `test_changelog_wiring` installs a stub
+#: `aiohttp` when the real one is missing, which makes `puzzle_commands` import
+#: cleanly on a bare box — but the stub carries none of the exception classes,
+#: and these tests are precisely about how the real ones behave. So the gate is
+#: whether the real module is present, not whether the import worked.
+_real_aiohttp = puzzle_commands is not None and hasattr(
+    puzzle_commands.aiohttp, "ClientConnectionError"
+)
+
+needs_commands = unittest.skipUnless(
+    _real_aiohttp, "the real aiohttp is not installed; its exceptions are what this checks"
 )
 
 
@@ -137,3 +157,70 @@ class RushAlignment(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+@needs_commands
+class WhenThePuzzleServerCannotBeReached(unittest.TestCase):
+    """That the log names the failure.
+
+    Seen in production: `puzzle /api/today failed:` with nothing after the
+    colon, which was the whole of what the bot said when it could not see the
+    activity. Four of the five exceptions the fetch catches stringify to the
+    empty string, so the one line written for this moment described nothing.
+    """
+
+    def written_for(self, error: Exception) -> str:
+        """What gets logged when the fetch raises `error`."""
+        import asyncio
+        import contextlib
+
+        class Session:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            def get(self, *args, **kwargs):
+                raise error
+
+        # `_get` returns before it ever opens a session when PUZZLE_API is
+        # unset, so without this the fake below is never reached and the
+        # assertion below has nothing to read.
+        real_base = puzzle_commands._api_base
+        puzzle_commands._api_base = lambda: "https://puzzle.invalid"
+        real = puzzle_commands.aiohttp.ClientSession
+        puzzle_commands.aiohttp.ClientSession = Session
+        try:
+            with self.assertLogs("puzzle_commands", level="WARNING") as logged:
+                with contextlib.suppress(puzzle_commands.PuzzleServerUnavailable):
+                    asyncio.run(puzzle_commands._get("/api/today"))
+            return "\n".join(logged.output)
+        finally:
+            puzzle_commands.aiohttp.ClientSession = real
+            puzzle_commands._api_base = real_base
+
+    def test_a_timeout_says_so_rather_than_stopping_at_the_colon(self):
+        written = self.written_for(TimeoutError())
+
+        self.assertIn("TimeoutError", written)
+        self.assertFalse(
+            written.rstrip().endswith("failed:"),
+            "the log stops at the colon, which is exactly what it did in production",
+        )
+
+    def test_a_connection_error_is_named_too(self):
+        self.assertIn(
+            "ClientConnectionError",
+            self.written_for(puzzle_commands.aiohttp.ClientConnectionError()),
+        )
+
+    def test_an_error_that_does_carry_a_message_still_shows_it(self):
+        written = self.written_for(puzzle_commands.aiohttp.ServerDisconnectedError())
+
+        self.assertIn("ServerDisconnectedError", written)
+        self.assertIn("Server disconnected", written)

@@ -117,7 +117,17 @@ async def _get(path: str, *, api_key: str | None = None) -> dict:
                         "Couldn't reach the puzzle server. Try again in a minute.")
                 return await response.json(content_type=None)
     except (aiohttp.ClientError, TimeoutError) as exc:
-        log.warning("puzzle %s failed: %s", path, exc)
+        # The type as well as the message, because the message is usually empty.
+        # Four of the five exceptions caught here -- ClientConnectionError,
+        # ClientOSError, ClientPayloadError and TimeoutError -- stringify to ""
+        # (ServerDisconnectedError is the exception), so this line read
+        #
+        #     puzzle /api/today failed:
+        #
+        # and stopped. That is the line somebody reads when the bot cannot see
+        # the activity, and it named neither the cause nor even that there was
+        # one. Seen in production on 2026-09-07.
+        log.warning("puzzle %s failed: %s: %s", path, type(exc).__name__, exc)
         raise PuzzleServerUnavailable(
             "Couldn't reach the puzzle server. Try again in a minute.") from exc
 
