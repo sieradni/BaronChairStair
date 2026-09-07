@@ -104,6 +104,26 @@ import changelog  # noqa: E402
 import puzzle_commands  # noqa: E402
 
 
+class FailedResponse:
+    """The bare minimum `discord.HTTPException` needs to be constructible.
+
+    Which class that is depends on the box. `_install_stubs` above leaves the
+    real `discord.py` alone when it is installed, so on the bot's own machine
+    this exception is `discord.errors.HTTPException` — and its constructor reads
+    `response.status` outright, then formats `'{0.status} {0.reason}'`. Both, not
+    just the first: fixing only `status` moves the failure one line down.
+
+    This used to be `object()`, which has neither, so these tests errored on
+    every machine with the bot's dependencies installed and passed everywhere
+    else. The stub's own `HTTPException` carries a comment warning about exactly
+    that asymmetry; the fake that raised it did the thing the comment warned
+    against.
+    """
+
+    status = 500
+    reason = "Internal Server Error"
+
+
 class Followup:
     """Records what the command tried to send."""
 
@@ -113,7 +133,7 @@ class Followup:
 
     async def send(self, content=None, **kwargs):
         if self.explode:
-            raise sys.modules["discord"].HTTPException(object(), "nope")
+            raise sys.modules["discord"].HTTPException(FailedResponse(), "nope")
         self.sent.append({"content": content, **kwargs})
         return object()
 
