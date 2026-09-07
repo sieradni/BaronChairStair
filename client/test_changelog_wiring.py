@@ -188,12 +188,24 @@ class Announcing(unittest.TestCase):
     def test_a_send_that_fails_does_not_take_the_command_down(self):
         # `/puzzle` has already answered by this point. Raising here would cost
         # the player the thing they actually asked for.
-        self.announce(followup=Followup(explode=True))
+        #
+        # Wrapped in assertLogs for two reasons. It asserts the failure is
+        # actually reported rather than swallowed in silence — a bare `except`
+        # that logged nothing would pass this test without it. And it captures
+        # the record instead of letting it reach the root handler, which was
+        # printing a full traceback into the output of a passing run: a deploy
+        # check that looks red while reporting OK is a check people stop reading.
+        with self.assertLogs("puzzle_commands", level="WARNING") as logged:
+            self.announce(followup=Followup(explode=True))
+
+        self.assertIn("could not post the changelog", logged.output[0])
 
     def test_a_send_that_fails_is_not_retried_into_a_double_post(self):
         # The claim is taken before the send, deliberately: losing one
         # announcement is better than posting it twice.
-        self.announce(followup=Followup(explode=True))
+        with self.assertLogs("puzzle_commands", level="WARNING"):
+            self.announce(followup=Followup(explode=True))
+
         self.assertEqual(self.announce().sent, [])
 
 
