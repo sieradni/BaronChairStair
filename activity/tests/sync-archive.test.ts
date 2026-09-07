@@ -18,6 +18,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { archiveCounts, archiveEntry, publishArchive } from "../server/archive-rows";
+import { ARCHIVE_SCHEMA } from "../server/db";
 
 const TOOL = resolve(import.meta.dir, "../tools/sync-archive.ts");
 const SHEET = resolve(import.meta.dir, "fixtures/archive-sheet");
@@ -151,6 +152,56 @@ describe("when a published puzzle's content moves", () => {
       expect(archiveEntry(after, 1)!.contentHash).not.toBe(before);
     } finally {
       after.close();
+    }
+  });
+});
+
+describe("when the database is busy", () => {
+  /**
+   * The failure this guards is not the lost write — it is the *label* on it.
+   * A first version funnelled every error into the same list as a puzzle whose
+   * answer would not replay, so a locked database read as "these 148 puzzles
+   * are broken", blamed the makers for the server being busy, and exited 0.
+   */
+  test("says the write failed, and does not call it a broken puzzle", async () => {
+    // Create the schema, then take the write lock and hold it.
+    const seed = new Database(dbPath, { create: true });
+    seed.run(ARCHIVE_SCHEMA);
+    seed.run("BEGIN IMMEDIATE");
+    seed.run(
+      `INSERT INTO archive_puzzles (id, title, author, difficulty, goal, set_name, board,
+        queue, hold, target_attack, solution, required_clears, source_puzzle, source_solution,
+        content_hash, synced_at, published_at, published_by)
+       VALUES (9001,'x','x',1,'x',NULL,'[]','[]',NULL,1,'[]',NULL,'','','h',1,NULL,NULL)`,
+    );
+
+    try {
+      const proc = Bun.spawn(
+        ["bun", "run", TOOL, "--db", dbPath, "--from", SHEET],
+        { stdout: "pipe", stderr: "pipe", env: { ...process.env, SYNC_BUSY_TIMEOUT_MS: "150" } },
+      );
+      const out = await new Response(proc.stdout).text();
+      const code = await proc.exited;
+
+      expect(out).toContain("could NOT BE WRITTEN");
+      expect(out).toContain("database problem, not a puzzle problem");
+
+      // The point of the test: which SECTION each id lands in. A lock error
+      // must be under the write failures, and only the genuinely unreplayable
+      // puzzle under "would not replay".
+      const replaySection = out.slice(
+        out.indexOf("would not replay"),
+        out.indexOf("could NOT BE WRITTEN"),
+      );
+      const writeSection = out.slice(out.indexOf("could NOT BE WRITTEN"));
+      expect(replaySection).not.toContain("database is locked");
+      expect(replaySection).toContain("#13");
+      expect(writeSection).toContain("#1: database is locked");
+      expect(writeSection).toContain("#2: database is locked");
+      expect(code).toBe(1);
+    } finally {
+      seed.run("ROLLBACK");
+      seed.close();
     }
   });
 });

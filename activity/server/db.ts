@@ -186,6 +186,73 @@ interface RunRow {
   created_at: number;
 }
 
+/**
+ * The archive table, on its own so `tools/sync-archive.ts` can create it without
+ * constructing a `Store`.
+ *
+ * That matters for the reason `tools/review-link.ts` gives: constructing a Store
+ * runs the whole SCHEMA plus the `addSlotsToRuns` DROP/copy/rename rebuild, and a
+ * one-off command that can take the server's database down is not a one-off
+ * command. The sync needs exactly this one table and nothing else.
+ */
+export const ARCHIVE_SCHEMA = `
+-- The club's puzzle archive, synced from the Google Sheet by
+-- tools/sync-archive.ts. Queries live in server/archive-rows.ts, which says
+-- why a row is not playable the moment it is written.
+--
+-- Everything here is DERIVED from the two blueprint codes in source_puzzle and
+-- source_solution, by the same decode-and-replay the build script runs. In
+-- particular target_attack is what the author's answer actually sends when
+-- replayed through the real engine, never a number off the spreadsheet: a
+-- puzzle with no verified target is one nobody can be scored against.
+--
+-- A synced row is NOT playable until published_at is set. The boot read filters
+-- on it in SQL rather than after loading, because PuzzleArchive.load runs at
+-- module scope and throws -- one malformed unpublished row reaching it takes
+-- the server down for every player, with no route left to fix it from.
+CREATE TABLE IF NOT EXISTS archive_puzzles (
+  -- The sheet's own id. Constrained below the community band because that band
+  -- is the only record of where a puzzle came from: toListing reads
+  -- \`id >= COMMUNITY_ID_BASE\` to decide whether to show a puzzle as the
+  -- club's or a player's, and PuzzleArchive throws at boot if the two collide.
+  id               INTEGER PRIMARY KEY CHECK (id > 0 AND id < 100000),
+  title            TEXT NOT NULL,
+  author           TEXT NOT NULL,
+  difficulty       REAL NOT NULL,
+  goal             TEXT NOT NULL,
+  set_name         TEXT,
+  board            TEXT NOT NULL,   -- JSON RowCode[]
+  queue            TEXT NOT NULL,   -- JSON Mino[]
+  hold             TEXT,
+  target_attack    INTEGER NOT NULL CHECK (target_attack > 0),
+  solution         TEXT NOT NULL,   -- JSON SolutionStep[]
+  -- JSON ClearRequirement[], or NULL. Carried across a re-sync rather than
+  -- re-derived, exactly as the build script carries it between runs: it is a
+  -- decision somebody made about what the goal means, not a fact about the
+  -- board, and re-deriving it would quietly un-enforce it.
+  required_clears  TEXT,
+  source_puzzle    TEXT NOT NULL,
+  source_solution  TEXT NOT NULL,
+  -- Fingerprint of the fields that decide how the puzzle PLAYS -- board, queue,
+  -- hold, target and answer. Sheet ids are reused: a row can keep its number
+  -- while becoming a different puzzle underneath, which has already happened
+  -- to #8. runs and day_puzzles reference a puzzle by id and store no copy of
+  -- what was played, so this column is the only way a re-sync can notice that
+  -- a published puzzle's content moved.
+  content_hash     TEXT NOT NULL,
+  synced_at        INTEGER NOT NULL,
+  -- NULL until an officer publishes it. Timestamp and name rather than a
+  -- boolean, to match reviewed_at/reviewed_by and updated_by elsewhere: every
+  -- other decision in this database records who made it.
+  published_at     INTEGER,
+  published_by     TEXT
+);
+
+-- The boot read: what players may be served, in id order.
+CREATE INDEX IF NOT EXISTS archive_published
+  ON archive_puzzles (published_at) WHERE published_at IS NOT NULL;
+`;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS players (
   id          TEXT PRIMARY KEY,
@@ -444,61 +511,7 @@ CREATE TABLE IF NOT EXISTS puzzle_override_log (
 CREATE INDEX IF NOT EXISTS puzzle_override_log_puzzle
   ON puzzle_override_log (puzzle_id, entry_id);
 
--- The club's puzzle archive, synced from the Google Sheet by
--- tools/sync-archive.ts. Queries live in server/archive-rows.ts, which says
--- why a row is not playable the moment it is written.
---
--- Everything here is DERIVED from the two blueprint codes in source_puzzle and
--- source_solution, by the same decode-and-replay the build script runs. In
--- particular target_attack is what the author's answer actually sends when
--- replayed through the real engine, never a number off the spreadsheet: a
--- puzzle with no verified target is one nobody can be scored against.
---
--- A synced row is NOT playable until published_at is set. The boot read filters
--- on it in SQL rather than after loading, because PuzzleArchive.load runs at
--- module scope and throws -- one malformed unpublished row reaching it takes
--- the server down for every player, with no route left to fix it from.
-CREATE TABLE IF NOT EXISTS archive_puzzles (
-  -- The sheet's own id. Constrained below the community band because that band
-  -- is the only record of where a puzzle came from: toListing reads
-  -- \`id >= COMMUNITY_ID_BASE\` to decide whether to show a puzzle as the
-  -- club's or a player's, and PuzzleArchive throws at boot if the two collide.
-  id               INTEGER PRIMARY KEY CHECK (id > 0 AND id < 100000),
-  title            TEXT NOT NULL,
-  author           TEXT NOT NULL,
-  difficulty       REAL NOT NULL,
-  goal             TEXT NOT NULL,
-  set_name         TEXT,
-  board            TEXT NOT NULL,   -- JSON RowCode[]
-  queue            TEXT NOT NULL,   -- JSON Mino[]
-  hold             TEXT,
-  target_attack    INTEGER NOT NULL CHECK (target_attack > 0),
-  solution         TEXT NOT NULL,   -- JSON SolutionStep[]
-  -- JSON ClearRequirement[], or NULL. Carried across a re-sync rather than
-  -- re-derived, exactly as the build script carries it between runs: it is a
-  -- decision somebody made about what the goal means, not a fact about the
-  -- board, and re-deriving it would quietly un-enforce it.
-  required_clears  TEXT,
-  source_puzzle    TEXT NOT NULL,
-  source_solution  TEXT NOT NULL,
-  -- Fingerprint of the fields that decide how the puzzle PLAYS -- board, queue,
-  -- hold, target and answer. Sheet ids are reused: a row can keep its number
-  -- while becoming a different puzzle underneath, which has already happened
-  -- to #8. runs and day_puzzles reference a puzzle by id and store no copy of
-  -- what was played, so this column is the only way a re-sync can notice that
-  -- a published puzzle's content moved.
-  content_hash     TEXT NOT NULL,
-  synced_at        INTEGER NOT NULL,
-  -- NULL until an officer publishes it. Timestamp and name rather than a
-  -- boolean, to match reviewed_at/reviewed_by and updated_by elsewhere: every
-  -- other decision in this database records who made it.
-  published_at     INTEGER,
-  published_by     TEXT
-);
-
--- The boot read: what players may be served, in id order.
-CREATE INDEX IF NOT EXISTS archive_published
-  ON archive_puzzles (published_at) WHERE published_at IS NOT NULL;
+${ARCHIVE_SCHEMA}
 
 `;
 
