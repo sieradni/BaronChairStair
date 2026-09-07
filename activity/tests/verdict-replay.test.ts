@@ -161,7 +161,10 @@ describe("a replay cannot become a scored run", () => {
     // filed run's openedAt and restart tally and the practice card reports a
     // time nobody played.
     expect(
-      /sittings\.delete\(/.test(replay),
+      // Matches either name: the store moved from a Map to localStorage when a
+      // player reported that closing the panel restarted the clock, and
+      // `delete` became `forget`. The property is the same one either way.
+      /sittings\.(delete|forget)\(/.test(replay),
       "replaySheet must clear this puzzle's sitting, or the replay inherits the\n" +
         "clock and restart tally of the run already filed against it.",
     ).toBe(true);
