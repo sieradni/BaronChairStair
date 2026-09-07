@@ -41,6 +41,7 @@ import { createExplorer } from "./ui/explorer";
 import { createBuilder, type Builder } from "./ui/builder";
 import type { SubmissionVerdict } from "./ui/builder-submit";
 import type { SubmissionBody } from "./ui/builder-state";
+import { createSittings, type Sittings } from "./sittings";
 import { createStartedPuzzles, type StartedPuzzles } from "./started";
 import { lockedPuzzleIds } from "./daily-lock";
 import { DuelClient } from "./game/duel";
@@ -205,10 +206,18 @@ export class App {
     null;
   private runningPuzzleId: number | null = null;
   /**
-   * How long each puzzle has been open and how many restarts it has taken, kept
-   * per puzzle so a detour into practice cannot reset the daily's numbers.
+   * How long each puzzle has been open and how many restarts it has taken,
+   * kept per puzzle so a detour into practice cannot reset the daily's
+   * numbers — and in `localStorage`, so closing the panel cannot either.
+   *
+   * It was a `Map` field, which carried the clock across restarts and across
+   * practice detours but not across the panel closing. A Discord activity is
+   * closed and reopened constantly, and each reopen built a new app with an
+   * empty map, so the clock started again from zero: struggle for ten
+   * minutes, reopen, solve in thirty seconds, and the board — sorted
+   * ascending on `total_ms` — filed thirty seconds. Reported by a player.
    */
-  private readonly sittings = new Map<number, { openedAt: number; resets: number }>();
+  private readonly sittings: Sittings;
   /**
    * Which of the day's three this player has opened, across sessions.
    *
@@ -228,6 +237,7 @@ export class App {
     private readonly settings: SettingsStore,
   ) {
     this.started = createStartedPuzzles(connection.player.id);
+    this.sittings = createSittings(connection.player.id);
     this.input = new InputRouter(settings.value.keybinds, {
       onGameKey: (key, down) => {
         if (this.mode === "duel") this.duel?.input(key, down);
@@ -519,7 +529,7 @@ export class App {
     //
     // Safe to drop precisely here, and nowhere else: this puzzle's scored run
     // is already filed, so there is no longer a time for the tally to protect.
-    this.sittings.delete(id);
+    this.sittings.forget(id);
     await this.openArchivePuzzle(id);
   }
 
@@ -1241,14 +1251,16 @@ export class App {
     // last. Keyed on the previous run alone, wandering off to a practice puzzle
     // and back would hand the daily a fresh clock and a zeroed tally — which is
     // a free place at the top of a leaderboard sorted by time.
-    const history = this.sittings.get(sheet.puzzle.id) ?? { openedAt: Date.now(), resets: 0 };
+    // `open` never moves an existing clock forward, so this is also what
+    // resumes one after the panel was closed and reopened.
+    const history = this.sittings.open(this.daily?.day ?? 0, sheet.puzzle.id);
     const previous = this.run?.snapshot();
     const resumingSame = previous !== undefined && this.runningPuzzleId === sheet.puzzle.id;
     // Running out of pieces and starting over counts the same as pressing R.
     const carriedResets = resumingSame
       ? previous.resets + (previous.phase === "failed" ? 1 : 0)
       : history.resets;
-    this.sittings.set(sheet.puzzle.id, { openedAt: history.openedAt, resets: carriedResets });
+    this.sittings.record(this.daily?.day ?? 0, sheet.puzzle.id, carriedResets);
     this.sheetOpenedAt = history.openedAt;
 
     this.runningPuzzleId = sheet.puzzle.id;
