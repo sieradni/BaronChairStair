@@ -529,7 +529,7 @@ export class App {
     //
     // Safe to drop precisely here, and nowhere else: this puzzle's scored run
     // is already filed, so there is no longer a time for the tally to protect.
-    this.sittings.forget(id);
+    this.sittings.forget(this.daily?.day ?? 0, id);
     await this.openArchivePuzzle(id);
   }
 

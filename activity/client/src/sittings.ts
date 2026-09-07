@@ -57,8 +57,16 @@ export interface Sittings {
   open(day: number, puzzleId: number, now?: number): Sitting;
   /** Records the tally after an attempt. Keeps whatever `openedAt` it had. */
   record(day: number, puzzleId: number, resets: number): void;
-  /** Forgets one, so a replay or a fresh look starts its own clock. */
-  forget(puzzleId: number): void;
+  /**
+   * Forgets one, so a replay or a fresh look starts its own clock.
+   *
+   * Takes the day for the same reason `open` and `record` do: it has to read
+   * storage before it can remove anything. Without that it could only forget a
+   * sitting this app instance had already touched — and the replay path runs
+   * before any of them, so after the panel was reopened it removed nothing and
+   * the replay inherited the filed run's clock and restart tally.
+   */
+  forget(day: number, puzzleId: number): void;
 }
 
 function read(key: string, day: number): Record<string, Sitting> {
@@ -133,11 +141,11 @@ export function createSittings(playerId: string): Sittings {
       current.sittings[String(puzzleId)] = { openedAt: existing.openedAt, resets };
       save(day);
     },
-    forget(puzzleId) {
-      if (!today) return;
-      if (!(String(puzzleId) in today.sittings)) return;
-      delete today.sittings[String(puzzleId)];
-      save(today.day);
+    forget(day, puzzleId) {
+      const current = state(day);
+      if (!(String(puzzleId) in current.sittings)) return;
+      delete current.sittings[String(puzzleId)];
+      save(day);
     },
   };
 }

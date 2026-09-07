@@ -85,9 +85,30 @@ describe("what still gets its own clock", () => {
     const sittings = createSittings(PLAYER);
     sittings.open(DAY, PUZZLE, 1_000);
 
-    sittings.forget(PUZZLE);
+    sittings.forget(DAY, PUZZLE);
 
     expect(sittings.open(DAY, PUZZLE, 9_000).openedAt).toBe(9_000);
+  });
+
+  test("one forgotten by a store that has not read storage yet", () => {
+    // The regression this pins, and it only appears after a reopen. `forget`
+    // used to read the in-memory cache, which is empty until the first `open`
+    // — and the replay path calls `forget` before any of them. So on a fresh
+    // app it removed nothing, and replaying a solved daily inherited the filed
+    // run's clock and restart tally: a two-minute replay reported as thirty.
+    //
+    // On `main` this path was safe by accident, because a new app meant an
+    // empty Map. Fixing the daily's clock is what put it at risk.
+    const first = createSittings(PLAYER);
+    first.open(DAY, PUZZLE, 0);
+    first.record(DAY, PUZZLE, 3);
+
+    const reopened = createSittings(PLAYER);
+    reopened.forget(DAY, PUZZLE);
+    const replay = reopened.open(DAY, PUZZLE, 600_000);
+
+    expect(replay.openedAt).toBe(600_000);
+    expect(replay.resets).toBe(0);
   });
 });
 
