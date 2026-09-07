@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "sync-archive": "bun run tools/sync-archive.ts",
-    "audit-archive": "bun run tools/audit-archive.ts"
+    "audit-archive": "bun run tools/audit-archive.ts",
+    "publish-archive": "bun run tools/publish-archive.ts"
   },
   "dependencies": {
     "@discord/embedded-app-sdk": "^2.1.0",

@@ -43,6 +43,7 @@ const ENGINE_ROWS = 40;
 const FRAMES_PER_INPUT = 2;
 
 import { archive as puzzles, hasSolutions, solutionOf } from "./archive";
+import { archiveMetaOf } from "../tools/decode-archive";
 
 function setupFor(puzzle: Puzzle) {
   return {
@@ -290,5 +291,26 @@ describe("the body the builder compiles", () => {
 
     expect(submitBlocker(draft, solve)).not.toBeNull();
     expect(() => readBoardShape(toSubmission(draft, solve))).toThrow();
+  });
+});
+
+describe("the sheet's dates", () => {
+  test("become ISO, because the website stores ISO", () => {
+    // The sheet writes M/D/YY. Every consumer wanting a different format is a
+    // consumer keeping its own copy, which is what the data layer removes.
+    expect(archiveMetaOf(["1", "t", "5", "a", "4/3/26", "", "", "set", "9"]).addedOn)
+      .toBe("2026-04-03");
+    expect(archiveMetaOf(["1", "t", "5", "a", "12/25/2026", "", "", "s", "0"]).addedOn)
+      .toBe("2026-12-25");
+  });
+
+  test("a date nobody can parse is passed through, not guessed at", () => {
+    expect(archiveMetaOf(["1", "t", "5", "a", "sometime in spring", "", "", "s", ""]).addedOn)
+      .toBe("sometime in spring");
+  });
+
+  test("an empty cell is null rather than an empty string", () => {
+    expect(archiveMetaOf(["1", "t", "5", "a", "  ", "", "", "s", "x"]).addedOn).toBeNull();
+    expect(archiveMetaOf(["1", "t", "5", "a", "  ", "", "", "s", "x"]).solveCount).toBeNull();
   });
 });

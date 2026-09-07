@@ -27,11 +27,12 @@
 import type { Database } from "bun:sqlite";
 import type { ClearRequirement, Mino, Puzzle, RowCode, SolutionStep } from "../shared/puzzle";
 import { clearShortfall, COMMUNITY_ID_BASE } from "../shared/puzzle";
+import type { ArchiveMeta } from "../tools/decode-archive";
 
 const COLUMNS = `
   id, title, author, difficulty, goal, set_name, board, queue, hold,
   target_attack, solution, required_clears, source_puzzle, source_solution,
-  content_hash, synced_at, published_at, published_by
+  content_hash, synced_at, published_at, published_by, added_on, solve_count
 `;
 
 interface ArchiveRow {
@@ -53,6 +54,8 @@ interface ArchiveRow {
   synced_at: number;
   published_at: number | null;
   published_by: string | null;
+  added_on: string | null;
+  solve_count: number | null;
 }
 
 /** A row's publication state, for the review tool and the sync report. */
@@ -62,6 +65,9 @@ export interface ArchiveEntry {
   readonly syncedAt: number;
   readonly publishedAt: number | null;
   readonly publishedBy: string | null;
+  /** The club's own bookkeeping: not gameplay, but what downstream shows. */
+  readonly addedOn: string | null;
+  readonly solveCount: number | null;
 }
 
 /**
@@ -123,6 +129,8 @@ function toEntry(row: ArchiveRow): ArchiveEntry {
     syncedAt: row.synced_at,
     publishedAt: row.published_at,
     publishedBy: row.published_by,
+    addedOn: row.added_on,
+    solveCount: row.solve_count,
   };
 }
 
@@ -142,6 +150,25 @@ export function readPublishedArchive(db: Database): Puzzle[] {
     )
     .all()
     .map(toPuzzle);
+}
+
+/**
+ * Published rows as full entries, in id order.
+ *
+ * Beside {@link readPublishedArchive} rather than replacing it: that one
+ * returns `Puzzle`s and is what feeds the archive the game plays from, which
+ * has no business knowing when a puzzle was added or how many people the club
+ * says solved it. This one is for consumers that show the club's record.
+ */
+export function publishedEntries(db: Database): ArchiveEntry[] {
+  return db
+    .query<ArchiveRow, []>(
+      `SELECT ${COLUMNS} FROM archive_puzzles
+        WHERE published_at IS NOT NULL
+        ORDER BY id ASC`,
+    )
+    .all()
+    .map(toEntry);
 }
 
 /** Everything synced but not yet published — the officer's queue. */
@@ -403,6 +430,7 @@ export function upsertArchive(
   puzzle: Puzzle,
   now: number,
   by = "sync-archive",
+  meta?: ArchiveMeta,
 ): SyncOutcome {
   if (puzzle.id <= 0 || puzzle.id >= COMMUNITY_ID_BASE) {
     throw new RangeError(
@@ -417,7 +445,8 @@ export function upsertArchive(
   if (!existing) {
     db.run(
       `INSERT INTO archive_puzzles (${COLUMNS})
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, NULL, NULL)`,
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+               NULL, NULL, ?17, ?18)`,
       [
         puzzle.id,
         puzzle.title,
@@ -435,6 +464,8 @@ export function upsertArchive(
         puzzle.source?.solution ?? "",
         incoming,
         now,
+        meta?.addedOn ?? null,
+        meta?.solveCount ?? null,
       ],
     );
     return { kind: "added" };
@@ -442,7 +473,18 @@ export function upsertArchive(
 
   const contentMoved = existing.contentHash !== incoming;
   const fields = movedMetadata(existing.puzzle, puzzle);
-  if (!contentMoved && fields.length === 0) return { kind: "unchanged" };
+  // The two archive columns count as movement too. Without this a row inserted
+  // before they existed stays NULL forever: the sheet has not changed, so the
+  // hash and the five metadata fields all match, and the early return skips
+  // the UPDATE that would have filled them in. Caught by an upgraded database
+  // reporting 153 unchanged and 0 with a date.
+  const bookkeepingMoved =
+    meta !== undefined &&
+    ((meta.addedOn !== null && meta.addedOn !== existing.addedOn) ||
+      (meta.solveCount !== null && meta.solveCount !== existing.solveCount));
+  if (!contentMoved && fields.length === 0 && !bookkeepingMoved) {
+    return { kind: "unchanged" };
+  }
 
   // Everything below has to be decided BEFORE the UPDATE: it is the write that
   // destroys the evidence.
@@ -475,7 +517,8 @@ export function upsertArchive(
         SET title = ?2, author = ?3, difficulty = ?4, goal = ?5, set_name = ?6,
             board = ?7, queue = ?8, hold = ?9, target_attack = ?10,
             solution = ?11, source_puzzle = ?12, source_solution = ?13,
-            content_hash = ?14, synced_at = ?15
+            content_hash = ?14, synced_at = ?15,
+            added_on = COALESCE(?16, added_on), solve_count = COALESCE(?17, solve_count)
       WHERE id = ?1`,
     [
       puzzle.id,
@@ -493,12 +536,17 @@ export function upsertArchive(
       puzzle.source?.solution ?? "",
       incoming,
       now,
+      meta?.addedOn ?? null,
+      meta?.solveCount ?? null,
     ],
   );
-  if (!contentMoved) return { kind: "amended", fields };
+  // Named, so a sync that only backfills the two archive columns does not
+  // print a puzzle id with an empty list beside it.
+  const moved = bookkeepingMoved ? [...fields, "archive metadata"] : fields;
+  if (!contentMoved) return { kind: "amended", fields: moved };
   if (existing.publishedAt === null) {
     // Not playable yet, so nobody can have a score against the old content.
-    return { kind: "amended", fields: [...fields, "content"] };
+    return { kind: "amended", fields: [...moved, "content"] };
   }
   // Last, after every write that can throw. See voidDiscoveries.
   if (solutionsVoided) voidDiscoveries(db, puzzle.id);

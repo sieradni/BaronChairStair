@@ -61,6 +61,7 @@ import {
   type Variables,
 } from "./http";
 import { registerReviewRoutes } from "./review-routes";
+import { registerPublicRoutes, PUBLIC_PREFIX } from "./public-routes";
 import { registerStaticRoutes } from "./static-routes";
 import { registerSubmissionRoutes } from "./submission-routes";
 import {
@@ -167,7 +168,27 @@ app.use("/api/review/session", rateLimit({ max: 10, windowMs: MINUTE }, callerKe
 // — behind a reviewer token rather than open, but a queue nobody clears at
 // thirty a minute is not a queue anybody is reading.
 app.use("/api/review/submissions/*", rateLimit({ max: 30, windowMs: MINUTE }, callerKey));
-app.use("/api/*", rateLimit({ max: 240, windowMs: MINUTE }, callerKey));
+// The public archive gets its own budget, in its own key space.
+//
+// Both halves of that matter, and the first version of this had neither. Hono
+// runs *every* matching middleware, so a `/api/*` limiter also covers
+// `/api/public` — which meant the 600 below was unreachable (the 240 tripped
+// first, measured at request 241) and, worse, that a stranger reading puzzles
+// spent the same bucket the game uses. Behind cloudflared with `TRUST_PROXY`
+// unset every caller collapses to one key, so that was one anonymous reader
+// away from players getting 429 on sign-in and run submission.
+//
+// So the key is prefixed, making it a genuinely separate bucket, and the
+// blanket limiter below steps aside for this prefix rather than double-counting
+// it.
+const publicKey = (c: Parameters<typeof callerKey>[0]) => `public:${callerKey(c)}`;
+app.use(`${PUBLIC_PREFIX}/*`, rateLimit({ max: 600, windowMs: MINUTE }, publicKey));
+
+const gameLimit = rateLimit({ max: 240, windowMs: MINUTE }, callerKey);
+app.use("/api/*", async (c, next) => {
+  if (c.req.path.startsWith(PUBLIC_PREFIX)) return next();
+  return gameLimit(c, next);
+});
 
 app.onError(apiError);
 
@@ -920,6 +941,11 @@ app.get("/api/rush/leaderboard", requireSession, (c) => {
  */
 registerSubmissionRoutes(app, store);
 registerReviewRoutes(app, { secret: config.reviewSecret, store, archive });
+// The archive, for anybody. The one prefix in this server with CORS, and the
+// one that serves answers — both explained in the module. It reads the same
+// database the rest of the server writes, but through a handle that can only
+// reach two tables' worth of queries.
+registerPublicRoutes(app, store.archiveReader);
 
 // ── Static client ────────────────────────────────────────────────────────────
 
