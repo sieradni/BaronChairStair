@@ -15,8 +15,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { BlueprintDecodeError, decodeBlueprint } from "../shared/blueprint/decode";
-import { pieceCells, type Playfield } from "../shared/blueprint/playfield";
+import { BlueprintDecodeError } from "../shared/blueprint/decode";
 import {
   type BoardCell,
   type ClearRequirement,
@@ -25,13 +24,15 @@ import {
   type Puzzle,
   type SolutionStep,
 } from "../shared/puzzle";
-import { DEFAULT_HANDLING } from "../shared/tetris/handling";
-import { replayPlacements } from "../shared/tetris/replay";
-import { alignPlacements } from "./align-placements";
 import { parseCsv } from "./csv";
+import {
+  buildPuzzle,
+  type BuildFailure,
+  CODES_SHEET,
+  indexById,
+  META_SHEET,
+} from "./decode-archive";
 
-const CODES_SHEET = "Copy of Puzzles Archive - blueprint urls.csv";
-const META_SHEET = "Copy of Puzzles Archive - Puzzles.csv";
 
 interface CliOptions {
   archive: string;
@@ -85,103 +86,6 @@ function existingRequirements(path: string): Map<number, ClearRequirement[]> {
   }
 }
 
-/** Row lookup keyed by puzzle id, tolerating the archive's stray whitespace. */
-function indexById(rows: string[][]): Map<number, string[]> {
-  const byId = new Map<number, string[]>();
-  for (const row of rows) {
-    const id = Number.parseInt(row[0]?.trim() ?? "", 10);
-    if (Number.isFinite(id)) byId.set(id, row.map((cell) => cell.trim()));
-  }
-  return byId;
-}
-
-function toBoardCells(playfield: Playfield): BoardCell[][] {
-  return playfield.toRows(playfield.stackHeight).map((row) =>
-    row.map((cell) => {
-      if (cell === null) return null;
-      // 'u' marks the wall outside the field and never appears inside a puzzle.
-      return cell === "g" ? "G" : cell === "u" ? null : (cell as Mino);
-    }),
-  );
-}
-
-interface DecodedPosition {
-  board: BoardCell[][];
-  queue: Mino[];
-  hold: Mino | null;
-  goal: string;
-}
-
-function decodePosition(code: string): DecodedPosition {
-  const page = decodeBlueprint(code).pages[0];
-  if (!page) throw new Error("Blueprint decoded to no pages");
-  if (!page.piece) throw new Error("Position has no active piece to start from");
-  return {
-    board: toBoardCells(page.playfield),
-    queue: [page.piece.type, ...page.queue.previews],
-    hold: page.queue.hold,
-    goal: page.comment.trim(),
-  };
-}
-
-/** Only locked pages are placements; the rest are editor snapshots. */
-function decodeAnswerPlacements(code: string) {
-  return decodeBlueprint(code)
-    .pages.filter((page) => page.locked && page.piece !== null)
-    .map((page) => ({
-      piece: page.piece!.type,
-      cells: pieceCells(page.piece!).map(({ x, y }) => [x, y] as const),
-    }));
-}
-
-interface BuildFailure {
-  id: number;
-  reason: string;
-}
-
-function buildPuzzle(
-  id: number,
-  codes: string[],
-  meta: string[] | undefined,
-): Puzzle {
-  const position = decodePosition(codes[1] ?? "");
-  const answerCode = codes[2] ?? "";
-  if (!answerCode) throw new Error("No answer blueprint on file");
-
-  const recorded = decodeAnswerPlacements(answerCode);
-  if (recorded.length === 0) throw new Error("Answer blueprint places no pieces");
-  const placements = alignPlacements(recorded, position.queue, position.hold);
-  if (placements.length === 0) {
-    throw new Error("No placement in the answer can be reached with the puzzle's pieces");
-  }
-
-  const setup = { board: position.board, queue: position.queue, hold: position.hold };
-  const replay = replayPlacements(setup, DEFAULT_HANDLING, placements);
-  if (replay.totalAttack === 0) throw new Error("Answer sends no attack — nothing to score");
-
-  const solution: SolutionStep[] = replay.steps.map((step) => ({
-    piece: step.piece,
-    cells: step.cells.map(([x, y]) => [x, y] as const),
-    clear: step.clear,
-    attack: step.attack,
-  }));
-
-  const difficulty = Number.parseFloat(meta?.[2] ?? "");
-  return {
-    id,
-    title: (meta?.[1] || codes[4] || `Puzzle ${id}`).trim(),
-    author: (meta?.[3] || "unknown").trim(),
-    difficulty: Number.isFinite(difficulty) ? difficulty : 0,
-    goal: position.goal,
-    set: meta?.[7]?.trim() || null,
-    board: encodeBoard(position.board),
-    queue: position.queue,
-    hold: position.hold,
-    targetAttack: replay.totalAttack,
-    solution,
-    source: { puzzle: codes[1] ?? "", solution: answerCode },
-  };
-}
 
 function main(): void {
   const options = parseArgs(process.argv.slice(2));

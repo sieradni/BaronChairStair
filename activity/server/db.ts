@@ -186,6 +186,154 @@ interface RunRow {
   created_at: number;
 }
 
+/**
+ * The archive table, on its own so `tools/sync-archive.ts` can create it without
+ * constructing a `Store`.
+ *
+ * That matters for the reason `tools/review-link.ts` gives: constructing a Store
+ * runs the whole SCHEMA plus the `addSlotsToRuns` DROP/copy/rename rebuild, and a
+ * one-off command that can take the server's database down is not a one-off
+ * command. The sync needs exactly this one table and nothing else.
+ */
+export const ARCHIVE_SCHEMA = `
+-- The club's puzzle archive, synced from the Google Sheet by
+-- tools/sync-archive.ts. Queries live in server/archive-rows.ts, which says
+-- why a row is not playable the moment it is written.
+--
+-- Everything here is DERIVED from the two blueprint codes in source_puzzle and
+-- source_solution, by the same decode-and-replay the build script runs. In
+-- particular target_attack is what the author's answer actually sends when
+-- replayed through the real engine, never a number off the spreadsheet: a
+-- puzzle with no verified target is one nobody can be scored against.
+--
+-- A synced row is NOT playable until published_at is set. The boot read filters
+-- on it in SQL rather than after loading, because PuzzleArchive.load runs at
+-- module scope and throws -- one malformed unpublished row reaching it takes
+-- the server down for every player, with no route left to fix it from.
+CREATE TABLE IF NOT EXISTS archive_puzzles (
+  -- The sheet's own id. Constrained below the community band because that band
+  -- is the only record of where a puzzle came from: toListing reads
+  -- \`id >= COMMUNITY_ID_BASE\` to decide whether to show a puzzle as the
+  -- club's or a player's, and PuzzleArchive throws at boot if the two collide.
+  id               INTEGER PRIMARY KEY CHECK (id > 0 AND id < 100000),
+  title            TEXT NOT NULL,
+  author           TEXT NOT NULL,
+  difficulty       REAL NOT NULL,
+  goal             TEXT NOT NULL,
+  set_name         TEXT,
+  board            TEXT NOT NULL,   -- JSON RowCode[]
+  queue            TEXT NOT NULL,   -- JSON Mino[]
+  hold             TEXT,
+  target_attack    INTEGER NOT NULL CHECK (target_attack > 0),
+  solution         TEXT NOT NULL,   -- JSON SolutionStep[]
+  -- JSON ClearRequirement[], or NULL. Carried across a re-sync rather than
+  -- re-derived, exactly as the build script carries it between runs: it is a
+  -- decision somebody made about what the goal means, not a fact about the
+  -- board, and re-deriving it would quietly un-enforce it.
+  required_clears  TEXT,
+  source_puzzle    TEXT NOT NULL,
+  source_solution  TEXT NOT NULL,
+  -- Fingerprint of the fields that decide how the puzzle PLAYS -- board, queue,
+  -- hold, target and answer. Sheet ids are reused: a row can keep its number
+  -- while becoming a different puzzle underneath, which has already happened
+  -- to #8. runs and day_puzzles reference a puzzle by id and store no copy of
+  -- what was played, so this column is the only way a re-sync can notice that
+  -- a published puzzle's content moved.
+  content_hash     TEXT NOT NULL,
+  synced_at        INTEGER NOT NULL,
+  -- NULL until an officer publishes it. Timestamp and name rather than a
+  -- boolean, to match reviewed_at/reviewed_by and updated_by elsewhere: every
+  -- other decision in this database records who made it.
+  published_at     INTEGER,
+  published_by     TEXT
+);
+
+-- The boot read: what players may be served, in id order.
+CREATE INDEX IF NOT EXISTS archive_published
+  ON archive_puzzles (published_at) WHERE published_at IS NOT NULL;
+
+-- Every content change ever made to a puzzle, append-only.
+--
+-- A creator may go back and edit their own puzzle, so \`archive_puzzles\` is
+-- rewritten in place -- and the row it overwrites is the only record of what
+-- the puzzle used to be. \`runs\` and \`day_puzzles\` reference a puzzle by id and
+-- keep no copy of the board, so once the UPDATE lands nothing in this database
+-- can say what a finished score was played on.
+--
+-- Same reasoning as \`puzzle_override_log\`, which is append-only because the
+-- current-state row cannot be its own history: the write being recorded is the
+-- write that destroys it. And like that table this stores VALUES, not
+-- fingerprints -- an eight-character hash proves that something changed and
+-- tells nobody what it was.
+--
+-- Only content changes are logged. Metadata corrections are not: a fixed title
+-- does not make an old score unreadable, and \`puzzle_override_log\` already
+-- covers officer edits to those fields.
+--
+-- Changes to an unpublished puzzle are logged too, and marked \`was_published\`
+-- 0. Nobody can have played those, so they cost nothing to lose -- but a
+-- creator iterating before publication is exactly who wants the history, and a
+-- log with a hole in it is harder to trust than one without.
+CREATE TABLE IF NOT EXISTS archive_content_log (
+  entry_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  puzzle_id     INTEGER NOT NULL,
+  was_hash      TEXT NOT NULL,
+  became_hash   TEXT NOT NULL,
+  was_board     TEXT NOT NULL,   -- JSON RowCode[]
+  was_queue     TEXT NOT NULL,   -- JSON Mino[]
+  was_hold      TEXT,
+  was_target    INTEGER NOT NULL,
+  was_solution  TEXT NOT NULL,   -- JSON SolutionStep[]
+  -- The frozen clear requirement as it stood, whether or not it was carried
+  -- forward. If it was dropped because the new answer no longer meets it, this
+  -- is the only place the old decision survives.
+  was_clears    TEXT,
+  -- Whether the puzzle was playable when this happened, and how much play it
+  -- had already had. Both are unrecoverable after the fact: published_at is
+  -- overwritten by nothing, but the run count moves every day.
+  was_published INTEGER NOT NULL,
+  runs_before   INTEGER,
+  -- Discovered alternate solutions deleted because of this change. They are
+  -- keyed by placements and not by board (see shared/solution-key.ts), so
+  -- nothing about them would have noticed the board moving underneath: they
+  -- would have stayed on file as \`known\` lines for a puzzle they may not even
+  -- be playable on, and the next player to genuinely find one on the new board
+  -- would have been refused credit as a duplicate. NULL when this database has
+  -- no \`puzzle_solutions\` table to void from.
+  solutions_voided INTEGER,
+  at            INTEGER NOT NULL,
+  by            TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS archive_content_log_puzzle
+  ON archive_content_log (puzzle_id, entry_id);
+`;
+
+/**
+ * Brings the archive tables up to date on an existing database.
+ *
+ * `CREATE TABLE IF NOT EXISTS` leaves an existing table untouched, so a
+ * database that got `archive_content_log` before a column existed never gains
+ * it — the same trap {@link Store.addMissingColumn} exists for. This is that
+ * idiom for the two tables `tools/sync-archive.ts` creates, which cannot use
+ * the Store's version because it deliberately never constructs one.
+ *
+ * Run this rather than {@link ARCHIVE_SCHEMA} directly.
+ */
+export function migrateArchive(db: Database): void {
+  db.run(ARCHIVE_SCHEMA);
+  const columns = db
+    .query<{ name: string }, []>("PRAGMA table_info(archive_content_log)")
+    .all()
+    .map((row) => row.name);
+  // Deliberately no backfill. A change logged before this column existed
+  // deleted nothing, because nothing deleted discoveries then; NULL is also
+  // what "this database has no puzzle_solutions" means, and both readings lead
+  // to the same honest answer -- nobody recorded a count.
+  if (columns.length > 0 && !columns.includes("solutions_voided")) {
+    db.run("ALTER TABLE archive_content_log ADD COLUMN solutions_voided INTEGER");
+  }
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS players (
   id          TEXT PRIMARY KEY,
@@ -443,6 +591,9 @@ CREATE TABLE IF NOT EXISTS puzzle_override_log (
 );
 CREATE INDEX IF NOT EXISTS puzzle_override_log_puzzle
   ON puzzle_override_log (puzzle_id, entry_id);
+
+${ARCHIVE_SCHEMA}
+
 `;
 
 /**
@@ -597,6 +748,7 @@ export class Store {
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.db.run(SCHEMA);
+    migrateArchive(this.db);
     // Before anything else touches `runs`: a database written when a day held
     // one puzzle has the wrong primary key, and no amount of ADD COLUMN fixes
     // that.

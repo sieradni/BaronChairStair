@@ -1,0 +1,4 @@
+# gviz returns CRLF, and these fixtures are a faithful copy of what it returns.
+# Without this, git normalises them to LF on the next checkout and the test
+# quietly stops exercising the line endings the real sheet actually sends.
+*.csv -text
