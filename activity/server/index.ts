@@ -61,6 +61,7 @@ import {
   type Variables,
 } from "./http";
 import { registerReviewRoutes } from "./review-routes";
+import { registerPublicRoutes, PUBLIC_PREFIX } from "./public-routes";
 import { registerStaticRoutes } from "./static-routes";
 import { registerSubmissionRoutes } from "./submission-routes";
 import {
@@ -167,6 +168,13 @@ app.use("/api/review/session", rateLimit({ max: 10, windowMs: MINUTE }, callerKe
 // — behind a reviewer token rather than open, but a queue nobody clears at
 // thirty a minute is not a queue anybody is reading.
 app.use("/api/review/submissions/*", rateLimit({ max: 30, windowMs: MINUTE }, callerKey));
+// The public archive is a read of two tables and is cacheable, so it is
+// cheaper than anything else here — but it is also the only route a stranger
+// can reach without a session, and behind cloudflared with `TRUST_PROXY` unset
+// every caller shares one bucket. Generous enough that a website's visitors
+// cannot exhaust it between them, still finite.
+app.use(`${PUBLIC_PREFIX}/*`, rateLimit({ max: 600, windowMs: MINUTE }, callerKey));
+app.use(PUBLIC_PREFIX, rateLimit({ max: 600, windowMs: MINUTE }, callerKey));
 app.use("/api/*", rateLimit({ max: 240, windowMs: MINUTE }, callerKey));
 
 app.onError(apiError);
@@ -920,6 +928,11 @@ app.get("/api/rush/leaderboard", requireSession, (c) => {
  */
 registerSubmissionRoutes(app, store);
 registerReviewRoutes(app, { secret: config.reviewSecret, store, archive });
+// The archive, for anybody. The one prefix in this server with CORS, and the
+// one that serves answers — both explained in the module. It reads the same
+// database the rest of the server writes, but through a handle that can only
+// reach two tables' worth of queries.
+registerPublicRoutes(app, store.archiveReader);
 
 // ── Static client ────────────────────────────────────────────────────────────
 

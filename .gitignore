@@ -375,7 +375,18 @@ vite.config.ts.timestamp-*
 ecosystem.config.cjs
 *.db
 
-# Puzzle activity — the SQLite store is generated at runtime.
+# Puzzle activity — the SQLite store is generated at runtime, and holds people.
+#
+# `activity/data/daily.sqlite` has players, preferences, runs, rush_runs and
+# submissions: real Discord ids, usernames, avatar URLs and guild ids. This
+# repository is PUBLIC, so committing it publishes all of that — and because
+# the store runs in WAL mode, `git add` on the main file captures a torn
+# snapshot that leaks a stale slice of those players while missing the puzzle
+# tables entirely. There is no version of tracking it that is both safe and
+# useful. `VACUUM INTO` de-WALs it faithfully and redacts nothing; it is the
+# right backup tool and the wrong export tool.
+#
+# The one exception is `activity/data/archive/` — see below.
 activity/data/*.sqlite
 activity/data/*.sqlite-*
 
@@ -387,7 +398,36 @@ tmp/
 # (activity/data/ is a different directory and stays tracked.)
 /data/
 
-# The answers. `bun run puzzles` writes these beside the tracked puzzles.json,
-# which deliberately has none: a solution sitting next to its puzzle in a public
-# repository is a published answer key. Regenerate from the club's archive.
+# The answers, as a loose file. `bun run puzzles` writes these beside the
+# tracked puzzles.json, which deliberately has none.
+#
+# The reasoning was that a solution sitting next to its puzzle in a public
+# repository is a published answer key. That rule is now narrower than it was,
+# by a decision rather than by drift: the club publishes the answers already —
+# the website repository commits `solution_url` for every puzzle — so the
+# archive database below carries solutions on purpose. What stays true is that
+# the *game* never hands a player an answer mid-run, which is enforced by
+# `PuzzlePrompt` in shared/puzzle.ts and not by this file.
+#
+# This entry stays because a second, untracked copy of the answers with no
+# owner is still worth not having.
 activity/data/solutions.json
+
+# The tracked exception: the club's puzzle archive, as a file.
+#
+# `activity/data/archive/puzzles.sqlite` is built fresh by
+# `bun run sync-archive --db ...`, which creates only ARCHIVE_SCHEMA — so it
+# has never held a player table, and cannot. It exists so a clone, a CI job or
+# another project has the puzzles without a spreadsheet round trip.
+#
+# It is safe for three reasons, and `activity/tests/tracked-archive.test.ts`
+# asserts all of them rather than trusting them: it contains only
+# archive_puzzles and archive_content_log; no column in it can name a person;
+# and every row is unpublished, so the file cannot change what a player is
+# served just by existing.
+#
+# Never put a -wal or -shm here, and never `cp` or `VACUUM INTO` the live
+# database into this directory.
+!activity/data/archive/
+!activity/data/archive/puzzles.sqlite
+activity/data/archive/*.sqlite-*

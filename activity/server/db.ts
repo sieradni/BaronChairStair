@@ -738,6 +738,19 @@ export class Store {
   private readonly db: Database;
 
   /**
+   * The handle, for the read-only archive queries in `server/archive-rows.ts`.
+   *
+   * Deliberately narrow in intent rather than in type: SQLite has no read-only
+   * connection to hand out, so what stops this becoming a second write path is
+   * that only `registerPublicRoutes` is given it, and that module imports
+   * nothing that can write. Everything else still goes through a method on this
+   * class, where the transaction and the invariant live together.
+   */
+  get archiveReader(): Database {
+    return this.db;
+  }
+
+  /**
    * @param pastDays the rotation to write history down from, for a caller whose
    *   archive does not come out of this database. `server/index.ts`'s does, so
    *   it opens the store bare and calls {@link pinPastDays} once it has one.
