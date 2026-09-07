@@ -150,7 +150,11 @@ The daily rotation is a pure function of the pool's *length*
 Tomorrow's puzzle changes the moment the pool grows, so the pool should grow
 **once**, deliberately, rather than a few rows at a time.
 
-### 4b. A puzzle id does not identify a puzzle
+### 4b. A puzzle id does not identify a puzzle, and that is allowed
+
+**The club's decision: a creator may go back and edit their own puzzle, so a
+published puzzle's content may change.** The sync applies edits. What follows is
+what that costs, because a first version of this section overstated it.
 
 `day_puzzles` pins a day to a `puzzle_id` and nothing else:
 
@@ -161,24 +165,47 @@ Tomorrow's puzzle changes the moment the pool grows, so the pool should grow
       PRIMARY KEY (day, tier)
     );
 
-There is no content snapshot. So the pin survives a *reordering* of the pool,
-which is what it was built for — and does **not** survive the content behind an
-id changing. Rebuilding from the sheet today changes twelve published puzzles:
+There is no content snapshot. Rebuilding from the sheet today changes twelve
+published puzzles: **#8 is a different puzzle** (board, queue, goal and title —
+"fourtris mogs" became "misplaced heart"), **#7 and #109 have different piece
+queues**, and the other nine are difficulty ratings and a title typo.
 
-- **#8 is a different puzzle now.** Board, queue, goal and title all changed;
-  it went from "fourtris mogs" to "misplaced heart". Whoever played day-N
-  puzzle 8 played something that no longer exists under that id, and their
-  score is now filed against a puzzle they never saw.
-- **#7 and #109 have different piece queues** — same length, different pieces.
-  They play differently, so old scores are not comparable to new ones.
-- The remaining nine are harmless: eight difficulty ratings (five of them
-  filling in a 0 that meant "unrated") and one title typo on #3.
+**What an edit does not do.** Existing scores do not change. Every `runs` row
+stores the `target_attack` it was judged against (`db.ts:271`), written at
+submit and read straight back; no leaderboard or streak query joins a puzzle
+table. No rank, time or solved flag moves. The earlier claim here that an edit
+"re-files finished scores" was wrong.
 
-This has to be decided before the first sync, not discovered after it. The
-options are to let the content move and accept that a few historical rows now
-describe a different puzzle, or to treat content as immutable once published
-and give a changed puzzle a new id. **Nothing should sync until somebody
-chooses**, because the second option is much harder to apply retroactively.
+**What an edit does do.**
+
+- A finished day's **recap names the wrong puzzle**. `GET /api/recap` resolves
+  the pin through the live archive, so it prints the new title, author, goal and
+  target above a board of runs played on the old puzzle. This is the one
+  user-visible breakage, and it is exactly what `pinPastDays` warns about.
+- **Discovered alternate solutions carry over silently.** `puzzle_solutions` is
+  keyed by placements, attack and clears — no board — so every stored line
+  transfers onto the new puzzle. Nothing re-validates them: there is no UPDATE
+  or DELETE on that table anywhere. Stale lines are then shown to makers against
+  the new goal as the evidence for "is my clear requirement too loose?", the
+  line counts on the review Archive tab are inflated, and a player who genuinely
+  discovers a line on the *new* board whose fingerprint collides with a
+  carried-over row is refused credit by `ON CONFLICT DO NOTHING`.
+- **The frozen clear requirement can no longer be trusted.** It is a decision
+  about the *old* answer. Left attached to a new board it is still enforced, and
+  can demand a clear the new answer never makes — a published puzzle nobody can
+  solve. So `upsertArchive` checks the incoming answer against it: kept when it
+  still holds, dropped and reported when it does not.
+
+Unaffected, and worth saying so: `rush_runs` stores no puzzle reference at all,
+`day_rush` pins ids and difficulty and no past rush is ever re-served, and
+`puzzle_overrides` and `submissions` cannot be reached by a club-band edit.
+
+**Because overwriting is not recoverable, the previous content is written to
+`archive_content_log` first** — values, not fingerprints, in the same
+transaction. After the UPDATE that is the only thing in the database that can
+say what a finished score was set on. It is append-only for the reason
+`puzzle_override_log` is: the write being recorded is the write that destroys
+the evidence.
 
 ### 5. `PuzzleArchive.load` runs once, at module scope
 
@@ -234,9 +261,8 @@ Publishing the 62 new puzzles is a step of its own, taken deliberately, after
   safe to publish was made about the archive as a whole; this column looks like
   a per-puzzle intent that predates it, and it should be honoured or explicitly
   retired rather than ignored.
-- **Rule 4b** — whether a published puzzle's content may change under its id.
-  No longer urgent: the sync refuses and reports, so the answer can wait. What
-  is waiting on it is #8, #7 and #109, which will not update until it is given.
+- ~~**Rule 4b**~~ — **answered.** A creator may edit their own puzzle, so edits
+  apply. See rule 4b for what that costs and what is recorded.
 
 ## Naming
 

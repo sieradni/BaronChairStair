@@ -17,12 +17,16 @@
  * takes the whole server down at boot, for every player, with no HTTP route
  * left to fix it from.
  *
- * **Content may not change under a published id.** See {@link upsertArchive}.
+ * **A content change is applied, but never silent.** A creator may go back and
+ * edit their own puzzle, so the row is rewritten. What that costs is recorded
+ * rather than prevented: the previous content goes to `archive_content_log`,
+ * and the change comes back as its own outcome so the sync can report it.
+ * Publication survives an edit — the UPDATE does not touch `published_at`.
  */
 
 import type { Database } from "bun:sqlite";
 import type { ClearRequirement, Mino, Puzzle, RowCode, SolutionStep } from "../shared/puzzle";
-import { COMMUNITY_ID_BASE } from "../shared/puzzle";
+import { clearShortfall, COMMUNITY_ID_BASE } from "../shared/puzzle";
 
 const COLUMNS = `
   id, title, author, difficulty, goal, set_name, board, queue, hold,
@@ -64,9 +68,13 @@ export interface ArchiveEntry {
  * Fingerprint of the fields that decide how a puzzle *plays*.
  *
  * Deliberately not the whole puzzle: a title fix or a difficulty rating is a
- * correction and should flow through freely. Board, queue, hold, target and
- * answer are the puzzle itself, and a change to any of them under a published
- * id means somebody's recorded score is filed against something they never saw.
+ * correction, and the puzzle it names is still the puzzle people played. Board,
+ * queue, hold, target and answer are the puzzle itself.
+ *
+ * The hash no longer decides whether a write happens — it decides what the
+ * write is called. It is what separates "the sheet fixed a typo" from "the
+ * sheet replaced the puzzle", and a change to any of these under a published id
+ * means somebody's recorded score is filed against something they never saw.
  *
  * Not a cryptographic hash and does not need to be — it compares a row against
  * its own previous value, and nobody is choosing the input adversarially.
@@ -164,10 +172,20 @@ export type SyncOutcome =
   /** Metadata moved — title, author, difficulty, set, goal. Written. */
   | { kind: "amended"; fields: readonly string[] }
   /**
-   * The puzzle itself moved under a published id, and the row was left alone.
-   * See {@link upsertArchive} for why this is refused rather than applied.
+   * The puzzle itself moved under an id somebody has already been able to play,
+   * and the change was applied. The one outcome an officer has to see: it is
+   * the moment a finished score stopped describing the puzzle it was set on.
    */
-  | { kind: "drifted"; from: string; to: string };
+  | {
+      kind: "edited";
+      fields: readonly string[];
+      from: string;
+      to: string;
+      /** Set when the frozen clear requirement no longer fits the new answer. */
+      droppedClears: readonly ClearRequirement[] | null;
+      /** Runs already filed against this id, or null if this database has none. */
+      runsBefore: number | null;
+    };
 
 const METADATA_FIELDS = ["title", "author", "difficulty", "goal", "set"] as const;
 
@@ -176,28 +194,159 @@ function movedMetadata(before: Puzzle, after: Puzzle): string[] {
 }
 
 /**
+ * How many runs are already filed against a puzzle, or null when this database
+ * has no `runs` table at all.
+ *
+ * The null matters: `tools/sync-archive.ts` deliberately creates only
+ * {@link ARCHIVE_SCHEMA}, so a sync against a fresh or archive-only database
+ * has no player tables. An unguarded COUNT would throw there and be reported as
+ * a failed write, which is the opposite of the truth — there is simply nobody
+ * to affect.
+ */
+export function runsAgainst(db: Database, puzzleId: number): number | null {
+  const present = db
+    .query<{ name: string }, []>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'runs'",
+    )
+    .get();
+  if (!present) return null;
+  return (
+    db
+      .query<{ n: number }, [number]>("SELECT COUNT(*) AS n FROM runs WHERE puzzle_id = ?1")
+      .get(puzzleId)?.n ?? 0
+  );
+}
+
+/**
+ * Records what a puzzle was, immediately before it stops being that.
+ *
+ * Values rather than the hash, because the hash proves a change happened and
+ * tells nobody what changed. Runs in the caller's transaction, so a logged
+ * change and the change itself cannot come apart.
+ */
+function logContentChange(
+  db: Database,
+  was: ArchiveEntry,
+  becameHash: string,
+  runsBefore: number | null,
+  at: number,
+  by: string,
+): void {
+  const puzzle = was.puzzle;
+  db.run(
+    `INSERT INTO archive_content_log
+       (puzzle_id, was_hash, became_hash, was_board, was_queue, was_hold, was_target,
+        was_solution, was_clears, was_published, runs_before, at, by)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`,
+    [
+      puzzle.id,
+      was.contentHash,
+      becameHash,
+      JSON.stringify(puzzle.board),
+      JSON.stringify(puzzle.queue),
+      puzzle.hold,
+      puzzle.targetAttack,
+      JSON.stringify(puzzle.solution ?? []),
+      puzzle.requiredClears ? JSON.stringify(puzzle.requiredClears) : null,
+      was.publishedAt === null ? 0 : 1,
+      runsBefore,
+      at,
+      by,
+    ],
+  );
+}
+
+/** Every content change ever made to one puzzle, oldest first. */
+export function contentHistory(db: Database, puzzleId: number): ContentChange[] {
+  return db
+    .query<ContentLogRow, [number]>(
+      `SELECT entry_id, puzzle_id, was_hash, became_hash, was_target, was_clears,
+              was_published, runs_before, at, by
+         FROM archive_content_log WHERE puzzle_id = ?1 ORDER BY entry_id ASC`,
+    )
+    .all(puzzleId)
+    .map((row) => ({
+      entryId: row.entry_id,
+      puzzleId: row.puzzle_id,
+      wasHash: row.was_hash,
+      becameHash: row.became_hash,
+      wasTarget: row.was_target,
+      wasClears: row.was_clears ? (JSON.parse(row.was_clears) as ClearRequirement[]) : null,
+      wasPublished: row.was_published === 1,
+      runsBefore: row.runs_before,
+      at: row.at,
+      by: row.by,
+    }));
+}
+
+interface ContentLogRow {
+  entry_id: number;
+  puzzle_id: number;
+  was_hash: string;
+  became_hash: string;
+  was_target: number;
+  was_clears: string | null;
+  was_published: number;
+  runs_before: number | null;
+  at: number;
+  by: string;
+}
+
+/** One entry from {@link contentHistory}. */
+export interface ContentChange {
+  readonly entryId: number;
+  readonly puzzleId: number;
+  readonly wasHash: string;
+  readonly becameHash: string;
+  readonly wasTarget: number;
+  readonly wasClears: readonly ClearRequirement[] | null;
+  readonly wasPublished: boolean;
+  readonly runsBefore: number | null;
+  readonly at: number;
+  readonly by: string;
+}
+
+/**
  * Write one decoded puzzle into the archive.
  *
- * The rule worth stating: **a published puzzle's content is immutable here.**
- * If the sheet now decodes id 8 into a different board, this refuses and
- * reports `drifted` rather than overwriting. Nothing in the database records
- * what a past run was actually played on — `runs` and `day_puzzles` both
- * reference a puzzle by id alone — so overwriting silently re-files finished
- * scores against a puzzle nobody played. Refusing is recoverable; overwriting
- * is not.
+ * **A creator may edit a published puzzle, so an edit is applied.** If the
+ * sheet now decodes id 8 into a different board, that board is written.
+ *
+ * What that costs, stated precisely, because a vaguer version of it was wrong:
+ * existing scores do not change. Every `runs` row stores the `target_attack` it
+ * was judged against and no leaderboard or streak query reads a puzzle table,
+ * so no rank, time or solved flag moves. What moves is what those rows are
+ * *about* — `runs` and `day_puzzles` reference a puzzle by id and keep no copy
+ * of the board, so a finished score now points at content nobody played it on.
+ *
+ * Overwriting is not recoverable, so the previous content is written to
+ * `archive_content_log` first, in the caller's transaction. That is the whole
+ * of what makes an already-filed score interpretable afterwards.
  *
  * Metadata is not content and flows through freely, including on published
  * rows: a corrected title or a filled-in difficulty rating is the sheet being
  * fixed, and holding those back would give officers a reason to want the
  * content check turned off.
  *
- * `requiredClears` is set once, on insert, and then never rewritten — the
- * UPDATE below does not touch the column. That is the reason `db.ts` gives on
- * it: the requirement is a decision somebody made about what a goal means, not
- * a fact about the board, and a re-sync re-deriving it would quietly
- * un-enforce it.
+ * `requiredClears` survives a metadata correction untouched, for the reason
+ * `db.ts` gives on the column: the requirement is a decision somebody made
+ * about what a goal means, not a fact about the board.
+ *
+ * It cannot survive a *content* edit unexamined. A requirement frozen against
+ * the old answer, left bolted to a new board, is enforced by
+ * `solvedUnderPolicy` and can demand a clear the new answer never makes —
+ * which is exactly the unsolvable puzzle `tools/audit-archive.ts` exists to
+ * catch. So on a content edit the incoming answer is checked against it: kept
+ * when it still holds, dropped and reported when it does not. Dropping
+ * un-enforces a goal until an officer re-freezes it, which is recoverable; the
+ * alternative is a published puzzle nobody can solve, which is not.
  */
-export function upsertArchive(db: Database, puzzle: Puzzle, now: number): SyncOutcome {
+export function upsertArchive(
+  db: Database,
+  puzzle: Puzzle,
+  now: number,
+  by = "sync-archive",
+): SyncOutcome {
   if (puzzle.id <= 0 || puzzle.id >= COMMUNITY_ID_BASE) {
     throw new RangeError(
       `Puzzle ${puzzle.id} is outside the club band (1..${COMMUNITY_ID_BASE - 1}). ` +
@@ -235,12 +384,26 @@ export function upsertArchive(db: Database, puzzle: Puzzle, now: number): SyncOu
   }
 
   const contentMoved = existing.contentHash !== incoming;
-  if (contentMoved && existing.publishedAt !== null) {
-    return { kind: "drifted", from: existing.contentHash, to: incoming };
-  }
-
   const fields = movedMetadata(existing.puzzle, puzzle);
   if (!contentMoved && fields.length === 0) return { kind: "unchanged" };
+
+  // Everything below has to be decided BEFORE the UPDATE: it is the write that
+  // destroys the evidence.
+  let droppedClears: readonly ClearRequirement[] | null = null;
+  let runsBefore: number | null = null;
+  if (contentMoved) {
+    runsBefore = runsAgainst(db, puzzle.id);
+    logContentChange(db, existing, incoming, runsBefore, now, by);
+
+    const frozen = existing.puzzle.requiredClears;
+    const made = (puzzle.solution ?? [])
+      .map((step) => step.clear)
+      .filter((clear): clear is NonNullable<typeof clear> => Boolean(clear));
+    if (frozen?.length && clearShortfall(made, frozen).length > 0) {
+      droppedClears = frozen;
+      db.run("UPDATE archive_puzzles SET required_clears = NULL WHERE id = ?1", [puzzle.id]);
+    }
+  }
 
   db.run(
     `UPDATE archive_puzzles
@@ -267,9 +430,19 @@ export function upsertArchive(db: Database, puzzle: Puzzle, now: number): SyncOu
       now,
     ],
   );
-  return contentMoved
-    ? { kind: "amended", fields: [...fields, "content"] }
-    : { kind: "amended", fields };
+  if (!contentMoved) return { kind: "amended", fields };
+  if (existing.publishedAt === null) {
+    // Not playable yet, so nobody can have a score against the old content.
+    return { kind: "amended", fields: [...fields, "content"] };
+  }
+  return {
+    kind: "edited",
+    fields,
+    from: existing.contentHash,
+    to: incoming,
+    droppedClears,
+    runsBefore,
+  };
 }
 
 /**

@@ -2,7 +2,7 @@
 /**
  * Pulls the puzzle archive out of the Google Sheet and into `archive_puzzles`.
  *
- *     bun run sync-archive [--dry-run] [--db <path>] [--from <dir>]
+ *     bun run sync-archive [--dry-run] [--db <path>] [--from <dir>] [--by <name>]
  *
  * The sheet is published, so both tabs come back as CSV from `gviz` with no
  * credentials and nothing to configure. `--from` reads the same two files off
@@ -39,7 +39,7 @@ import { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { upsertArchive, type SyncOutcome } from "../server/archive-rows";
-import type { Puzzle } from "../shared/puzzle";
+import type { ClearRequirement, Puzzle } from "../shared/puzzle";
 import { ARCHIVE_SCHEMA } from "../server/db";
 import { CODES_SHEET, META_SHEET, buildPuzzle, indexById } from "./decode-archive";
 import { parseCsv } from "./csv";
@@ -74,6 +74,8 @@ interface Options {
   dryRun: boolean;
   db: string;
   from: string | null;
+  /** Who to record against a content change. An attribution, not an identity. */
+  by: string;
 }
 
 function parseArgs(argv: readonly string[]): Options {
@@ -83,6 +85,7 @@ function parseArgs(argv: readonly string[]): Options {
       ? resolve(process.env.DATABASE_PATH)
       : resolve(import.meta.dir, "../data/daily.sqlite"),
     from: null,
+    by: "sync-archive",
   };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
@@ -94,6 +97,7 @@ function parseArgs(argv: readonly string[]): Options {
     if (!value) throw new Error(`Missing value for ${flag}`);
     if (flag === "--db") options.db = resolve(value);
     else if (flag === "--from") options.from = resolve(value);
+    else if (flag === "--by") options.by = value;
     else throw new Error(`Unknown flag ${flag}`);
     i += 1;
   }
@@ -126,7 +130,20 @@ async function readTab(options: Options, sheet: string): Promise<string> {
 interface Report {
   added: number[];
   amended: { id: number; fields: readonly string[] }[];
-  drifted: { id: number; from: string; to: string }[];
+  /**
+   * Content changed under an id that was already published. Applied, because a
+   * creator may edit their own puzzle — and reported, because it is the moment
+   * a finished score stopped describing the puzzle it was set on.
+   */
+  edited: {
+    id: number;
+    title: string;
+    fields: readonly string[];
+    from: string;
+    to: string;
+    droppedClears: readonly ClearRequirement[] | null;
+    runsBefore: number | null;
+  }[];
   unchanged: number;
   /** Puzzles whose answer would not decode or replay. A puzzle problem. */
   failed: { id: number; reason: string }[];
@@ -139,11 +156,22 @@ interface Report {
   unwritten: { id: number; reason: string }[];
 }
 
-function record(report: Report, id: number, outcome: SyncOutcome): void {
+function record(report: Report, puzzle: Puzzle, outcome: SyncOutcome): void {
+  const id = puzzle.id;
   if (outcome.kind === "added") report.added.push(id);
   else if (outcome.kind === "unchanged") report.unchanged += 1;
   else if (outcome.kind === "amended") report.amended.push({ id, fields: outcome.fields });
-  else report.drifted.push({ id, from: outcome.from, to: outcome.to });
+  else {
+    report.edited.push({
+      id,
+      title: puzzle.title,
+      fields: outcome.fields,
+      from: outcome.from,
+      to: outcome.to,
+      droppedClears: outcome.droppedClears,
+      runsBefore: outcome.runsBefore,
+    });
+  }
 }
 
 function describe(report: Report, dryRun: boolean): void {
@@ -172,23 +200,39 @@ function describe(report: Report, dryRun: boolean): void {
     );
   }
 
-  if (report.drifted.length) {
+  if (report.edited.length) {
     console.log(
-      `\n${report.drifted.length} PUBLISHED puzzle(s) have changed content on the sheet ` +
-        "and were left alone:",
+      `\n${report.edited.length} PUBLISHED puzzle(s) were EDITED — the puzzle behind the id changed:`,
     );
-    for (const { id, from, to } of report.drifted) {
-      console.log(`  #${id}: ${from} -> ${to}`);
+    for (const e of report.edited) {
+      const runs = e.runsBefore === null ? "" : `, ${e.runsBefore} run(s) already filed`;
+      // "content" is what `edited` means; metadata fields are extra, not instead.
+      const what = ["content", ...e.fields].join(", ");
+      console.log(`  #${e.id} "${e.title}" — ${what}${runs}`);
+      console.log(`      ${e.from} -> ${e.to}`);
+      if (e.droppedClears) {
+        console.log(
+          `      DROPPED its clear requirement (${e.droppedClears
+            .map((c) => `${c.count}x ${c.clear}`)
+            .join(", ")}) — the new answer no longer meets it.`,
+        );
+        console.log(`      Re-decide it in the review tool, or the goal goes unenforced.`);
+      }
     }
     console.log(
-      "\nA published puzzle's board, queue, hold, target or answer moving means the\n" +
-        "sheet is now describing a different puzzle under an id somebody has already\n" +
-        "played. Nothing here records what a past run was played on, so applying it\n" +
-        "would re-file finished scores against a puzzle nobody saw. Either give the\n" +
-        "new puzzle its own id on the sheet, or decide deliberately that the old\n" +
-        "scores may be reattached.",
+      "\nWhat an edit does and does not do, precisely:\n" +
+        "  - Existing scores DO NOT change. Every run stored the target it was judged\n" +
+        "    against, and no leaderboard or streak reads a puzzle table.\n" +
+        "  - What those scores are ABOUT has moved. Nothing records the board a run was\n" +
+        "    played on, so an old score now points at content nobody played it on.\n" +
+        "  - A finished day's recap will name the NEW title and goal above the OLD runs.\n" +
+        "  - Discovered alternate solutions carry over silently: they are keyed by\n" +
+        "    placements, not by board, and nothing re-checks them against the new one.\n" +
+        "  The previous content is in archive_content_log, which is the only place it\n" +
+        "  still exists.",
     );
   }
+
 }
 
 async function main(): Promise<void> {
@@ -204,7 +248,7 @@ async function main(): Promise<void> {
   // Build everything BEFORE opening the database, let alone a transaction. The
   // replay is the slow part, and it needs no database at all.
   const report: Report = {
-    added: [], amended: [], drifted: [], unchanged: 0, failed: [], unwritten: [],
+    added: [], amended: [], edited: [], unchanged: 0, failed: [], unwritten: [],
   };
   const built: Puzzle[] = [];
   for (const [id, codes] of [...codesById].sort(([a], [b]) => a - b)) {
@@ -227,7 +271,7 @@ async function main(): Promise<void> {
     db.transaction(() => {
       for (const puzzle of built) {
         try {
-          record(report, puzzle.id, upsertArchive(db, puzzle, now));
+          record(report, puzzle, upsertArchive(db, puzzle, now, options.by));
         } catch (error) {
           // A write that fails is not a puzzle that will not replay.
           report.unwritten.push({ id: puzzle.id, reason: (error as Error).message });
@@ -243,10 +287,11 @@ async function main(): Promise<void> {
 
   describe(report, options.dryRun);
   if (options.dryRun) console.log("\n--dry-run: nothing was written.");
-  // A drift is a decision somebody has to make, and an unwritten row means the
-  // sync did not do its job. Both are worth a non-zero exit for anything
-  // running this on a schedule.
-  if (report.drifted.length || report.unwritten.length) process.exitCode = 1;
+  // An unwritten row means the sync did not do its job. An edit is not a
+  // failure — it is expected work — but it is the one thing somebody has to
+  // read, so a scheduled run should still surface it.
+  if (report.unwritten.length) process.exitCode = 1;
+  else if (report.edited.length) process.exitCode = 2;
 }
 
 /** Rolls a dry run's transaction back without pretending an error happened. */

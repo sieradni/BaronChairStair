@@ -404,6 +404,11 @@ describe("writing down what a day dealt", () => {
       // appear — or one that appeared and was never meant to — shows up here
       // and nowhere else.
       expect(named("table")).toEqual([
+        // Append-only, beside archive_puzzles and for the same reason
+        // puzzle_override_log sits beside puzzle_overrides: a creator may edit
+        // a published puzzle, and the UPDATE that applies the edit is the write
+        // that destroys the only record of what the puzzle used to be.
+        "archive_content_log",
         // The club's puzzle archive, synced from the sheet. Rows arrive
         // unpublished, so a database that grows this table serves exactly what
         // it served before until an officer publishes something.
@@ -432,6 +437,7 @@ describe("writing down what a day dealt", () => {
       ]);
       // The runs rebuild happens on the same start; its indexes must survive it.
       expect(named("index")).toEqual([
+        "archive_content_log_puzzle",
         // Partial, on published_at: the boot read's only question.
         "archive_published",
         "puzzle_override_log_puzzle",

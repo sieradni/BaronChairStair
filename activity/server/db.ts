@@ -251,6 +251,53 @@ CREATE TABLE IF NOT EXISTS archive_puzzles (
 -- The boot read: what players may be served, in id order.
 CREATE INDEX IF NOT EXISTS archive_published
   ON archive_puzzles (published_at) WHERE published_at IS NOT NULL;
+
+-- Every content change ever made to a puzzle, append-only.
+--
+-- A creator may go back and edit their own puzzle, so \`archive_puzzles\` is
+-- rewritten in place -- and the row it overwrites is the only record of what
+-- the puzzle used to be. \`runs\` and \`day_puzzles\` reference a puzzle by id and
+-- keep no copy of the board, so once the UPDATE lands nothing in this database
+-- can say what a finished score was played on.
+--
+-- Same reasoning as \`puzzle_override_log\`, which is append-only because the
+-- current-state row cannot be its own history: the write being recorded is the
+-- write that destroys it. And like that table this stores VALUES, not
+-- fingerprints -- an eight-character hash proves that something changed and
+-- tells nobody what it was.
+--
+-- Only content changes are logged. Metadata corrections are not: a fixed title
+-- does not make an old score unreadable, and \`puzzle_override_log\` already
+-- covers officer edits to those fields.
+--
+-- Changes to an unpublished puzzle are logged too, and marked \`was_published\`
+-- 0. Nobody can have played those, so they cost nothing to lose -- but a
+-- creator iterating before publication is exactly who wants the history, and a
+-- log with a hole in it is harder to trust than one without.
+CREATE TABLE IF NOT EXISTS archive_content_log (
+  entry_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  puzzle_id     INTEGER NOT NULL,
+  was_hash      TEXT NOT NULL,
+  became_hash   TEXT NOT NULL,
+  was_board     TEXT NOT NULL,   -- JSON RowCode[]
+  was_queue     TEXT NOT NULL,   -- JSON Mino[]
+  was_hold      TEXT,
+  was_target    INTEGER NOT NULL,
+  was_solution  TEXT NOT NULL,   -- JSON SolutionStep[]
+  -- The frozen clear requirement as it stood, whether or not it was carried
+  -- forward. If it was dropped because the new answer no longer meets it, this
+  -- is the only place the old decision survives.
+  was_clears    TEXT,
+  -- Whether the puzzle was playable when this happened, and how much play it
+  -- had already had. Both are unrecoverable after the fact: published_at is
+  -- overwritten by nothing, but the run count moves every day.
+  was_published INTEGER NOT NULL,
+  runs_before   INTEGER,
+  at            INTEGER NOT NULL,
+  by            TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS archive_content_log_puzzle
+  ON archive_content_log (puzzle_id, entry_id);
 `;
 
 const SCHEMA = `

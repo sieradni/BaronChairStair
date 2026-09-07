@@ -17,7 +17,12 @@ import { Database } from "bun:sqlite";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { archiveCounts, archiveEntry, publishArchive } from "../server/archive-rows";
+import {
+  archiveCounts,
+  archiveEntry,
+  contentHistory,
+  publishArchive,
+} from "../server/archive-rows";
 import { ARCHIVE_SCHEMA } from "../server/db";
 
 const TOOL = resolve(import.meta.dir, "../tools/sync-archive.ts");
@@ -106,13 +111,43 @@ describe("syncing from a sheet", () => {
   });
 });
 
-describe("when a published puzzle's content moves", () => {
-  test("it is refused, reported, and the run exits non-zero", async () => {
+describe("when a creator edits a published puzzle", () => {
+  test("the edit is applied, reported, and the old puzzle is recoverable", async () => {
     await sync();
     const db = new Database(dbPath);
     const before = archiveEntry(db, 1)!.contentHash;
     publishArchive(db, [1, 2], "an officer", Date.now());
     db.close();
+
+    const proc = Bun.spawn(
+      ["bun", "run", TOOL, "--db", dbPath, "--from", sheetWithSwappedPuzzles(), "--by", "a creator"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const out = await new Response(proc.stdout).text();
+    const code = await proc.exited;
+
+    expect(out).toContain("were EDITED");
+    expect(out).toContain("Existing scores DO NOT change");
+    // Not a failure — expected work — but the one thing somebody has to read.
+    expect(code).toBe(2);
+
+    const after = new Database(dbPath);
+    try {
+      // Applied, still published, and the previous puzzle still recoverable.
+      expect(archiveEntry(after, 1)!.contentHash).not.toBe(before);
+      expect(archiveEntry(after, 1)!.publishedBy).toBe("an officer");
+      const history = contentHistory(after, 1);
+      expect(history).toHaveLength(1);
+      expect(history[0]?.wasHash).toBe(before);
+      expect(history[0]?.by).toBe("a creator");
+      expect(history[0]?.wasPublished).toBe(true);
+    } finally {
+      after.close();
+    }
+  });
+
+  test("an unpublished puzzle changing is a plain amendment, not an edit", async () => {
+    await sync();
 
     const proc = Bun.spawn(
       ["bun", "run", TOOL, "--db", dbPath, "--from", sheetWithSwappedPuzzles()],
@@ -121,37 +156,23 @@ describe("when a published puzzle's content moves", () => {
     const out = await new Response(proc.stdout).text();
     const code = await proc.exited;
 
-    expect(code).toBe(1);
-    expect(out).toContain("2 PUBLISHED puzzle(s) have changed content");
-
-    const after = new Database(dbPath);
-    try {
-      // The whole point: the row a player's score is filed against did not move.
-      expect(archiveEntry(after, 1)!.contentHash).toBe(before);
-      expect(archiveEntry(after, 1)!.publishedBy).toBe("an officer");
-    } finally {
-      after.close();
-    }
-  });
-
-  test("the same move on an unpublished puzzle is applied", async () => {
-    await sync();
-    const db = new Database(dbPath);
-    const before = archiveEntry(db, 1)!.contentHash;
-    db.close();
-
-    const proc = Bun.spawn(
-      ["bun", "run", TOOL, "--db", dbPath, "--from", sheetWithSwappedPuzzles()],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    const code = await proc.exited;
-
+    // Nobody could have played it, so there is nothing to warn anyone about.
+    expect(out).not.toContain("were EDITED");
     expect(code).toBe(0);
-    const after = new Database(dbPath);
+
+    const db = new Database(dbPath);
     try {
-      expect(archiveEntry(after, 1)!.contentHash).not.toBe(before);
+      // Still logged — the history is worth having either way — but marked as
+      // having happened while the puzzle was not playable.
+      const history = contentHistory(db, 1);
+      expect(history).toHaveLength(1);
+      expect(history[0]?.wasPublished).toBe(false);
+      // null, not 0: the sync creates only the archive tables, so this database
+      // has no `runs` at all. "Nobody has played it" and "there is nobody here
+      // to have played it" are different answers and the column keeps them apart.
+      expect(history[0]?.runsBefore).toBeNull();
     } finally {
-      after.close();
+      db.close();
     }
   });
 });
