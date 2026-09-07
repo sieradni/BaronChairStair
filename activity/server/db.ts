@@ -293,6 +293,14 @@ CREATE TABLE IF NOT EXISTS archive_content_log (
   -- overwritten by nothing, but the run count moves every day.
   was_published INTEGER NOT NULL,
   runs_before   INTEGER,
+  -- Discovered alternate solutions deleted because of this change. They are
+  -- keyed by placements and not by board (see shared/solution-key.ts), so
+  -- nothing about them would have noticed the board moving underneath: they
+  -- would have stayed on file as \`known\` lines for a puzzle they may not even
+  -- be playable on, and the next player to genuinely find one on the new board
+  -- would have been refused credit as a duplicate. NULL when this database has
+  -- no \`puzzle_solutions\` table to void from.
+  solutions_voided INTEGER,
   at            INTEGER NOT NULL,
   by            TEXT NOT NULL
 );

@@ -185,6 +185,8 @@ export type SyncOutcome =
       droppedClears: readonly ClearRequirement[] | null;
       /** Runs already filed against this id, or null if this database has none. */
       runsBefore: number | null;
+      /** Discovered lines voided by the edit, or null if there was no table. */
+      solutionsVoided: number | null;
     };
 
 const METADATA_FIELDS = ["title", "author", "difficulty", "goal", "set"] as const;
@@ -218,6 +220,33 @@ export function runsAgainst(db: Database, puzzleId: number): number | null {
 }
 
 /**
+ * Deletes every discovered solution filed against a puzzle. Returns how many,
+ * or null when this database has no `puzzle_solutions` table.
+ *
+ * A discovered line is a claim about a board — "this sequence of placements
+ * solves this position". When the board changes the claim is void, and nothing
+ * in the discovery system can tell: `solutionFingerprint` is placements, attack
+ * and clear names with no board in it, so the rows keep matching and no code
+ * path anywhere re-validates them.
+ *
+ * Left alone they do active harm rather than merely going stale. They are shown
+ * to makers as the evidence for "is my clear requirement too loose", they
+ * inflate the line counts on the review tool's archive tab, and the unique
+ * index on (puzzle_id, canonical_key) means the next player to genuinely find
+ * one of those lines on the *new* board is refused credit as a duplicate.
+ */
+export function voidDiscoveries(db: Database, puzzleId: number): number | null {
+  const present = db
+    .query<{ name: string }, []>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'puzzle_solutions'",
+    )
+    .get();
+  if (!present) return null;
+  db.run("DELETE FROM puzzle_solutions WHERE puzzle_id = ?1", [puzzleId]);
+  return db.query<{ changes: number }, []>("SELECT changes() AS changes").get()?.changes ?? 0;
+}
+
+/**
  * Records what a puzzle was, immediately before it stops being that.
  *
  * Values rather than the hash, because the hash proves a change happened and
@@ -229,6 +258,7 @@ function logContentChange(
   was: ArchiveEntry,
   becameHash: string,
   runsBefore: number | null,
+  solutionsVoided: number | null,
   at: number,
   by: string,
 ): void {
@@ -236,8 +266,8 @@ function logContentChange(
   db.run(
     `INSERT INTO archive_content_log
        (puzzle_id, was_hash, became_hash, was_board, was_queue, was_hold, was_target,
-        was_solution, was_clears, was_published, runs_before, at, by)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`,
+        was_solution, was_clears, was_published, runs_before, solutions_voided, at, by)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)`,
     [
       puzzle.id,
       was.contentHash,
@@ -250,6 +280,7 @@ function logContentChange(
       puzzle.requiredClears ? JSON.stringify(puzzle.requiredClears) : null,
       was.publishedAt === null ? 0 : 1,
       runsBefore,
+      solutionsVoided,
       at,
       by,
     ],
@@ -261,7 +292,7 @@ export function contentHistory(db: Database, puzzleId: number): ContentChange[] 
   return db
     .query<ContentLogRow, [number]>(
       `SELECT entry_id, puzzle_id, was_hash, became_hash, was_target, was_clears,
-              was_published, runs_before, at, by
+              was_published, runs_before, solutions_voided, at, by
          FROM archive_content_log WHERE puzzle_id = ?1 ORDER BY entry_id ASC`,
     )
     .all(puzzleId)
@@ -274,6 +305,7 @@ export function contentHistory(db: Database, puzzleId: number): ContentChange[] 
       wasClears: row.was_clears ? (JSON.parse(row.was_clears) as ClearRequirement[]) : null,
       wasPublished: row.was_published === 1,
       runsBefore: row.runs_before,
+      solutionsVoided: row.solutions_voided,
       at: row.at,
       by: row.by,
     }));
@@ -288,6 +320,7 @@ interface ContentLogRow {
   was_clears: string | null;
   was_published: number;
   runs_before: number | null;
+  solutions_voided: number | null;
   at: number;
   by: string;
 }
@@ -302,6 +335,8 @@ export interface ContentChange {
   readonly wasClears: readonly ClearRequirement[] | null;
   readonly wasPublished: boolean;
   readonly runsBefore: number | null;
+  /** Discovered lines deleted by this change; null if there was no table. */
+  readonly solutionsVoided: number | null;
   readonly at: number;
   readonly by: string;
 }
@@ -322,6 +357,10 @@ export interface ContentChange {
  * Overwriting is not recoverable, so the previous content is written to
  * `archive_content_log` first, in the caller's transaction. That is the whole
  * of what makes an already-filed score interpretable afterwards.
+ *
+ * Discovered alternate solutions are **voided** by an edit — see
+ * {@link voidDiscoveries}. They are claims about a board, and the board has
+ * moved; keeping them would deny the next genuine discoverer their credit.
  *
  * Metadata is not content and flows through freely, including on published
  * rows: a corrected title or a filled-in difficulty rating is the sheet being
@@ -391,9 +430,12 @@ export function upsertArchive(
   // destroys the evidence.
   let droppedClears: readonly ClearRequirement[] | null = null;
   let runsBefore: number | null = null;
+  let solutionsVoided: number | null = null;
   if (contentMoved) {
     runsBefore = runsAgainst(db, puzzle.id);
-    logContentChange(db, existing, incoming, runsBefore, now, by);
+    // Before the log, so the log can record how many went.
+    solutionsVoided = voidDiscoveries(db, puzzle.id);
+    logContentChange(db, existing, incoming, runsBefore, solutionsVoided, now, by);
 
     const frozen = existing.puzzle.requiredClears;
     const made = (puzzle.solution ?? [])
@@ -442,6 +484,7 @@ export function upsertArchive(
     to: incoming,
     droppedClears,
     runsBefore,
+    solutionsVoided,
   };
 }
 

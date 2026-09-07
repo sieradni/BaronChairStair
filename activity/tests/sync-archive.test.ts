@@ -167,10 +167,12 @@ describe("when a creator edits a published puzzle", () => {
       const history = contentHistory(db, 1);
       expect(history).toHaveLength(1);
       expect(history[0]?.wasPublished).toBe(false);
-      // null, not 0: the sync creates only the archive tables, so this database
-      // has no `runs` at all. "Nobody has played it" and "there is nobody here
-      // to have played it" are different answers and the column keeps them apart.
+      // null, not 0, for both: the sync creates only the archive tables, so this
+      // database has no `runs` and no `puzzle_solutions` at all. "Nobody played
+      // it" and "there is nobody here to have played it" are different answers,
+      // and these columns keep them apart.
       expect(history[0]?.runsBefore).toBeNull();
+      expect(history[0]?.solutionsVoided).toBeNull();
     } finally {
       db.close();
     }

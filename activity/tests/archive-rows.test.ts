@@ -180,6 +180,68 @@ describe("a creator editing a published puzzle", () => {
   });
 });
 
+describe("discovered solutions, when content is edited", () => {
+  /** One discovered line, as `recordDiscovery` would file it. */
+  function discovery(key: string) {
+    return {
+      puzzleId: 1,
+      canonicalKey: key,
+      keyVersion: 1,
+      placements: [],
+      events: null,
+      handling: null,
+      attack: 4,
+      clears: ["tsd"] as const,
+      solvedStrict: true,
+      source: "player" as const,
+      foundBy: "p1",
+      guildId: null,
+    };
+  }
+
+  beforeEach(() => {
+    store.upsertPlayer({ id: "p1", username: "someone", avatarUrl: null });
+    upsertArchive(db, puzzle(), NOW);
+    publishArchive(db, [1], "officer", NOW);
+    store.recordSolution(discovery("line-a"));
+    store.recordSolution(discovery("line-b"));
+  });
+
+  test("are voided, and the count is reported and logged", () => {
+    const outcome = upsertArchive(db, puzzle({ queue: ["S", "Z", "L"] }), NOW + 1);
+
+    expect(outcome.kind).toBe("edited");
+    if (outcome.kind !== "edited") throw new Error("unreachable");
+    expect(outcome.solutionsVoided).toBe(2);
+    expect(store.countSolutions(1)).toBe(0);
+    expect(contentHistory(db, 1)[0]?.solutionsVoided).toBe(2);
+  });
+
+  test("the next player to find one of those lines is credited for it", () => {
+    // The whole reason to void rather than keep. The unique index on
+    // (puzzle_id, canonical_key) means a surviving row would have made this
+    // rediscovery a duplicate, on a board where it is a genuine first.
+    upsertArchive(db, puzzle({ queue: ["S", "Z", "L"] }), NOW + 1);
+
+    expect(store.recordSolution(discovery("line-a")).discovered).toBe(true);
+  });
+
+  test("a metadata correction leaves them alone", () => {
+    upsertArchive(db, puzzle({ title: "renamed" }), NOW + 1);
+
+    expect(store.countSolutions(1)).toBe(2);
+  });
+
+  test("another puzzle's discoveries are untouched", () => {
+    upsertArchive(db, puzzle({ id: 2 }), NOW);
+    store.recordSolution({ ...discovery("line-a"), puzzleId: 2 });
+
+    upsertArchive(db, puzzle({ queue: ["S", "Z", "L"] }), NOW + 1);
+
+    expect(store.countSolutions(2)).toBe(1);
+  });
+});
+
 describe("the frozen clear requirement, when content is edited", () => {
   const TSD: readonly ClearRequirement[] = [{ clear: "tsd", count: 1 }];
   /** A solution that clears nothing, so the frozen requirement cannot be met. */

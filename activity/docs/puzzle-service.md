@@ -182,14 +182,16 @@ table. No rank, time or solved flag moves. The earlier claim here that an edit
   the pin through the live archive, so it prints the new title, author, goal and
   target above a board of runs played on the old puzzle. This is the one
   user-visible breakage, and it is exactly what `pinPastDays` warns about.
-- **Discovered alternate solutions carry over silently.** `puzzle_solutions` is
-  keyed by placements, attack and clears — no board — so every stored line
-  transfers onto the new puzzle. Nothing re-validates them: there is no UPDATE
-  or DELETE on that table anywhere. Stale lines are then shown to makers against
-  the new goal as the evidence for "is my clear requirement too loose?", the
-  line counts on the review Archive tab are inflated, and a player who genuinely
-  discovers a line on the *new* board whose fingerprint collides with a
-  carried-over row is refused credit by `ON CONFLICT DO NOTHING`.
+- **Discovered alternate solutions are voided.** A discovered line is a claim
+  about a board, and the board has moved. Nothing in the discovery system could
+  notice on its own: `puzzle_solutions` is keyed by placements, attack and
+  clears with no board in the key, so the rows would keep matching and no code
+  path anywhere re-validates them. Left in place they would be shown to makers
+  as the evidence for "is my clear requirement too loose?", would inflate the
+  line counts on the review Archive tab, and — worst — the unique index on
+  `(puzzle_id, canonical_key)` would make the next player to genuinely find one
+  of those lines on the *new* board a duplicate, refused credit by `ON CONFLICT
+  DO NOTHING`. So the edit deletes them and records how many in the log.
 - **The frozen clear requirement can no longer be trusted.** It is a decision
   about the *old* answer. Left attached to a new board it is still enforced, and
   can demand a clear the new answer never makes — a published puzzle nobody can

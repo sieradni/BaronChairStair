@@ -143,6 +143,7 @@ interface Report {
     to: string;
     droppedClears: readonly ClearRequirement[] | null;
     runsBefore: number | null;
+    solutionsVoided: number | null;
   }[];
   unchanged: number;
   /** Puzzles whose answer would not decode or replay. A puzzle problem. */
@@ -170,6 +171,7 @@ function record(report: Report, puzzle: Puzzle, outcome: SyncOutcome): void {
       to: outcome.to,
       droppedClears: outcome.droppedClears,
       runsBefore: outcome.runsBefore,
+      solutionsVoided: outcome.solutionsVoided,
     });
   }
 }
@@ -210,6 +212,11 @@ function describe(report: Report, dryRun: boolean): void {
       const what = ["content", ...e.fields].join(", ");
       console.log(`  #${e.id} "${e.title}" — ${what}${runs}`);
       console.log(`      ${e.from} -> ${e.to}`);
+      if (e.solutionsVoided) {
+        console.log(
+          `      voided ${e.solutionsVoided} discovered solution(s) — they were lines on the old board.`,
+        );
+      }
       if (e.droppedClears) {
         console.log(
           `      DROPPED its clear requirement (${e.droppedClears
@@ -226,8 +233,9 @@ function describe(report: Report, dryRun: boolean): void {
         "  - What those scores are ABOUT has moved. Nothing records the board a run was\n" +
         "    played on, so an old score now points at content nobody played it on.\n" +
         "  - A finished day's recap will name the NEW title and goal above the OLD runs.\n" +
-        "  - Discovered alternate solutions carry over silently: they are keyed by\n" +
-        "    placements, not by board, and nothing re-checks them against the new one.\n" +
+        "  - Discovered alternate solutions for the puzzle are VOIDED. They are lines\n" +
+        "    on a board that no longer exists, and keeping them would deny the next\n" +
+        "    player to genuinely find one on the new board their credit.\n" +
         "  The previous content is in archive_content_log, which is the only place it\n" +
         "  still exists.",
     );
