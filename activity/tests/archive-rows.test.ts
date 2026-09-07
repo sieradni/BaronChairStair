@@ -242,6 +242,75 @@ describe("discovered solutions, when content is edited", () => {
   });
 });
 
+describe("when a write fails part-way through an edit", () => {
+  /**
+   * The deletion of discovered solutions is the one irreversible statement in
+   * the edit path — the archive row can be re-synced from the sheet, a deleted
+   * discovery exists nowhere. Run first, as it originally was, a later throw
+   * committed the deletion while the edit that justified it rolled back.
+   */
+  test("the discoveries are not destroyed", () => {
+    store.upsertPlayer({ id: "p1", username: "someone", avatarUrl: null });
+    upsertArchive(db, puzzle(), NOW);
+    publishArchive(db, [1], "officer", NOW);
+    store.recordSolution({
+      puzzleId: 1,
+      canonicalKey: "line-a",
+      keyVersion: 1,
+      placements: [],
+      events: null,
+      handling: null,
+      attack: 4,
+      clears: ["tsd"],
+      solvedStrict: true,
+      source: "player",
+      foundBy: "p1",
+      guildId: null,
+    });
+
+    // Make the log write fail, which is what a database upgraded from an
+    // earlier version of this table did.
+    db.run("DROP TABLE archive_content_log");
+
+    expect(() => upsertArchive(db, puzzle({ queue: ["S", "Z", "L"] }), NOW + 1)).toThrow();
+
+    // Nothing applied, and nothing lost.
+    expect(store.countSolutions(1)).toBe(1);
+    expect(archiveEntry(db, 1)?.puzzle.queue).toEqual(["T", "I", "O"]);
+  });
+});
+
+describe("an unpublished puzzle's discoveries", () => {
+  test("are left alone when its content changes", () => {
+    // An unpublished row is not what the server serves, so a discovery filed
+    // under its id belongs to whatever is being served under that id. Deleting
+    // it would destroy somebody else's row on the strength of an id match —
+    // and an unpublished change reports as a plain amendment, so silently.
+    store.upsertPlayer({ id: "p1", username: "someone", avatarUrl: null });
+    upsertArchive(db, puzzle(), NOW);
+    store.recordSolution({
+      puzzleId: 1,
+      canonicalKey: "line-a",
+      keyVersion: 1,
+      placements: [],
+      events: null,
+      handling: null,
+      attack: 4,
+      clears: ["tsd"],
+      solvedStrict: true,
+      source: "player",
+      foundBy: "p1",
+      guildId: null,
+    });
+
+    const outcome = upsertArchive(db, puzzle({ queue: ["S", "Z", "L"] }), NOW + 1);
+
+    expect(outcome.kind).toBe("amended");
+    expect(store.countSolutions(1)).toBe(1);
+    expect(contentHistory(db, 1)[0]?.solutionsVoided).toBeNull();
+  });
+});
+
 describe("the frozen clear requirement, when content is edited", () => {
   const TSD: readonly ClearRequirement[] = [{ clear: "tsd", count: 1 }];
   /** A solution that clears nothing, so the frozen requirement cannot be met. */

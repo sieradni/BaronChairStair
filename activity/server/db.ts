@@ -308,6 +308,32 @@ CREATE INDEX IF NOT EXISTS archive_content_log_puzzle
   ON archive_content_log (puzzle_id, entry_id);
 `;
 
+/**
+ * Brings the archive tables up to date on an existing database.
+ *
+ * `CREATE TABLE IF NOT EXISTS` leaves an existing table untouched, so a
+ * database that got `archive_content_log` before a column existed never gains
+ * it — the same trap {@link Store.addMissingColumn} exists for. This is that
+ * idiom for the two tables `tools/sync-archive.ts` creates, which cannot use
+ * the Store's version because it deliberately never constructs one.
+ *
+ * Run this rather than {@link ARCHIVE_SCHEMA} directly.
+ */
+export function migrateArchive(db: Database): void {
+  db.run(ARCHIVE_SCHEMA);
+  const columns = db
+    .query<{ name: string }, []>("PRAGMA table_info(archive_content_log)")
+    .all()
+    .map((row) => row.name);
+  // Deliberately no backfill. A change logged before this column existed
+  // deleted nothing, because nothing deleted discoveries then; NULL is also
+  // what "this database has no puzzle_solutions" means, and both readings lead
+  // to the same honest answer -- nobody recorded a count.
+  if (columns.length > 0 && !columns.includes("solutions_voided")) {
+    db.run("ALTER TABLE archive_content_log ADD COLUMN solutions_voided INTEGER");
+  }
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS players (
   id          TEXT PRIMARY KEY,
@@ -722,6 +748,7 @@ export class Store {
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.db.run(SCHEMA);
+    migrateArchive(this.db);
     // Before anything else touches `runs`: a database written when a day held
     // one puzzle has the wrong primary key, and no amount of ADD COLUMN fixes
     // that.

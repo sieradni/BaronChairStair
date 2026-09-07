@@ -14,8 +14,8 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { archiveCounts, readPublishedArchive } from "../server/archive-rows";
-import { Store, type PastDays, type RunResult } from "../server/db";
+import { archiveCounts, contentHistory, readPublishedArchive } from "../server/archive-rows";
+import { migrateArchive, Store, type PastDays, type RunResult } from "../server/db";
 import type { SubmissionDraft } from "../server/submissions";
 import { COMMUNITY_ID_BASE } from "../shared/puzzle";
 import { DEFAULT_HANDLING } from "../shared/tetris/handling";
@@ -795,6 +795,67 @@ describe("the archive table arriving on a deployed database", () => {
       }
     } finally {
       store.close();
+    }
+  });
+});
+
+describe("the archive content log gaining a column", () => {
+  test("an existing log table gains solutions_voided", () => {
+    // The exact upgrade path a reviewer reproduced: a database whose
+    // archive_content_log was created before this column existed. CREATE TABLE
+    // IF NOT EXISTS leaves it untouched, so without an explicit ALTER every
+    // content edit throws "no such column" — and, before the ordering was
+    // fixed, threw it *after* deleting the puzzle's discovered solutions.
+    const legacy = new Database(path, { create: true });
+    legacy.run(`CREATE TABLE archive_content_log (
+      entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      puzzle_id INTEGER NOT NULL, was_hash TEXT NOT NULL, became_hash TEXT NOT NULL,
+      was_board TEXT NOT NULL, was_queue TEXT NOT NULL, was_hold TEXT,
+      was_target INTEGER NOT NULL, was_solution TEXT NOT NULL, was_clears TEXT,
+      was_published INTEGER NOT NULL, runs_before INTEGER,
+      at INTEGER NOT NULL, by TEXT NOT NULL
+    )`);
+    legacy.run(
+      `INSERT INTO archive_content_log
+         (puzzle_id, was_hash, became_hash, was_board, was_queue, was_hold, was_target,
+          was_solution, was_clears, was_published, runs_before, at, by)
+       VALUES (1,'a','b','[]','[]',NULL,4,'[]',NULL,1,0,100,'someone')`,
+    );
+    legacy.close();
+
+    migrateArchive(new Database(path));
+
+    const db = new Database(path);
+    try {
+      const columns = db
+        .query<{ name: string }, []>("PRAGMA table_info(archive_content_log)")
+        .all()
+        .map((row) => row.name);
+      expect(columns).toContain("solutions_voided");
+
+      // The row that predates the column survives, reading NULL — nobody
+      // recorded a count, which is the honest answer.
+      const history = contentHistory(db, 1);
+      expect(history).toHaveLength(1);
+      expect(history[0]?.solutionsVoided).toBeNull();
+      expect(history[0]?.by).toBe("someone");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("runs clean on a database that already has the column", () => {
+    const store = new Store(path);
+    store.close();
+    const db = new Database(path);
+    try {
+      expect(() => migrateArchive(db)).not.toThrow();
+      expect(
+        db.query<{ name: string }, []>("PRAGMA table_info(archive_content_log)").all()
+          .filter((row) => row.name === "solutions_voided"),
+      ).toHaveLength(1);
+    } finally {
+      db.close();
     }
   });
 });

@@ -220,8 +220,8 @@ export function runsAgainst(db: Database, puzzleId: number): number | null {
 }
 
 /**
- * Deletes every discovered solution filed against a puzzle. Returns how many,
- * or null when this database has no `puzzle_solutions` table.
+ * How many discovered solutions are filed against a puzzle, or null when this
+ * database has no `puzzle_solutions` table.
  *
  * A discovered line is a claim about a board — "this sequence of placements
  * solves this position". When the board changes the claim is void, and nothing
@@ -235,15 +235,33 @@ export function runsAgainst(db: Database, puzzleId: number): number | null {
  * index on (puzzle_id, canonical_key) means the next player to genuinely find
  * one of those lines on the *new* board is refused credit as a duplicate.
  */
-export function voidDiscoveries(db: Database, puzzleId: number): number | null {
+export function countDiscoveries(db: Database, puzzleId: number): number | null {
   const present = db
     .query<{ name: string }, []>(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'puzzle_solutions'",
     )
     .get();
   if (!present) return null;
+  return (
+    db
+      .query<{ n: number }, [number]>(
+        "SELECT COUNT(*) AS n FROM puzzle_solutions WHERE puzzle_id = ?1",
+      )
+      .get(puzzleId)?.n ?? 0
+  );
+}
+
+/**
+ * Deletes them. Separate from {@link countDiscoveries}, and called **last**.
+ *
+ * This is the one statement in the edit path that destroys something nothing
+ * else holds a copy of: the archive row can be re-synced from the sheet, but a
+ * deleted discovery exists nowhere. Run first — as it was — a later throw
+ * committed the deletion while the edit that justified it rolled back, and the
+ * sync then printed "nothing was saved" over three destroyed rows.
+ */
+export function voidDiscoveries(db: Database, puzzleId: number): void {
   db.run("DELETE FROM puzzle_solutions WHERE puzzle_id = ?1", [puzzleId]);
-  return db.query<{ changes: number }, []>("SELECT changes() AS changes").get()?.changes ?? 0;
 }
 
 /**
@@ -433,8 +451,13 @@ export function upsertArchive(
   let solutionsVoided: number | null = null;
   if (contentMoved) {
     runsBefore = runsAgainst(db, puzzle.id);
-    // Before the log, so the log can record how many went.
-    solutionsVoided = voidDiscoveries(db, puzzle.id);
+    // Counted, not deleted, and only for a row players could actually reach: an
+    // unpublished row is not what the server serves, so a discovery filed under
+    // its id belongs to whatever IS being served under that id. Deleting those
+    // would be destroying somebody else's rows on the strength of an id match,
+    // and — since an unpublished change reports as a plain amendment — doing it
+    // without saying so.
+    solutionsVoided = existing.publishedAt === null ? null : countDiscoveries(db, puzzle.id);
     logContentChange(db, existing, incoming, runsBefore, solutionsVoided, now, by);
 
     const frozen = existing.puzzle.requiredClears;
@@ -477,6 +500,9 @@ export function upsertArchive(
     // Not playable yet, so nobody can have a score against the old content.
     return { kind: "amended", fields: [...fields, "content"] };
   }
+  // Last, after every write that can throw. See voidDiscoveries.
+  if (solutionsVoided) voidDiscoveries(db, puzzle.id);
+
   return {
     kind: "edited",
     fields,

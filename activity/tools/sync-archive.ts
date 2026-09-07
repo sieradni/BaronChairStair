@@ -40,7 +40,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { upsertArchive, type SyncOutcome } from "../server/archive-rows";
 import type { ClearRequirement, Puzzle } from "../shared/puzzle";
-import { ARCHIVE_SCHEMA } from "../server/db";
+import { migrateArchive } from "../server/db";
 import { CODES_SHEET, META_SHEET, buildPuzzle, indexById } from "./decode-archive";
 import { parseCsv } from "./csv";
 
@@ -274,13 +274,21 @@ async function main(): Promise<void> {
     // Wait for the server rather than failing instantly. Nothing else in this
     // repository sets this, which is why a second writer normally dies on sight.
     db.run(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
-    db.run(ARCHIVE_SCHEMA);
+    migrateArchive(db);
 
     db.transaction(() => {
       for (const puzzle of built) {
+        // A SAVEPOINT per puzzle, because the catch below is INSIDE the
+        // transaction: without one, a puzzle that throws half-way through its
+        // writes has that half committed with everything else at the end. One
+        // puzzle failing must leave that puzzle untouched, not partly written.
+        db.run("SAVEPOINT puzzle");
         try {
           record(report, puzzle, upsertArchive(db, puzzle, now, options.by));
+          db.run("RELEASE puzzle");
         } catch (error) {
+          db.run("ROLLBACK TO puzzle");
+          db.run("RELEASE puzzle");
           // A write that fails is not a puzzle that will not replay.
           report.unwritten.push({ id: puzzle.id, reason: (error as Error).message });
         }
