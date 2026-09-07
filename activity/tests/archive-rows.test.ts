@@ -119,7 +119,15 @@ describe("a creator editing a published puzzle", () => {
     if (outcome.kind !== "edited") throw new Error("unreachable");
     expect(outcome.from).toBe(contentHash(puzzle()));
     expect(outcome.to).toBe(contentHash(puzzle(REPLACED)));
+    // The metadata that moved alongside the content, which the sync prints.
+    expect(outcome.fields).toEqual(["title"]);
     expect(readPublishedArchive(db)[0]?.queue).toEqual(["S", "Z", "L"]);
+  });
+
+  test("records who made the change, defaulting to the tool", () => {
+    upsertArchive(db, puzzle(REPLACED), NOW + 1);
+
+    expect(contentHistory(db, 1)[0]?.by).toBe("sync-archive");
   });
 
   test("it stays published, and stays published by whoever published it", () => {
@@ -141,6 +149,9 @@ describe("a creator editing a published puzzle", () => {
     expect(history[0]?.becameHash).toBe(contentHash(puzzle(REPLACED)));
     expect(history[0]?.wasPublished).toBe(true);
     expect(history[0]?.by).toBe("a creator");
+    // Pinned because a log that cannot say when or who is a log nobody can act
+    // on: both survived a mutation pass that blanked them.
+    expect(history[0]?.at).toBe(NOW + 1);
 
     const row = db
       .query<{ was_queue: string; was_target: number }, [number]>(

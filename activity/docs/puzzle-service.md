@@ -231,10 +231,17 @@ makes this easy; nothing else about dev should reach production.
    `tools/decode-archive.ts`, verified by rebuilding the committed files
    byte-for-byte.
 
-   Rule 4b is enforced rather than waiting on a decision: the sync **refuses**
-   to change a published puzzle's content, reports the drift and exits 1. So
-   the question below is no longer blocking — a sync can be run today, safely,
-   and the twelve drifted puzzles simply will not move until somebody says so.
+   **Rule 4b is answered, and a sync applies edits.** A published puzzle's
+   content change is written, its previous content goes to
+   `archive_content_log` in the same transaction, and the run reports each
+   edited id with its hashes, the runs already filed against it, and any clear
+   requirement that had to be dropped. It exits **2** for that; exit 1 means a
+   row the sync could not write.
+
+   So running it today **will** move the twelve changed puzzles — #8, #7 and
+   #109 among them. That is allowed, and it is not something to discover
+   afterwards: the report is printed after the transaction commits, so use
+   `--dry-run` first if you want to see the list before it is applied.
 
    Still inherited from the build and not yet fixed: sheet columns are read
    **by position**, so a column inserted in either tab shifts every field
