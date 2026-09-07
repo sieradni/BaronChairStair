@@ -34,7 +34,17 @@
 import type { Database } from "bun:sqlite";
 import { cors } from "hono/cors";
 import type { AppRouter } from "./http";
-import { archiveEntry, readPublishedArchive } from "./archive-rows";
+import { archiveEntry, publishedEntries, type ArchiveEntry } from "./archive-rows";
+
+/**
+ * Where a Blueprint code becomes a link.
+ *
+ * The club's spreadsheet stores these two ways in two tabs — a bare code on
+ * one, a full URL on the other — and the website validates the host it links
+ * to. Building the URL here from the code means downstream projects never have
+ * to know that, and never have to trust a host that arrived in data.
+ */
+const BLUEPRINT_VIEWER = "https://bp.tali.software/?";
 
 /** Where every route in this module lives. One prefix, so CORS can be scoped. */
 export const PUBLIC_PREFIX = "/api/public";
@@ -66,9 +76,18 @@ export interface PublicPuzzle {
   readonly solution: readonly unknown[] | null;
   /** The Blueprint codes the puzzle was built from. */
   readonly source: { readonly puzzle: string; readonly solution: string } | null;
+  /** The same two, as links, so a consumer does not hard-code the viewer. */
+  readonly puzzleUrl: string | null;
+  readonly solutionUrl: string | null;
+  /** The club's bookkeeping, straight off the sheet. */
+  readonly addedOn: string | null;
+  readonly solveCount: number | null;
 }
 
-function toPublic(puzzle: ReturnType<typeof readPublishedArchive>[number]): PublicPuzzle {
+function toPublic(entry: ArchiveEntry): PublicPuzzle {
+  const puzzle = entry.puzzle;
+  const link = (code: string | undefined) =>
+    code ? `${BLUEPRINT_VIEWER}${code}` : null;
   return {
     id: puzzle.id,
     title: puzzle.title,
@@ -83,8 +102,13 @@ function toPublic(puzzle: ReturnType<typeof readPublishedArchive>[number]): Publ
     requiredClears: puzzle.requiredClears ?? null,
     solution: puzzle.solution ?? null,
     source: puzzle.source ?? null,
+    puzzleUrl: link(puzzle.source?.puzzle),
+    solutionUrl: link(puzzle.source?.solution),
+    addedOn: entry.addedOn,
+    solveCount: entry.solveCount,
   };
 }
+
 
 /**
  * Mounts the public archive on `app`.
@@ -109,7 +133,7 @@ export function registerPublicRoutes(app: AppRouter, db: Database): void {
    * and doing it in the query means a future caller cannot forget.
    */
   app.get(PUBLIC_PREFIX, (c) => {
-    const puzzles = readPublishedArchive(db).map(toPublic);
+    const puzzles = publishedEntries(db).map(toPublic);
     c.header("Cache-Control", `public, max-age=${CACHE_SECONDS}`);
     return c.json({ puzzles, count: puzzles.length });
   });
@@ -126,6 +150,6 @@ export function registerPublicRoutes(app: AppRouter, db: Database): void {
       return c.json({ error: `No published puzzle ${id}.` }, 404);
     }
     c.header("Cache-Control", `public, max-age=${CACHE_SECONDS}`);
-    return c.json({ puzzle: toPublic(entry.puzzle) });
+    return c.json({ puzzle: toPublic(entry) });
   });
 }

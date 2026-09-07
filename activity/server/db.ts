@@ -233,6 +233,14 @@ CREATE TABLE IF NOT EXISTS archive_puzzles (
   required_clears  TEXT,
   source_puzzle    TEXT NOT NULL,
   source_solution  TEXT NOT NULL,
+  -- Archive bookkeeping the club keeps on the sheet and the game does not use:
+  -- when a puzzle was added, and how many people the club has recorded solving
+  -- it. They are here because the website shows both, and a data layer that
+  -- makes a downstream project keep its own copy of two columns is not one.
+  -- Deliberately NOT on the \`Puzzle\` type: nothing about playing a puzzle
+  -- depends on them.
+  added_on         TEXT,
+  solve_count      INTEGER,
   -- Fingerprint of the fields that decide how the puzzle PLAYS -- board, queue,
   -- hold, target and answer. Sheet ids are reused: a row can keep its number
   -- while becoming a different puzzle underneath, which has already happened
@@ -331,6 +339,20 @@ export function migrateArchive(db: Database): void {
   // to the same honest answer -- nobody recorded a count.
   if (columns.length > 0 && !columns.includes("solutions_voided")) {
     db.run("ALTER TABLE archive_content_log ADD COLUMN solutions_voided INTEGER");
+  }
+
+  const puzzleColumns = db
+    .query<{ name: string }, []>("PRAGMA table_info(archive_puzzles)")
+    .all()
+    .map((row) => row.name);
+  // Same trap, same fix: a database that got archive_puzzles before these
+  // existed never gains them from CREATE TABLE IF NOT EXISTS. No backfill —
+  // the next sync fills them from the sheet, and NULL until then is the honest
+  // answer rather than a guess.
+  for (const [name, type] of [["added_on", "TEXT"], ["solve_count", "INTEGER"]] as const) {
+    if (puzzleColumns.length > 0 && !puzzleColumns.includes(name)) {
+      db.run(`ALTER TABLE archive_puzzles ADD COLUMN ${name} ${type}`);
+    }
   }
 }
 

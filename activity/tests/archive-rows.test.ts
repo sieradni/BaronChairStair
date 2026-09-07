@@ -399,3 +399,35 @@ describe("the clear requirement", () => {
     expect(archiveEntry(db, 1)?.puzzle.requiredClears).toEqual(clears);
   });
 });
+
+describe("the archive's own bookkeeping", () => {
+  const META = { addedOn: "2026-04-03", solveCount: 7 } as const;
+
+  test("is stored beside the puzzle without touching the Puzzle type", () => {
+    upsertArchive(db, puzzle(), NOW, "sync-archive", META);
+
+    const entry = archiveEntry(db, 1);
+    expect(entry?.addedOn).toBe("2026-04-03");
+    expect(entry?.solveCount).toBe(7);
+  });
+
+  test("backfills onto a row that predates the columns", () => {
+    // The bug this pins: a row inserted before added_on existed matched on
+    // hash and on all five metadata fields, so the `unchanged` early return
+    // skipped the UPDATE and it stayed NULL through every future sync. An
+    // upgraded database reported 153 unchanged and 0 with a date.
+    upsertArchive(db, puzzle(), NOW);
+    expect(archiveEntry(db, 1)?.addedOn).toBeNull();
+
+    const outcome = upsertArchive(db, puzzle(), NOW + 1, "sync-archive", META);
+
+    expect(outcome.kind).toBe("amended");
+    expect(archiveEntry(db, 1)?.addedOn).toBe("2026-04-03");
+  });
+
+  test("an unchanged sheet is still unchanged", () => {
+    upsertArchive(db, puzzle(), NOW, "sync-archive", META);
+
+    expect(upsertArchive(db, puzzle(), NOW + 1, "sync-archive", META).kind).toBe("unchanged");
+  });
+});

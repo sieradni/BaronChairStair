@@ -34,7 +34,11 @@ import { alignPlacements } from "./align-placements";
 
 /** The tab holding the blueprint code pair. Columns: 0 id, 1 puzzle, 2 answer, 4 title. */
 export const CODES_SHEET = "Copy of Puzzles Archive - blueprint urls.csv";
-/** The tab holding the metadata. Columns: 0 id, 1 title, 2 difficulty, 3 creator, 7 set. */
+/**
+ * The tab holding the metadata.
+ * Columns: 0 id, 1 title, 2 difficulty, 3 creator, 4 creation date, 7 set,
+ * 8 solve count.
+ */
 export const META_SHEET = "Copy of Puzzles Archive - Puzzles.csv";
 
 /** Row lookup keyed by puzzle id, tolerating the archive's stray whitespace. */
@@ -132,5 +136,38 @@ export function buildPuzzle(
     targetAttack: replay.totalAttack,
     solution,
     source: { puzzle: codes[1] ?? "", solution: answerCode },
+  };
+}
+
+/** Archive bookkeeping off the metadata tab: not gameplay, but the club's record. */
+export interface ArchiveMeta {
+  /** The sheet's creation date, as written. Null when the cell is empty. */
+  readonly addedOn: string | null;
+  /** The club's recorded solve count. Null when absent or unparseable. */
+  readonly solveCount: number | null;
+}
+
+/**
+ * The sheet writes dates as `M/D/YY`. Everything downstream wants one format,
+ * and the website already stores ISO, so the normalising happens once here
+ * rather than in each consumer. Anything that does not parse is passed through
+ * untouched rather than guessed at — a date nobody can read is better than a
+ * date read wrongly.
+ */
+function toIsoDate(raw: string): string {
+  const parts = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/.exec(raw);
+  if (!parts) return raw;
+  const [, month, day, year] = parts;
+  const full = year!.length === 2 ? `20${year}` : year!;
+  return `${full}-${month!.padStart(2, "0")}-${day!.padStart(2, "0")}`;
+}
+
+/** Reads columns 4 and 8, which `buildPuzzle` has no use for. */
+export function archiveMetaOf(meta: string[] | undefined): ArchiveMeta {
+  const added = meta?.[4]?.trim();
+  const solves = Number.parseInt(meta?.[8]?.trim() ?? "", 10);
+  return {
+    addedOn: added ? toIsoDate(added) : null,
+    solveCount: Number.isFinite(solves) ? solves : null,
   };
 }

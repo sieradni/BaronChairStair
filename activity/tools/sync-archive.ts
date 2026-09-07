@@ -41,7 +41,7 @@ import { join, resolve } from "node:path";
 import { upsertArchive, type SyncOutcome } from "../server/archive-rows";
 import type { ClearRequirement, Puzzle } from "../shared/puzzle";
 import { migrateArchive } from "../server/db";
-import { CODES_SHEET, META_SHEET, buildPuzzle, indexById } from "./decode-archive";
+import { archiveMetaOf, CODES_SHEET, META_SHEET, buildPuzzle, indexById } from "./decode-archive";
 import { readSheetTab, TAB_OF } from "./sheet";
 
 /**
@@ -221,11 +221,12 @@ async function main(): Promise<void> {
   const report: Report = {
     added: [], amended: [], edited: [], unchanged: 0, failed: [], unwritten: [],
   };
-  const built: Puzzle[] = [];
+  const built: { puzzle: Puzzle; meta: ReturnType<typeof archiveMetaOf> }[] = [];
   for (const [id, codes] of [...codesById].sort(([a], [b]) => a - b)) {
     if (!codes[1]) continue; // no puzzle blueprint: a metadata row, not a puzzle yet
     try {
-      built.push(buildPuzzle(id, codes, metaById.get(id)));
+      const meta = metaById.get(id);
+      built.push({ puzzle: buildPuzzle(id, codes, meta), meta: archiveMetaOf(meta) });
     } catch (error) {
       report.failed.push({ id, reason: (error as Error).message });
     }
@@ -251,14 +252,14 @@ async function main(): Promise<void> {
     migrateArchive(db);
 
     db.transaction(() => {
-      for (const puzzle of built) {
+      for (const { puzzle, meta } of built) {
         // A SAVEPOINT per puzzle, because the catch below is INSIDE the
         // transaction: without one, a puzzle that throws half-way through its
         // writes has that half committed with everything else at the end. One
         // puzzle failing must leave that puzzle untouched, not partly written.
         db.run("SAVEPOINT puzzle");
         try {
-          record(report, puzzle, upsertArchive(db, puzzle, now, options.by));
+          record(report, puzzle, upsertArchive(db, puzzle, now, options.by, meta));
           db.run("RELEASE puzzle");
         } catch (error) {
           db.run("ROLLBACK TO puzzle");
