@@ -208,8 +208,10 @@ export type SyncOutcome =
       fields: readonly string[];
       from: string;
       to: string;
-      /** Set when the frozen clear requirement no longer fits the new answer. */
-      droppedClears: readonly ClearRequirement[] | null;
+      /** The rule that stopped applying, when the new answer does not meet it. */
+      replacedClears: readonly ClearRequirement[] | null;
+      /** What it was re-derived to. Always the new answer's own clears. */
+      nowRequires: readonly ClearRequirement[];
       /** Runs already filed against this id, or null if this database has none. */
       runsBefore: number | null;
       /** Discovered lines voided by the edit, or null if there was no table. */
@@ -502,7 +504,7 @@ export function upsertArchive(
 
   // Everything below has to be decided BEFORE the UPDATE: it is the write that
   // destroys the evidence.
-  let droppedClears: readonly ClearRequirement[] | null = null;
+  let replacedClears: readonly ClearRequirement[] | null = null;
   let runsBefore: number | null = null;
   let solutionsVoided: number | null = null;
   if (contentMoved) {
@@ -525,7 +527,7 @@ export function upsertArchive(
       .map((step) => step.clear)
       .filter((clear): clear is NonNullable<typeof clear> => Boolean(clear));
     if (frozen?.length && clearShortfall(made, frozen).length > 0) {
-      droppedClears = frozen;
+      replacedClears = frozen;
     }
   }
 
@@ -579,7 +581,8 @@ export function upsertArchive(
     fields,
     from: existing.contentHash,
     to: incoming,
-    droppedClears,
+    replacedClears,
+    nowRequires: derivedClears,
     runsBefore,
     solutionsVoided,
   };

@@ -104,7 +104,8 @@ interface Report {
     fields: readonly string[];
     from: string;
     to: string;
-    droppedClears: readonly ClearRequirement[] | null;
+    replacedClears: readonly ClearRequirement[] | null;
+    nowRequires: readonly ClearRequirement[];
     runsBefore: number | null;
     solutionsVoided: number | null;
   }[];
@@ -132,7 +133,8 @@ function record(report: Report, puzzle: Puzzle, outcome: SyncOutcome): void {
       fields: outcome.fields,
       from: outcome.from,
       to: outcome.to,
-      droppedClears: outcome.droppedClears,
+      replacedClears: outcome.replacedClears,
+      nowRequires: outcome.nowRequires,
       runsBefore: outcome.runsBefore,
       solutionsVoided: outcome.solutionsVoided,
     });
@@ -180,13 +182,17 @@ function describe(report: Report, dryRun: boolean): void {
           `      voided ${e.solutionsVoided} discovered solution(s) — they were lines on the old board.`,
         );
       }
-      if (e.droppedClears) {
+      if (e.replacedClears) {
+        const say = (r: readonly ClearRequirement[]) =>
+          r.length === 0 ? "nothing" : r.map((c) => `${c.count}x ${c.clear}`).join(", ");
+        // Re-derived, not dropped: the rule comes off the answer, so a new
+        // answer brings a new rule with it and there is nothing to re-decide.
+        // Still worth printing — the editor has just changed what their own
+        // puzzle demands of everybody else.
         console.log(
-          `      DROPPED its clear requirement (${e.droppedClears
-            .map((c) => `${c.count}x ${c.clear}`)
-            .join(", ")}) — the new answer no longer meets it.`,
+          `      its clear requirement no longer fits the new answer: ` +
+            `${say(e.replacedClears)} -> ${say(e.nowRequires)}, re-derived from the new solution.`,
         );
-        console.log(`      Re-decide it in the review tool, or the goal goes unenforced.`);
       }
     }
     console.log(
