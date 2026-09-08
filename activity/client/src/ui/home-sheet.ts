@@ -29,6 +29,7 @@ export const TIER_LABELS: Readonly<Record<DailyTier, string>> = {
   easy: "Easy",
   medium: "Medium",
   hard: "Hard",
+  extreme: "Extreme",
 };
 
 /**

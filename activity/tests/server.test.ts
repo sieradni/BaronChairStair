@@ -120,7 +120,7 @@ describe("the answer is withheld until it is earned", () => {
     };
     // All three of them. The gate is per tier now, and a day where one of the
     // three leaked its answer would be a day the other two vouched for.
-    expect(body.puzzles.map((entry) => entry.tier)).toEqual(["easy", "medium", "hard"]);
+    expect(body.puzzles.map((entry) => entry.tier)).toEqual(["easy", "medium", "hard", "extreme"]);
     for (const entry of body.puzzles) {
       expect(entry.solution).toBeNull();
       expect(entry.puzzle.id).toBeGreaterThan(0);
@@ -785,7 +785,7 @@ describe("the daily recap", () => {
       rush: { entries: unknown[]; total: number };
     };
     expect(body.day).toBe(today - 1);
-    expect(body.puzzles.map((puzzle) => puzzle.tier)).toEqual(["easy", "medium", "hard"]);
+    expect(body.puzzles.map((puzzle) => puzzle.tier)).toEqual(["easy", "medium", "hard", "extreme"]);
     expect(body.puzzles.every((puzzle) => Number.isInteger(puzzle.id))).toBe(true);
     expect(body.streak).toBeGreaterThanOrEqual(0);
     expect(Array.isArray(body.daily.rows)).toBe(true);

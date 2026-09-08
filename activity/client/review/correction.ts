@@ -54,7 +54,7 @@ const MAX_SET = 40;
  * first time anybody asks for it.
  */
 const DIFFICULTY_NOTE =
-  "Changing this moves the puzzle between the easy, medium and hard pools that future days " +
+  "Changing this moves the puzzle between the easy, medium, hard and extreme pools that future days " +
   "are dealt from; a day anybody has already played is written down and does not move.";
 
 /**

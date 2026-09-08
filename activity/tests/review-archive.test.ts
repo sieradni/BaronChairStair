@@ -559,10 +559,13 @@ describe("the correction form", () => {
   test("the rating's own pool is named, derived rather than printed", () => {
     const { element } = driveForm(CLUB);
     const tier = find(element, ".review__tier");
-    expect(tier.textContent).toBe("medium");
+    expect(tier.textContent).toBe("hard");
 
-    type(boxFor(element, "Difficulty"), "2");
-    expect(tier.textContent).toBe("easy");
+    // All four bands, in the squares the club states difficulty in.
+    for (const [value, expected] of [["2", "easy"], ["4", "medium"], ["8", "hard"], ["9", "extreme"]]) {
+      type(boxFor(element, "Difficulty"), value!);
+      expect(tier.textContent).toBe(expected!);
+    }
 
     // `Number("")` is 0 and 0 is a tier — hard — so an emptied box would sit
     // there naming one the server would refuse in the same breath.
@@ -573,7 +576,7 @@ describe("the correction form", () => {
   /** The one consequence of this form that is not confined to the puzzle's row. */
   test("the difficulty's effect on the rotation is spelled out", () => {
     const said = driveForm(CLUB).element.textContent ?? "";
-    expect(said).toContain("easy, medium and hard pools that future days");
+    expect(said).toContain("easy, medium, hard and extreme pools that future days");
     expect(said).toContain("already played is written down and does not move");
   });
 });

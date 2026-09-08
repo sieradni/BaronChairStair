@@ -473,6 +473,10 @@ export class PuzzleArchive {
     easy: 1,
     medium: 2,
     hard: 3,
+    // A stream of its own, so extreme walks its own rotation rather than
+    // shadowing hard's — the two are dealt on the same day and a shared stream
+    // would pair the same two puzzles together every cycle.
+    extreme: 4,
   };
 
   /**
@@ -586,6 +590,7 @@ export class PuzzleArchive {
         easy: this.forTier(day, "easy"),
         medium: this.forTier(day, "medium"),
         hard: this.forTier(day, "hard"),
+        extreme: this.forTier(day, "extreme"),
       },
       resetsAt: nextResetAt(Date.now(), this.dayOptions),
     };

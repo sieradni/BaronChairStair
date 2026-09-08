@@ -239,6 +239,7 @@ describe("what a pinned day is worth to the routes that read it", () => {
       easy: before.schedule.forTier(day, "easy").id,
       medium: before.schedule.forTier(day, "medium").id,
       hard: before.schedule.forTier(day, "hard").id,
+      extreme: before.schedule.forTier(day, "extreme").id,
     };
     before.store.close();
 

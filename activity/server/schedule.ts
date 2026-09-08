@@ -57,6 +57,7 @@ function derive(archive: PuzzleArchive, day: number): Record<DailyTier, number> 
     easy: archive.forTier(day, "easy").id,
     medium: archive.forTier(day, "medium").id,
     hard: archive.forTier(day, "hard").id,
+    extreme: archive.forTier(day, "extreme").id,
   };
 }
 
@@ -108,6 +109,7 @@ export class DaySchedule {
         easy: this.resolve(day, "easy puzzle", ids.easy),
         medium: this.resolve(day, "medium puzzle", ids.medium),
         hard: this.resolve(day, "hard puzzle", ids.hard),
+        extreme: this.resolve(day, "extreme puzzle", ids.extreme),
       },
       resetsAt: this.archive.resetsAt(),
     };

@@ -33,7 +33,7 @@ interface Row extends DayBoardRow {
  * its own. It can add rows as well as fill them in: somebody who spent their
  * day on rush has no daily row at all, and is not somebody who did nothing.
  *
- * The daily still decides the order and rush only breaks ties. Three puzzles
+ * The daily still decides the order and rush only breaks ties. Four puzzles
  * chosen for you and as many as you can take in five minutes are not the same
  * unit, and summing them would say they are.
  */
@@ -100,7 +100,7 @@ export function createDailyBoard(): DailyBoard {
             "div",
             {
               // `--marks` because this row has a fourth column the shared one
-              // does not: the three tier squares, which sit with the score.
+              // does not: the four tier squares, which sit with the score.
               class:
                 `board-list__row board-list__row--marks` +
                 (row.player.id === selfId ? " board-list__row--self" : ""),

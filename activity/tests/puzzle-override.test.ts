@@ -539,7 +539,7 @@ describe("correcting a difficulty moves the rotation, and never a day already de
     const after = open();
     try {
       // The correction really landed, and really did move the puzzle's band.
-      expect(dailyTierOf(after.archive.get(easy.id)!)).toBe("hard");
+      expect(dailyTierOf(after.archive.get(easy.id)!)).toBe("extreme");
       expect(days.map((day) => dealtBy(after.schedule, day))).toEqual(dealt);
 
       // The control, and the reason the assertion above is not vacuous: the
@@ -584,6 +584,7 @@ describe("correcting a difficulty moves the rotation, and never a day already de
       easy: before.schedule.forTier(today, "easy").id,
       medium: before.schedule.forTier(today, "medium").id,
       hard: before.schedule.forTier(today, "hard").id,
+      extreme: before.schedule.forTier(today, "extreme").id,
     };
     before.store.close();
 

@@ -103,6 +103,7 @@ interface DayBoardRaw {
   easy: number;
   medium: number;
   hard: number;
+  extreme: number;
 }
 
 /** One player's best rush ever, for the all-time board. */
@@ -1277,10 +1278,11 @@ export class Store {
                 SUM(CASE WHEN runs.solved = 1 THEN runs.total_ms ELSE 0 END) AS totalMs,
                 MAX(CASE WHEN runs.slot = 'easy'   THEN runs.solved + 1 ELSE 0 END) AS easy,
                 MAX(CASE WHEN runs.slot = 'medium' THEN runs.solved + 1 ELSE 0 END) AS medium,
-                MAX(CASE WHEN runs.slot = 'hard'   THEN runs.solved + 1 ELSE 0 END) AS hard
+                MAX(CASE WHEN runs.slot = 'hard'   THEN runs.solved + 1 ELSE 0 END) AS hard,
+                  MAX(CASE WHEN runs.slot = 'extreme' THEN runs.solved + 1 ELSE 0 END) AS extreme
          FROM runs JOIN players ON players.id = runs.player_id
          WHERE runs.day = ?1 AND (?2 IS NULL OR runs.guild_id = ?2)
-           AND runs.slot IN ('easy', 'medium', 'hard')
+           AND runs.slot IN ('easy', 'medium', 'hard', 'extreme')
          GROUP BY runs.player_id
          ORDER BY solved DESC, totalMs ASC
          LIMIT ?3`,

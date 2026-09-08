@@ -110,7 +110,7 @@ function dayNote(entries: readonly DailyEntry[], streak: number): string {
 
   if (left === total) {
     return (
-      "Three puzzles — easy, medium, hard. " +
+      "Four puzzles — easy, medium, hard, extreme. " +
       (streak > 0
         ? `Any one of them keeps your ${streak}-day streak.`
         : "Solve any one of them to start a streak.")

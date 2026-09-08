@@ -20,6 +20,28 @@ export const BOARD_HEIGHT = 20;
 export const ENGINE_ROWS = 40;
 
 /** A named line clear, matching how players talk about them. */
+/** Rating points per square: two, so the archive's 1-to-10 covers the five. */
+const PIP_SCALE = 2;
+/** Above this a puzzle is shown as "and then some" rather than more squares. */
+const MAX_PIPS = 5;
+
+/**
+ * How many squares a rating fills — the unit the club talks about difficulty in.
+ *
+ * One square per two rating points, capped at five: 1–2 fills one, 3–4 two, 5–6
+ * three, 7–8 four, 9 and up five. The archive runs to 20, so that last band is
+ * two dozen real puzzles rather than a theoretical one.
+ *
+ * Shared rather than owned by the pips that draw it, because the daily tiers are
+ * defined in these units too. Written twice it would drift, and the failure
+ * would be silent: a puzzle showing three squares while being dealt as the day's
+ * easy one.
+ */
+export function difficultySquares(difficulty: number): number {
+  if (difficulty <= 0) return 0;
+  return Math.min(MAX_PIPS, Math.ceil(difficulty / PIP_SCALE));
+}
+
 export type ClearName =
   | "single"
   | "double"

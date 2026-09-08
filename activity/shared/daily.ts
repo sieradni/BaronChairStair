@@ -8,6 +8,7 @@
  * every other one has been played.
  */
 
+import { difficultySquares } from "./puzzle";
 import { shuffledIndices } from "./rng";
 
 const MS_PER_DAY = 86_400_000;
@@ -150,15 +151,27 @@ export function puzzleIndexForDay(day: number, puzzleCount: number, stream: numb
  * tier to repeat itself, and a lopsided split would mean the hard puzzle came
  * round again months before the easy one did.
  */
-export type DailyTier = "easy" | "medium" | "hard";
+export type DailyTier = "easy" | "medium" | "hard" | "extreme";
 
-export const DAILY_TIERS: readonly DailyTier[] = ["easy", "medium", "hard"];
+export const DAILY_TIERS: readonly DailyTier[] = ["easy", "medium", "hard", "extreme"];
 
+/**
+ * Stated in squares, because that is the unit the club decided these in and the
+ * unit a player is shown — see {@link difficultySquares}. Easy is at most one
+ * square, medium is two, hard is three or four, extreme is five and above.
+ *
+ * Unrated stays hard. A rating of 0 fills no squares, so "at most one square"
+ * would sweep it into easy — but it is rated nothing because nobody got round to
+ * it, not because it is gentle, and the archive's unrated puzzles ask for things
+ * like "2 TSS, 3 TSD" over a dozen pieces.
+ */
 export function dailyTierOf(puzzle: { readonly difficulty: number }): DailyTier {
   if (puzzle.difficulty <= 0) return "hard";
-  if (puzzle.difficulty <= 4) return "easy";
-  if (puzzle.difficulty <= 7) return "medium";
-  return "hard";
+  const squares = difficultySquares(puzzle.difficulty);
+  if (squares <= 1) return "easy";
+  if (squares === 2) return "medium";
+  if (squares <= 4) return "hard";
+  return "extreme";
 }
 
 /**
@@ -178,5 +191,6 @@ export function byTier<T extends { readonly difficulty: number }>(
     easy: puzzles.filter((puzzle) => dailyTierOf(puzzle) === "easy"),
     medium: puzzles.filter((puzzle) => dailyTierOf(puzzle) === "medium"),
     hard: puzzles.filter((puzzle) => dailyTierOf(puzzle) === "hard"),
+    extreme: puzzles.filter((puzzle) => dailyTierOf(puzzle) === "extreme"),
   };
 }
