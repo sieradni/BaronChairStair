@@ -91,9 +91,99 @@ export function decodeAnswerPlacements(code: string) {
     }));
 }
 
+/** Every cell the playfield holds on this page, as "x,y". */
+function settled(playfield: Playfield): Set<string> {
+  const cells = new Set<string>();
+  playfield.toRows(playfield.stackHeight).forEach((row, y) =>
+    row.forEach((cell, x) => {
+      if (cell) cells.add(`${x},${y}`);
+    }),
+  );
+  return cells;
+}
+
+/**
+ * The same placements, plus any the author committed without locking the page.
+ *
+ * Puzzle #115 "twirl" records its first piece as a playfield commit on the page
+ * after it lands, with no `locked` flag anywhere. Reading only locked pages
+ * dropped it, so the puzzle shipped a one-piece answer clearing two rows instead
+ * of the author's two-piece line clearing three — a `tsd` where the goal says
+ * TST — and since `requiredClears` is derived from the answer, it froze the
+ * wrong rule.
+ *
+ * A page that gains exactly four settled cells and loses none is read as a
+ * commit, credited to the piece falling on the page before it. Losing none is
+ * what keeps a line clear out of it: a clear rewrites the playfield, and
+ * anything that both gains and loses is the board moving under itself.
+ *
+ * **This is a fallback and not the rule, and it is lossy.** On a puzzle that
+ * clears rows repeatedly, a locked page's cells reappear *shifted* in a later
+ * playfield, get claimed as a commit, and then suppress the locked page they
+ * came from. Measured: it returns 68 placements for #112 where the locked pages
+ * give 73, and is short by one on #24, #25, #127 and #133 too.
+ *
+ * So it is only ever consulted, never trusted. {@link buildPuzzle} takes it only
+ * when it is *longer* than the locked-page reading — which is what a dropped
+ * placement looks like and what losing one cannot — and then only when it
+ * reproduces the blueprint's own final board. Both hold for #115 alone across
+ * the archive.
+ */
+export function decodeCommittedPlacements(code: string) {
+  const pages = decodeBlueprint(code).pages;
+  const placements: { piece: Mino; cells: readonly (readonly [number, number])[] }[] = [];
+  const claimed = new Set<string>();
+  const key = (cells: readonly string[]) => [...cells].sort().join(" ");
+  let previous = pages.length > 0 ? settled(pages[0]!.playfield) : new Set<string>();
+
+  pages.forEach((page, index) => {
+    if (index > 0) {
+      const now = settled(page.playfield);
+      const gained = [...now].filter((cell) => !previous.has(cell));
+      const lost = [...previous].filter((cell) => !now.has(cell));
+      const fell = pages[index - 1]?.piece?.type;
+      if (gained.length === 4 && lost.length === 0 && fell && !claimed.has(key(gained))) {
+        claimed.add(key(gained));
+        placements.push({
+          piece: fell,
+          cells: gained.map((cell) => {
+            const [x, y] = cell.split(",");
+            return [Number(x), Number(y)] as const;
+          }),
+        });
+      }
+      previous = now;
+    }
+    if (page.locked && page.piece !== null) {
+      const cells = pieceCells(page.piece).map(({ x, y }) => [x, y] as const);
+      const seat = key(cells.map(([x, y]) => `${x},${y}`));
+      if (!claimed.has(seat)) {
+        claimed.add(seat);
+        placements.push({ piece: page.piece.type, cells });
+      }
+    }
+  });
+
+  return placements;
+}
+
+/** The board the author's blueprint ends on, as a row count. */
+export function terminalStackHeight(code: string): number | null {
+  const pages = decodeBlueprint(code).pages;
+  return pages.length > 0 ? pages[pages.length - 1]!.playfield.stackHeight : null;
+}
+
 export interface BuildFailure {
   id: number;
   reason: string;
+}
+
+/** How tall the board stands once an answer has been replayed. */
+function boardHeight(replay: { steps: readonly { board: BoardCell[][] }[] }): number {
+  const last = replay.steps[replay.steps.length - 1]?.board;
+  if (!last) return 0;
+  const filled = last.filter((row) => row.some((cell) => cell !== null)).length;
+  return filled;
 }
 
 export function buildPuzzle(
@@ -113,7 +203,38 @@ export function buildPuzzle(
   }
 
   const setup = { board: position.board, queue: position.queue, hold: position.hold };
-  const replay = replayPlacements(setup, DEFAULT_HANDLING, placements);
+  let replay = replayPlacements(setup, DEFAULT_HANDLING, placements);
+
+  /*
+   * The blueprint's own last page is the oracle for whether the reading above is
+   * complete. A locked-page reading that leaves the board taller than the author
+   * left it has dropped a placement — #115 "twirl" drops its first piece and
+   * ships a `tsd` where the goal says TST.
+   *
+   * Two conditions, because the fallback is lossy in the other direction: on a
+   * clear-heavy blueprint it *drops* placements (68 against 73 on #112). So it
+   * must be longer than the locked-page reading — a recovered drop can only add
+   * — and it must land on the author's own final board. Across the archive that
+   * pair selects exactly one puzzle, which is #115.
+   */
+  const ended = terminalStackHeight(answerCode);
+  if (ended !== null && boardHeight(replay) !== ended) {
+    try {
+      const withCommits = alignPlacements(
+        decodeCommittedPlacements(answerCode),
+        position.queue,
+        position.hold,
+      );
+      if (withCommits.length > placements.length) {
+        const better = replayPlacements(setup, DEFAULT_HANDLING, withCommits);
+        if (boardHeight(better) === ended) replay = better;
+      }
+    } catch {
+      // A reading that will not replay is simply not the better one. The
+      // locked-page answer stands, exactly as it did before this existed.
+    }
+  }
+
   if (replay.totalAttack === 0) throw new Error("Answer sends no attack — nothing to score");
 
   const solution: SolutionStep[] = replay.steps.map((step) => ({
