@@ -134,6 +134,26 @@ describe("seedReferenceSolutions", () => {
     expect(rows()).toHaveLength(0);
   });
 
+  test("an edited answer replaces the old reference rather than joining it", () => {
+    // `voidDiscoveries` clears a puzzle's rows on a content edit, but only for a
+    // puzzle that was *published* — an unpublished edit deliberately leaves them
+    // alone. Without this, the next boot seeds the new answer beside the old one
+    // and the "N distinct lines" count is inflated by exactly the amount this
+    // whole file exists to remove.
+    seedReferenceSolutions(store, [puzzle()]);
+    const edited = puzzle({
+      solution: [{ piece: "I", cells: [[0, 0], [1, 0], [2, 0], [3, 0]], clear: "quad", attack: 4 }],
+    } as Partial<Puzzle>);
+
+    seedReferenceSolutions(store, [edited]);
+
+    const kept = db
+      .query("SELECT clears FROM puzzle_solutions WHERE source = 'reference'")
+      .all() as { clears: string }[];
+    expect(kept).toHaveLength(1);
+    expect(JSON.parse(kept[0]!.clears)).toEqual(["quad"]);
+  });
+
   test("records whether the answer meets the puzzle's own rule", () => {
     seedReferenceSolutions(store, [puzzle()]);
 

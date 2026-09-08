@@ -93,9 +93,10 @@ export function seedReferenceSolutions(
     const attack = placements.reduce((total, step) => total + (step.attack ?? 0), 0);
 
     try {
+      const key = solutionFingerprint(placements, { attack, clears });
       const { discovered } = store.recordSolution({
         puzzleId: puzzle.id,
-        canonicalKey: solutionFingerprint(placements, { attack, clears }),
+        canonicalKey: key,
         keyVersion: SOLUTION_KEY_VERSION,
         placements,
         // Nothing was played, so there are no keystrokes to re-prove it from —
@@ -114,6 +115,9 @@ export function seedReferenceSolutions(
         guildId: null,
       });
       if (discovered) seeded += 1;
+      // After the insert, never before: a delete that ran first would leave the
+      // puzzle with no reference at all if the insert then threw.
+      store.dropStaleReferences(puzzle.id, key);
     } catch (error) {
       // One unwritable row is not worth a boot. Reported, because a store that
       // cannot write is a real fault somebody has to be able to find.

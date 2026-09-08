@@ -1099,6 +1099,29 @@ export class Store {
    * carry an input log apiece — roughly 8 KB each, read and parsed to arrive at
    * a number the index already knows.
    */
+  /**
+   * Drops any `reference` row for this puzzle whose key is not `keep`.
+   *
+   * A puzzle has exactly one intended answer, so it has exactly one reference
+   * row. `voidDiscoveries` clears a puzzle's rows on a content edit, but only
+   * once it has been published — an unpublished edit deliberately leaves them
+   * alone, and the next boot would otherwise seed the new answer beside the old
+   * one. Two reference rows inflate `countSolutions`, which is the number a
+   * player is shown as "N distinct lines".
+   *
+   * Scoped to `reference`: a *player's* line on the old board was still a real
+   * line somebody played, and deciding its fate is `voidDiscoveries`' job, not
+   * this one's.
+   */
+  dropStaleReferences(puzzleId: number, keep: string): number {
+    return this.db
+      .query(
+        `DELETE FROM puzzle_solutions
+          WHERE puzzle_id = ?1 AND source = 'reference' AND canonical_key <> ?2`,
+      )
+      .run(puzzleId, keep).changes;
+  }
+
   countSolutions(puzzleId: number): number {
     return (
       this.db
