@@ -247,6 +247,34 @@ curl -sI https://your-host/review | grep -i x-frame-options    # DENY
 
 If the title is the game's, the build is stale. Re-run `bun run build`, restart.
 
+That check answers "did a build ever run", which is not the same question as "does
+this build contain the change I just deployed". Any bundle built since the review page
+existed passes it, however old.
+
+**On the box**, in `activity/`, you can ask the narrower question directly when the
+change introduces a string only it has — a `localStorage` key, a new endpoint path:
+
+```sh
+grep -rlo "puzzle\.sittings\.v" dist/assets/*.js   # example: the sittings store
+```
+
+A filename means that string is in the bundle; nothing means it is not.
+
+**Most client changes add no such string**, and then this tells you nothing — a
+correct build looks identical to a stale one. Do not read a missing match as a stale
+bundle unless you know the change adds the string you are grepping for. When it does
+not, compare what the box is actually running instead:
+
+```sh
+git -C .. rev-parse HEAD          # the commit the box is on
+ls -l dist/assets/*.js            # and whether dist is newer than that pull
+```
+
+This matters because a client-side fix fails quietly. The server is new, the page
+loads, nothing errors, and the behaviour is simply the old one. It has happened here:
+a player-reported fix was merged, the box was pulled and restarted, and players still
+saw the bug because `dist` had not been rebuilt.
+
 **5. The review routes are switched on** (only if you set `REVIEW_SECRET`):
 
 ```sh
