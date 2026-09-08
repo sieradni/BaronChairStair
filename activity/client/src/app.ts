@@ -1446,7 +1446,20 @@ export class App {
     this.relayout();
   }
 
-  private attachWalkthrough(puzzle: PuzzlePrompt, solution: readonly SolutionStep[]): void {
+  /**
+   * @param solution null on a server with no `data/solutions.json`, which is
+   * every ordinary deploy. Guarded here rather than at each call site: the type
+   * used to promise non-null, so the one caller that trusted it stepped into
+   * `new SolutionPlayer(..., null)` — which throws — inside the `try` that files
+   * the run. The run was already filed, so the player was told the sheet could
+   * not be filed about a sheet that had been. One guard, and no future caller
+   * can reintroduce it.
+   */
+  private attachWalkthrough(
+    puzzle: PuzzlePrompt,
+    solution: readonly SolutionStep[] | null,
+  ): void {
+    if (!solution) return;
     this.solutionPlayer = new SolutionPlayer(puzzle, solution, BOARD_HEIGHT);
     this.walkthrough.bind(this.solutionPlayer, (stepped) => {
       // A fast player who reaches for the controls before the badge has cleared

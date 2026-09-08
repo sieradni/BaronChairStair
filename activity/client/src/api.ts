@@ -85,7 +85,16 @@ export interface SubmitResponse {
   readonly discovery: RunDiscovery | null;
   readonly streak: number;
   readonly totalSolved: number;
-  readonly solution: readonly SolutionStep[];
+  /**
+   * Null on a server with no `data/solutions.json`, which is every ordinary
+   * deploy — the answers are untracked, so `earnedSolution` returns null and the
+   * reveal has nothing to show. This said `readonly SolutionStep[]` and was
+   * therefore a lie in production: the client stepped straight into
+   * `new SolutionPlayer(..., null)`, which throws, inside the same `try` that
+   * files the run. The run had already been filed by then, so the player was
+   * told "Could not file the sheet" about a sheet that was filed.
+   */
+  readonly solution: readonly SolutionStep[] | null;
   readonly leaderboard: readonly StoredRun[];
 }
 
