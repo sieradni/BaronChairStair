@@ -44,6 +44,93 @@ export interface Finder {
 }
 
 /**
+ * Puts the archive's own answer on record, so nobody can discover it.
+ *
+ * `recordDiscovery` decides "nobody had found this line before" by fingerprint
+ * novelty alone, and the intended solution was never written down. The first
+ * player to solve a puzzle *the way its maker did* therefore collided with
+ * nothing and was credited with finding an alternate — on every puzzle, once —
+ * while the "N distinct lines" count they were shown was one too high.
+ *
+ * `SolutionSource` has carried a `reference` case since the table existed and
+ * `discoveryBoard` already excludes it by name. This is the producer that was
+ * missing. Filed with no `foundBy`, so no board can pay for it.
+ *
+ * Idempotent by construction: `recordSolution` is `ON CONFLICT DO NOTHING` over
+ * `(puzzle_id, canonical_key)`, so this may run on every boot. That also makes it
+ * self-healing after a creator edits a puzzle — the new answer keys differently
+ * and is seeded on the next start, beside the old one, which is correct: the line
+ * the previous answer described was still a real line on the previous board, and
+ * `voidDiscoveries` is what settles the credit for it.
+ *
+ * **Only where the answers are.** `data/solutions.json` is untracked, so on an
+ * ordinary deploy box every club puzzle arrives without its `solution` and there
+ * is nothing to seed. Those are counted and skipped rather than throwing: a boot
+ * that dies over a missing answer key would be a far worse failure than a
+ * discovery credited to the wrong person.
+ */
+export function seedReferenceSolutions(
+  store: Store,
+  puzzles: readonly Puzzle[],
+): { seeded: number; skipped: number } {
+  let seeded = 0;
+  let skipped = 0;
+
+  for (const puzzle of puzzles) {
+    const answer = puzzle.solution;
+    if (!answer?.length) {
+      skipped += 1;
+      continue;
+    }
+
+    const placements: SolutionStep[] = answer.map((step) => ({
+      piece: step.piece,
+      cells: step.cells,
+      clear: step.clear,
+      attack: step.attack,
+    }));
+    const clears = placements.flatMap((step) => (step.clear ? [step.clear] : []));
+    const attack = placements.reduce((total, step) => total + (step.attack ?? 0), 0);
+
+    try {
+      const key = solutionFingerprint(placements, { attack, clears });
+      const { discovered } = store.recordSolution({
+        puzzleId: puzzle.id,
+        canonicalKey: key,
+        keyVersion: SOLUTION_KEY_VERSION,
+        placements,
+        // Nothing was played, so there are no keystrokes to re-prove it from —
+        // the same shape the batch enumerator files under.
+        events: null,
+        handling: null,
+        attack,
+        clears,
+        // Computed rather than assumed. It is true for every puzzle the current
+        // scheme builds, because the requirement is derived from this very
+        // answer — but a row restored from before that scheme need not be, and a
+        // seed that lied here would put a non-solve on the board.
+        solvedStrict: solvesPuzzle(attack, clears, puzzle),
+        source: "reference",
+        foundBy: null,
+        guildId: null,
+      });
+      if (discovered) seeded += 1;
+      // After the insert, never before: a delete that ran first would leave the
+      // puzzle with no reference at all if the insert then threw.
+      store.dropStaleReferences(puzzle.id, key);
+    } catch (error) {
+      // One unwritable row is not worth a boot. Reported, because a store that
+      // cannot write is a real fault somebody has to be able to find.
+      console.error(
+        `[discovery] could not seed the reference solution for puzzle ${puzzle.id}: ${String(error)}`,
+      );
+    }
+  }
+
+  return { seeded, skipped };
+}
+
+/**
  * Records a run as a solution, if it is one worth recording.
  *
  * The bar is the *attack* target rather than the whole goal, deliberately. A

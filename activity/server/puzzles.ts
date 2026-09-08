@@ -33,6 +33,7 @@ import {
   COMMUNITY_ID_BASE,
   type Puzzle,
   type PuzzlePrompt,
+  type SolutionStep,
   toPrompt,
 } from "../shared/puzzle";
 // Type-only, and it has to stay that way: `server/puzzle-overrides.ts` imports
@@ -79,6 +80,51 @@ function withSolutions(puzzles: Puzzle[], archivePath: string): Puzzle[] {
     ]),
   );
   return puzzles.map((puzzle) => ({ ...puzzle, ...book.get(puzzle.id) }));
+}
+
+/**
+ * What a recorded answer was played against.
+ *
+ * Two copies of the same puzzle set drift: `data/puzzles.json` is rebuilt from
+ * the club's CSV exports, the archive is synced from the live sheet, and today
+ * three of 138 disagree — id 8 is "fourtris mogs" in one and "misplaced heart"
+ * in the other. So an answer is matched to a puzzle by the *shape it was played
+ * against*, never by id. An id join would put another puzzle's answer behind
+ * this one's reveal, which is the join already removed from
+ * `tools/audit-archive.ts` for the same reason.
+ *
+ * Title, author, goal and difficulty are deliberately absent: an officer may
+ * correct any of them, and none changes whether a recorded line still lands.
+ */
+export function shapeKey(
+  puzzle: Pick<Puzzle, "board" | "queue" | "hold" | "targetAttack">,
+): string {
+  return JSON.stringify([puzzle.board, puzzle.queue, puzzle.hold ?? null, puzzle.targetAttack]);
+}
+
+/**
+ * Fills in answers for puzzles this box has none for.
+ *
+ * `data/solutions.json` is untracked — an answer key beside the puzzles is an
+ * answer key for everybody — so on an ordinary deploy every club puzzle arrives
+ * answerless and the reveal has nothing to show. The answers are not missing
+ * from the box, though: they are committed inside `data/archive/puzzles.sqlite`,
+ * which every checkout has. This is the wiring that was never there.
+ *
+ * Additive only. A puzzle that already has an answer keeps it: `solutions.json`
+ * is the source the rest of that box's build was derived from, so where the two
+ * disagree the local one is the one to trust.
+ */
+export function withFallbackSolutions(
+  puzzles: readonly Puzzle[],
+  answers: ReadonlyMap<string, readonly SolutionStep[]>,
+): Puzzle[] {
+  if (answers.size === 0) return [...puzzles];
+  return puzzles.map((puzzle) => {
+    if (puzzle.solution?.length) return puzzle;
+    const answer = answers.get(shapeKey(puzzle));
+    return answer ? { ...puzzle, solution: answer } : puzzle;
+  });
 }
 
 export interface DailyPuzzles {
@@ -447,11 +493,18 @@ export class PuzzleArchive {
    * argument for the same reason `community` was a third: those rows live in
    * SQLite and this file must go on loading without one.
    */
+  /**
+   * @param answers answers for puzzles this box has none of its own for, keyed
+   * by {@link shapeKey}. Passed in rather than read here: loading an archive
+   * needs no database, and this file's header keeps it that way — the reader
+   * lives in `server/archive-solutions.ts`.
+   */
   static load(
     path: string,
     dayOptions: DayOptions = {},
     community: readonly Puzzle[] = [],
     overrides: readonly PuzzleOverride[] = [],
+    answers: ReadonlyMap<string, readonly SolutionStep[]> = new Map(),
   ): PuzzleArchive {
     let parsed: { puzzles?: unknown[] };
     try {
@@ -473,7 +526,9 @@ export class PuzzleArchive {
     const accepted = community.map((puzzle) =>
       assertValid(puzzle, `accepted puzzle ${puzzle?.id}`),
     );
-    const sources = [...file, ...accepted];
+    // Answers from the tracked archive for anything the two sources above left
+    // without one. Additive and shape-matched; see `withFallbackSolutions`.
+    const sources = withFallbackSolutions([...file, ...accepted], answers);
     const { puzzles, applied } = correctedOrSource(sources, overrides);
     // Last, over the corrected list: a correction can re-derive a requirement,
     // so this has to see what will actually be served. `sources` is left as its
@@ -483,6 +538,18 @@ export class PuzzleArchive {
 
   get(id: number): Puzzle | undefined {
     return this.byId.get(id);
+  }
+
+  /**
+   * Every puzzle this archive serves, corrections already applied.
+   *
+   * For callers that need the whole pool rather than one puzzle — seeding the
+   * reference solutions at boot is the first. Deliberately the *corrected* list
+   * and not `sources`: what is on record should be what players are actually
+   * served.
+   */
+  get all(): readonly Puzzle[] {
+    return [...this.byId.values()];
   }
 
   /**
