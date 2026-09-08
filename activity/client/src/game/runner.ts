@@ -427,6 +427,11 @@ export class PuzzleRun {
    */
   input(key: GameKey, down: boolean): void {
     if (this.phase === "solved" || this.phase === "failed") return;
+    // A hold with one piece left has nothing to trade with, and the engine would
+    // answer it out of the padding beyond the queue — handing the player a
+    // tetromino the puzzle never offered. Dropped here rather than let through
+    // and caught at the lock, because by then they have already been shown it.
+    if (key === "hold" && !this.ledger.canSwap) return;
     if (down === this.held.has(key)) return;
     if (down) this.held.add(key);
     else this.held.delete(key);
