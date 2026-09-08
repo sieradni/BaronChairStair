@@ -323,15 +323,35 @@ describe("the frozen clear requirement, when content is edited", () => {
     publishArchive(db, [1], "officer", NOW);
   });
 
-  test("is dropped when the new answer no longer meets it", () => {
+  test("goes away when the new answer clears nothing to require", () => {
     // Left in place it would demand a clear the puzzle's own answer never makes,
-    // which is an unsolvable published puzzle.
+    // which is an unsolvable published puzzle. The rule is re-derived from the
+    // new answer rather than dropped; this answer's derivation is empty.
     const outcome = upsertArchive(db, puzzle({ ...NO_CLEARS, queue: ["S", "Z", "L"] }), NOW + 1);
 
     expect(outcome.kind).toBe("edited");
     if (outcome.kind !== "edited") throw new Error("unreachable");
-    expect(outcome.droppedClears).toEqual(TSD);
+    expect(outcome.replacedClears).toEqual(TSD);
+    expect(outcome.nowRequires).toEqual([]);
     expect(archiveEntry(db, 1)?.puzzle.requiredClears).toBeUndefined();
+  });
+
+  test("follows the new answer to whatever that one clears", () => {
+    // The case the old scheme had no answer for: the edit is solvable, but by
+    // *different* clears. The rule moves with the answer instead of being
+    // dropped for disagreeing with a sentence nobody consults any more.
+    const QUAD = {
+      solution: [
+        { piece: "I", cells: [[0, 0], [1, 0], [2, 0], [3, 0]], clear: "quad", attack: 4 },
+      ],
+    } as Partial<Puzzle>;
+
+    const outcome = upsertArchive(db, puzzle({ ...QUAD, queue: ["S", "Z", "L"] }), NOW + 1);
+
+    expect(outcome.kind).toBe("edited");
+    if (outcome.kind !== "edited") throw new Error("unreachable");
+    expect(outcome.nowRequires).toEqual([{ clear: "quad", count: 1 }]);
+    expect(archiveEntry(db, 1)?.puzzle.requiredClears).toEqual([{ clear: "quad", count: 1 }]);
   });
 
   test("is kept when the new answer still meets it", () => {
@@ -339,7 +359,7 @@ describe("the frozen clear requirement, when content is edited", () => {
 
     expect(outcome.kind).toBe("edited");
     if (outcome.kind !== "edited") throw new Error("unreachable");
-    expect(outcome.droppedClears).toBeNull();
+    expect(outcome.replacedClears).toBeNull();
     expect(archiveEntry(db, 1)?.puzzle.requiredClears).toEqual(TSD);
   });
 

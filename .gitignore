@@ -431,3 +431,9 @@ activity/data/solutions.json
 !activity/data/archive/
 !activity/data/archive/puzzles.sqlite
 activity/data/archive/*.sqlite-*
+
+# Audit artefacts: generated reports, audit dumps and pre-change database
+# backups. Local working notes, deliberately never committed — the tools that
+# produce them (activity/tools/audit-archive.ts, sync-archive.ts) are tracked,
+# their output is not.
+/audit/

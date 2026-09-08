@@ -637,7 +637,12 @@ describe("what an accepted puzzle will demand of everybody else", () => {
    * enforces nothing rather than shipping a puzzle nobody — including its own
    * author — can solve.
    */
-  test("a goal the author's own solve does not satisfy enforces nothing", async () => {
+  // The sentence is not consulted at all any more. This author asked for three
+  // TSTs and played one TSD; what everybody else is held to is the TSD, because
+  // that is the puzzle they actually built. Under the previous scheme this case
+  // enforced nothing, which let a puzzle ship with no clear rule purely because
+  // its wording was ambitious.
+  test("a goal the solve does not satisfy is ignored, and the solve sets the rule", async () => {
     const response = await submit(
       draft({ title: "Tuck the T ungated", goal: "Clear 3 TSTs" }),
       await tokenFor("gate"),
@@ -649,13 +654,17 @@ describe("what an accepted puzzle will demand of everybody else", () => {
       const stored = store
         .pendingSubmissions()
         .find((entry) => entry.title === "Tuck the T ungated");
-      expect(stored?.requiredClears).toBeNull();
+      expect(stored?.requiredClears).toEqual([{ clear: "tsd", count: 1 }]);
     } finally {
       store.close();
     }
   });
 
-  test("a prose goal names nothing a count can hold, and so demands nothing", async () => {
+  // Prose no parser can read is no longer a reason to enforce nothing. It was
+  // the larger half of the old scheme's cost: twenty-two archive puzzles were
+  // written in sentences like "3TSD in one combo" and shipped with no rule at
+  // all, though every one of them has an answer that says exactly what it does.
+  test("a prose goal no parser can read still yields the rule its solve played", async () => {
     const response = await submit(
       draft({ title: "Tuck the T prose", goal: "make it look nice" }),
       await tokenFor("prose"),
@@ -667,7 +676,7 @@ describe("what an accepted puzzle will demand of everybody else", () => {
       const stored = store
         .pendingSubmissions()
         .find((entry) => entry.title === "Tuck the T prose");
-      expect(stored?.requiredClears).toBeNull();
+      expect(stored?.requiredClears).toEqual([{ clear: "tsd", count: 1 }]);
     } finally {
       store.close();
     }

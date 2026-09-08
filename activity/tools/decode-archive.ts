@@ -26,6 +26,7 @@ import {
   encodeBoard,
   type Mino,
   type Puzzle,
+  requirementFromSolution,
   type SolutionStep,
 } from "../shared/puzzle";
 import { DEFAULT_HANDLING } from "../shared/tetris/handling";
@@ -134,6 +135,12 @@ export function buildPuzzle(
     queue: position.queue,
     hold: position.hold,
     targetAttack: replay.totalAttack,
+    // Read off the replay that just happened, which is the club's rule: the
+    // maker's title and goal stay as written, and what is enforced is what their
+    // own answer does. Derived here rather than by a later pass so every
+    // consumer of a built puzzle — the sheet sync, the JSON build, the audit —
+    // sees the same rule without joining across files by id.
+    requiredClears: requirementFromSolution(solution),
     solution,
     source: { puzzle: codes[1] ?? "", solution: answerCode },
   };
