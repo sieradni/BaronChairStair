@@ -31,6 +31,58 @@ function skipPips(left: number, total: number): string {
   return "●".repeat(Math.max(0, left)) + "○".repeat(Math.max(0, total - left));
 }
 
+// ── Handing in early ─────────────────────────────────────────────────────────
+
+/**
+ * How long an armed "Hand it in" stays armed.
+ *
+ * Both directions are real. Shorter and the confirmation is a flicker nobody
+ * reads; longer and the button is still live when the player comes back to the
+ * panel for the clock or their skip count, which is the accident it exists to
+ * stop.
+ */
+export const HAND_IN_CONFIRM_MS = 4000;
+
+/**
+ * Two presses to end a rush, not one.
+ *
+ * Handing in files the run, discards the puzzles left in it, and on a ranked
+ * rush can only happen once — with no undo, from a button sitting in the row a
+ * player is already clicking through while a clock runs.
+ *
+ * The clock is passed in rather than read, so the rule can be tested without a
+ * document or a fake timer: `bun test` has neither, and this is the half worth
+ * pinning. The panel owns the wording and the timer that restores it.
+ */
+export class HandInConfirm {
+  private armedAt: number | null = null;
+
+  /** Whether the next press commits, as of `now`. */
+  isArmed(now: number): boolean {
+    return this.armedAt !== null && now - this.armedAt <= HAND_IN_CONFIRM_MS;
+  }
+
+  /**
+   * A press. True when the caller should actually hand the run in.
+   *
+   * An *expired* arm re-arms rather than committing. Without that, two stray
+   * clicks a minute apart would end the run between them — the very accident
+   * this exists to prevent, rebuilt out of the guard meant to stop it.
+   */
+  press(now: number): boolean {
+    if (this.isArmed(now)) {
+      this.armedAt = null;
+      return true;
+    }
+    this.armedAt = now;
+    return false;
+  }
+
+  cancel(): void {
+    this.armedAt = null;
+  }
+}
+
 // ── The live panel ───────────────────────────────────────────────────────────
 
 export interface RushPanel {
@@ -52,6 +104,40 @@ export function createRushPanel(onEnd: () => void): RushPanel {
   const row = (key: string, value: HTMLElement) =>
     el("div", { class: "stat" }, el("span", { class: "stat__key", text: key }), value);
 
+  // Two presses, because handing in cannot be undone. The armed button says what
+  // the second press will *do* rather than only warning that one is coming, and
+  // the hint is `aria-live` so it is announced rather than merely drawn.
+  const guard = new HandInConfirm();
+  const handIn = el("button", {
+    class: "btn btn--small",
+    text: "Hand it in",
+    title: "End the rush now and file what you have",
+  });
+  const hint = el("p", { class: "rush__hint", text: "" });
+  hint.setAttribute("aria-live", "polite");
+  let restore: ReturnType<typeof setTimeout> | undefined;
+
+  const disarm = () => {
+    clearTimeout(restore);
+    guard.cancel();
+    handIn.textContent = "Hand it in";
+    handIn.classList.remove("btn--armed");
+    hint.textContent = "";
+  };
+
+  handIn.addEventListener("click", () => {
+    if (guard.press(Date.now())) {
+      disarm();
+      onEnd();
+      return;
+    }
+    handIn.textContent = "Confirm — end the rush";
+    handIn.classList.add("btn--armed");
+    hint.textContent = "This files what you have solved and discards the rest.";
+    clearTimeout(restore);
+    restore = setTimeout(disarm, HAND_IN_CONFIRM_MS);
+  });
+
   const element = panel(
     "Rush",
     { class: "panel--tinted" },
@@ -59,16 +145,8 @@ export function createRushPanel(onEnd: () => void): RushPanel {
     row("Solved", solved),
     row("Skips", skips),
     row("Puzzle", position),
-    el(
-      "div",
-      { class: "btnrow" },
-      el("button", {
-        class: "btn btn--small",
-        text: "Hand it in",
-        title: "End the rush now and file what you have",
-        on: { click: onEnd },
-      }),
-    ),
+    el("div", { class: "btnrow" }, handIn),
+    hint,
   );
 
   return {
