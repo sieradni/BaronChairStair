@@ -155,6 +155,9 @@ export const config = {
     database: process.env.DATABASE_PATH
       ? resolve(process.env.DATABASE_PATH)
       : resolve(import.meta.dir, "../data/daily.sqlite"),
+    // The answers that ship with the repository. `data/solutions.json` is
+    // untracked, so on a deploy box this is the only copy of them on disk.
+    trackedArchive: resolve(import.meta.dir, "../data/archive/puzzles.sqlite"),
     clientBuild: resolve(import.meta.dir, "../dist"),
   },
 } as const;

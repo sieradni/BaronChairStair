@@ -42,6 +42,7 @@ import {
 } from "./auth";
 import { config } from "./config";
 import { enforcingGoals, solvedUnderPolicy } from "./solve-verdict";
+import { trackedAnswers } from "./archive-solutions";
 import { recordDiscovery, seedReferenceSolutions } from "./discoveries";
 import { Store, type StoredRun } from "./db";
 import { DaySchedule, pastDaysOf } from "./schedule";
@@ -111,12 +112,24 @@ const community = store.acceptedPuzzles();
  * nothing about this table, so the rebuilt file is the *source* the corrections
  * are laid over rather than the last word.
  */
+const trackedSolutions = trackedAnswers(config.paths.trackedArchive);
 const archive = PuzzleArchive.load(
   config.paths.puzzles,
   { timeZone: config.timeZone },
   community,
   store.overridesFor(),
+  trackedSolutions,
 );
+{
+  // Worth a line. Without it a deploy box serves every puzzle answerless, and
+  // the symptom — an empty reveal after a solve — reads as a client bug rather
+  // than a file that was never there.
+  const answered = archive.all.filter((puzzle) => puzzle.solution?.length).length;
+  console.log(
+    `[puzzle] answers: ${answered} of ${archive.all.length} puzzles have one ` +
+      `(${trackedSolutions.size} available from the tracked archive)`,
+  );
+}
 store.pinPastDays(pastDaysOf(archive));
 
 /*
