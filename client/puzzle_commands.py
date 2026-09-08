@@ -164,6 +164,12 @@ async def puzzle_command(interaction: discord.Interaction):
         await interaction.followup.send(
             f"**Daily puzzle** is up.\n{launch}\n"
             "_(puzzle details are unavailable right now)_")
+        # The changelog describes *this bot's* version, not the puzzle server's
+        # health, so an unreachable activity is no reason to withhold it. It
+        # used to be announced only on the happy path, which meant the whole of
+        # an outage went unannounced — and a server that cannot reach the
+        # activity is the one most likely to want to know what just changed.
+        await _announce_new_version(interaction)
         return
     embed = discord.Embed(
         title=f"Puzzle #{day}",
