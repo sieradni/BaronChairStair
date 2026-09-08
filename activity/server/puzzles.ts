@@ -486,6 +486,18 @@ export class PuzzleArchive {
   }
 
   /**
+   * Every puzzle this archive serves, corrections already applied.
+   *
+   * For callers that need the whole pool rather than one puzzle — seeding the
+   * reference solutions at boot is the first. Deliberately the *corrected* list
+   * and not `sources`: what is on record should be what players are actually
+   * served.
+   */
+  get all(): readonly Puzzle[] {
+    return [...this.byId.values()];
+  }
+
+  /**
    * One puzzle as its source has it, before any officer's correction.
    *
    * For the review tool and nothing else, which is why it sits beside

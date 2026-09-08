@@ -28,6 +28,8 @@ import {
   type PuzzlePrompt,
 } from "../shared/puzzle";
 import { RUSH_DURATION_MS, RUSH_SEQUENCE_LENGTH, RUSH_SKIPS } from "../shared/rush";
+import { GUEST_ID } from "../server/http";
+import { SOLUTION_KEY_VERSION } from "../shared/solution-key";
 import { createPuzzleEngine, toLetter } from "../shared/tetris/engine";
 import { DEFAULT_HANDLING } from "../shared/tetris/handling";
 import { findPaths } from "../shared/tetris/pathfinder";
@@ -359,6 +361,7 @@ describe.skipIf(!hasSolutions)("what a solved run teaches the archive", () => {
   async function playTheAnswer(token: string): Promise<{
     run: { solved: boolean };
     discovery: { isNew: boolean; known: number } | null;
+    puzzleId: number;
   }> {
     const daily = (await (await get("/api/daily", token)).json()) as {
       puzzles: { tier: string; puzzle: PuzzlePrompt }[];
@@ -369,7 +372,15 @@ describe.skipIf(!hasSolutions)("what a solved run teaches the archive", () => {
       { tier: "easy", events: solvingLog(today), resets: 0 },
       token,
     );
-    return (await response.json()) as never;
+    // The id comes back with it so a caller needing the puzzle does not spend a
+    // second `/api/daily`. This block shares one rate-limit bucket and the
+    // budget is already accounted for; an extra call here breaks the rush tests
+    // further down the file rather than this one.
+    const body = (await response.json()) as {
+      run: { solved: boolean };
+      discovery: { isNew: boolean; known: number } | null;
+    };
+    return { ...body, puzzleId: today.id };
   }
 
   test("solving it puts the line on record", async () => {
@@ -405,21 +416,54 @@ describe.skipIf(!hasSolutions)("what a solved run teaches the archive", () => {
     expect(body.discovery).toBeNull();
   });
 
-  test("a player who found something appears on the discovery board", async () => {
-    // Weaker versions of this test pass on an empty board, which is exactly
-    // what a guild-scoping mistake produces — so it asserts the player is
-    // *there*, by id, rather than that the response is shaped like a board.
+  test("the archive's own answer is not a discovery, but a new line still is", async () => {
+    // Two halves of one rule, in one test because this block shares a
+    // rate-limit bucket and the budget is spoken for.
+    //
+    // An alternate is a line that meets both goals and is *not* the intended
+    // solution. The intended one is seeded as a `reference` row at boot, so
+    // replaying it collides and credits nobody — before that seeding existed,
+    // the first player to solve any puzzle the intended way was told they had
+    // discovered an alternate.
+    //
+    // The genuinely-new line is filed directly rather than played, because the
+    // only line this harness can play is the archive's own answer. What is under
+    // test on that half is the board query and its guild scoping: weaker
+    // versions pass on an empty board, which is exactly what a scoping mistake
+    // produces, so it asserts the player is *there* by id.
     const token = await guestToken();
     const played = await playTheAnswer(token);
+
+    expect(played.run.solved).toBe(true);
+    expect(played.discovery).not.toBeNull();
+    expect(played.discovery!.isNew).toBe(false);
+
+    const store = new Store(DB);
+    try {
+      store.recordSolution({
+        puzzleId: played.puzzleId,
+        canonicalKey: `a-line-nobody-else-played-${played.puzzleId}`,
+        keyVersion: SOLUTION_KEY_VERSION,
+        placements: [],
+        events: null,
+        handling: null,
+        attack: 999,
+        clears: [],
+        solvedStrict: true,
+        source: "player",
+        foundBy: GUEST_ID,
+        guildId: null,
+      });
+    } finally {
+      store.close();
+    }
+
     const body = (await (await get("/api/discoveries", token)).json()) as {
       board: { player: { id: string; username: string }; found: number }[];
     };
 
-    expect(body.board.length).toBeGreaterThan(0);
+    expect(body.board.some((row) => row.player.id === GUEST_ID)).toBe(true);
     for (const row of body.board) expect(row.found).toBeGreaterThan(0);
-    // Whoever filed the line this run put on record is on the board, whether
-    // this run was the one that discovered it or an earlier guest got there.
-    expect(played.discovery).not.toBeNull();
   });
 });
 

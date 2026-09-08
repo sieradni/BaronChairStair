@@ -42,7 +42,7 @@ import {
 } from "./auth";
 import { config } from "./config";
 import { enforcingGoals, solvedUnderPolicy } from "./solve-verdict";
-import { recordDiscovery } from "./discoveries";
+import { recordDiscovery, seedReferenceSolutions } from "./discoveries";
 import { Store, type StoredRun } from "./db";
 import { DaySchedule, pastDaysOf } from "./schedule";
 import {
@@ -118,6 +118,21 @@ const archive = PuzzleArchive.load(
   store.overridesFor(),
 );
 store.pinPastDays(pastDaysOf(archive));
+
+/*
+ * The archive's own answers, put on record so nobody can discover them. Without
+ * this the first player to solve a puzzle the way its maker did collides with
+ * nothing and is credited with finding an alternate. Idempotent, so it runs on
+ * every boot; a no-op on a box without `data/solutions.json`, which is every
+ * ordinary deploy, and it says so once rather than per puzzle.
+ */
+const seeded = seedReferenceSolutions(store, archive.all);
+if (seeded.seeded > 0 || seeded.skipped > 0) {
+  console.log(
+    `[discovery] reference solutions: ${seeded.seeded} newly on record, ` +
+      `${seeded.skipped} without an answer on this box`,
+  );
+}
 /*
  * Every "what did day N hold" below goes through here, never through the
  * archive's own derivation. The archive still derives — that is where an
