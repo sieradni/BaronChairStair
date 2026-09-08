@@ -1,29 +1,30 @@
 /**
  * What an officer's wording fix may and may not do to a puzzle's clear rule.
  *
- * `server/submissions.ts` states the invariant plainly: what the author solved
- * is what everybody else is held to, and a later wording fix cannot re-scope a
- * puzzle that already has runs against it. `targetAttack` is kept out of
- * `OVERRIDABLE_FIELDS` for exactly that reason.
+ * The answer is now: nothing, ever. The requirement is read off the puzzle's own
+ * replayed solution, so the sentence beside it is a description and not a
+ * source. An officer rewriting a goal is fixing how the puzzle *reads*; they are
+ * not re-scoping what it demands, any more than they can edit `targetAttack` —
+ * which is kept out of `OVERRIDABLE_FIELDS` for the same reason, and which
+ * `server/submissions.ts` states plainly: what the author solved is what
+ * everybody else is held to.
  *
- * `withOverride` re-derives `requiredClears` from the corrected sentence, which
- * keeps the rule and the text together — right in spirit, and it had three ways
- * to lose the rule entirely and two of them said nothing. The dangerous one is
- * ordinary: `data/solutions.json` is untracked, so on a deploy box a puzzle has
- * no answer to gate a new requirement against, and every goal correction there
- * used to drop the requirement to nothing.
- *
- * A correction may *tighten* a rule, and may leave it alone. It may not quietly
- * remove it.
+ * This file used to test the opposite half of a subtler rule. `withOverride`
+ * re-derived the requirement from the corrected sentence, gated on the answer
+ * still satisfying it, and that gate had three ways to lose the rule silently —
+ * the dangerous one being a deploy box, where `data/solutions.json` is untracked
+ * and every correction therefore un-enforced the puzzle. Deriving from the
+ * answer instead removes the gate and the failure together: there is no longer
+ * any path by which editing prose changes a rule.
  */
 
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { withOverride } from "../server/puzzles";
 import type { ClearRequirement, Puzzle } from "../shared/puzzle";
 
 const REQUIRED: readonly ClearRequirement[] = [{ clear: "tsd", count: 1 }];
 
-/** A puzzle with a gated requirement and, as on a dev box, its answer to hand. */
+/** A puzzle with a requirement and, as on a dev box, its answer to hand. */
 const WITH_ANSWER = {
   id: 42,
   title: "tuck the T",
@@ -42,61 +43,40 @@ const WITH_ANSWER = {
 /** The same puzzle as a deploy box sees it: no `data/solutions.json` merged in. */
 const NO_ANSWER = { ...WITH_ANSWER, solution: undefined } as unknown as Puzzle;
 
-function quietly<T>(run: () => T): T {
-  const warn = console.warn;
-  console.warn = mock(() => {});
-  try {
-    return run();
-  } finally {
-    console.warn = warn;
-  }
-}
-
 const corrected = (puzzle: Puzzle, goal: string): Puzzle =>
-  quietly(() => withOverride(puzzle, { title: null, author: null, goal, difficulty: null, set: null }));
+  withOverride(puzzle, { title: null, author: null, goal, difficulty: null, set: null });
 
 describe("correcting a goal's wording", () => {
+  test("applies the new wording to the goal the player reads", () => {
+    expect(corrected(WITH_ANSWER, "Clear a T-Spin Double").goal).toBe("Clear a T-Spin Double");
+  });
+
   test("leaves the rule alone when the wording did not change", () => {
     expect(corrected(WITH_ANSWER, WITH_ANSWER.goal).requiredClears).toEqual(REQUIRED);
   });
 
-  test("keeps the rule when the new wording names nothing a count can hold", () => {
-    // "Clear a TSD" -> "Clear a T-Spin Double" is the same puzzle said longer,
-    // and the parser has no alias for the long form. Dropping the requirement
-    // here would mean a puzzle stops demanding a TSD because somebody spelled
-    // it out.
-    expect(corrected(WITH_ANSWER, "Clear a T-Spin Double").requiredClears).toEqual(REQUIRED);
+  test("leaves the rule alone when the new wording names nothing countable", () => {
+    expect(corrected(WITH_ANSWER, "make it look nice").requiredClears).toEqual(REQUIRED);
   });
 
-  test("keeps the rule on a box with no answer key, which is the deploy box", () => {
-    // The one that made this urgent. `data/solutions.json` is untracked, so
-    // this is the ordinary production state — not a broken one — and every
-    // goal correction made there used to un-enforce the puzzle silently.
+  test("leaves the rule alone on a box with no answer key, which is the deploy box", () => {
     expect(corrected(NO_ANSWER, "Clear a T-Spin Double").requiredClears).toEqual(REQUIRED);
     expect(corrected(NO_ANSWER, "Clear 2 TSDs").requiredClears).toEqual(REQUIRED);
   });
 
-  test("keeps the rule when the new wording asks more than the answer can give", () => {
-    // The corrected sentence cannot be adopted — the puzzle's own solution does
-    // not satisfy it — but that is a reason to refuse the new rule, not to
-    // throw away the old one.
+  test("cannot tighten the rule, however countable the new sentence is", () => {
+    // The wording may now ask for three; the puzzle still demands what its
+    // answer plays. Otherwise one edit makes a puzzle unsolvable for everybody,
+    // including by its own reference solution, from the next restart.
     expect(corrected(WITH_ANSWER, "Clear 3 TSDs").requiredClears).toEqual(REQUIRED);
   });
 
-  test("adopts a corrected rule the puzzle's own answer does satisfy", () => {
-    // Not a freeze for its own sake: where the new wording is countable and the
-    // answer supports it, the rule follows the text.
-    const wasUnenforced = {
-      ...WITH_ANSWER,
-      goal: "Send 4",
-      requiredClears: [],
-    } as unknown as Puzzle;
-    const tightened = corrected(wasUnenforced, "Clear a TSD");
-    expect(tightened.requiredClears).toEqual(REQUIRED);
+  test("cannot loosen the rule either", () => {
+    expect(corrected(WITH_ANSWER, "Send 4").requiredClears).toEqual(REQUIRED);
   });
 
-  test("a puzzle that never had a rule does not gain one it cannot meet", () => {
-    const none = { ...WITH_ANSWER, requiredClears: [], solution: undefined } as unknown as Puzzle;
-    expect(corrected(none, "Clear 2 TSDs").requiredClears).toEqual([]);
+  test("cannot grant a rule to a puzzle that has none", () => {
+    const none = { ...WITH_ANSWER, requiredClears: [] } as unknown as Puzzle;
+    expect(corrected(none, "Clear a TSD").requiredClears).toEqual([]);
   });
 });

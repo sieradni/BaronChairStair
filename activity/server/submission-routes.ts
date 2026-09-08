@@ -10,8 +10,7 @@
  */
 
 import { HTTPException } from "hono/http-exception";
-import { parseGoalLoosely } from "../shared/goal";
-import { clearShortfall, decodeBoard, ENGINE_ROWS } from "../shared/puzzle";
+import { decodeBoard, ENGINE_ROWS, requirementFromSolution } from "../shared/puzzle";
 import { sanitizeHandling } from "../shared/tetris/handling";
 import { parseInputLog, verifyRun } from "../shared/tetris/verify";
 import type { Store } from "./db";
@@ -138,19 +137,20 @@ export function registerSubmissionRoutes(app: AppRouter, store: Store): void {
 
     // What this puzzle will demand of everybody else, frozen now.
     //
-    // Same gate as the archive backfill: the requirement comes from the
-    // author's own sentence, never from their solve — deriving it from the
-    // answer would make whatever line they happened to play definitionally
-    // correct, incidental clears and all — but it is *checked* against that
-    // solve, and a goal their own run does not satisfy enforces nothing.
+    // Same rule as the archive backfill, and it is the author's *solve* that
+    // sets it, not their sentence. The club settled this after the engine and
+    // the puzzle makers were found to disagree about naming — a polymer T-spin
+    // locks as a `tsmini` while its author calls it a double — and decided the
+    // replay wins. The title and the goal stay exactly as written; what is
+    // enforced is what the run demonstrably did.
     //
-    // Frozen on the row rather than re-read at boot because `goal` is
+    // Frozen on the row rather than re-derived at boot because `goal` is
     // overridable by an officer and `target_attack` deliberately is not: a run
     // is filed with no record of the bar it was scored against. A clear
-    // requirement is the same kind of bar.
-    const wanted = parseGoalLoosely(goal)?.clears ?? [];
-    const requiredClears =
-      wanted.length > 0 && clearShortfall(verified.clears, wanted).length === 0 ? wanted : null;
+    // requirement is the same kind of bar. Deriving it from the solve also
+    // means it cannot contradict the solve, so no gate is needed here.
+    const derived = requirementFromSolution(verified.clears.map((clear) => ({ clear })));
+    const requiredClears = derived.length > 0 ? derived : null;
 
     const submission = store.recordSubmission({
       player: session.player,

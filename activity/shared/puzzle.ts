@@ -248,6 +248,41 @@ export function clearShortfall(
 }
 
 /**
+ * The clears a puzzle demands, read off the answer its maker recorded.
+ *
+ * The club's rule: a maker names and describes their puzzle however they like,
+ * and what the server *enforces* is what their own solution does when replayed.
+ * A goal reading "Clear 2 TSDs" whose answer makes a TSD and a mini is enforced
+ * as a TSD and a mini, because that is what the puzzle is.
+ *
+ * This replaced a gate that parsed the prose and, when the answer disagreed with
+ * it, froze no requirement at all. That gate was right that the two can disagree
+ * and wrong about which one settles it — it left every disagreeing puzzle
+ * enforcing nothing, and left the ones whose wording no parser could read
+ * enforcing nothing either. Both are now enforced as played.
+ *
+ * The naming disagreement it exists to absorb is real and has a name: the engine
+ * follows the guideline rule, where a T-spin with fewer than two front corners
+ * is a *mini* unless it entered on the fin/TST kick. Polymer setups (Neo, Iso)
+ * therefore lock as `tsmini` while their makers call them doubles. Counting here
+ * is by engine name, matching {@link clearShortfall}, so the requirement says
+ * `tsmini` and the puzzle stays solvable by the line the maker actually played.
+ *
+ * First-appearance order, so the same answer always produces the same row and a
+ * re-derivation is a no-op in a diff rather than a reshuffle.
+ */
+export function requirementFromSolution(
+  solution: readonly { readonly clear: ClearName | null }[],
+): ClearRequirement[] {
+  const counted = new Map<ClearName, number>();
+  for (const step of solution) {
+    if (step.clear === null) continue;
+    counted.set(step.clear, (counted.get(step.clear) ?? 0) + 1);
+  }
+  return [...counted].map(([clear, count]) => ({ clear, count }));
+}
+
+/**
  * The whole solve condition: the attack target *and* every clear the goal names.
  *
  * The single place that answers "is this solved", so the client's run loop and

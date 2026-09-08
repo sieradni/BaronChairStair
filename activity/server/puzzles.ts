@@ -26,7 +26,6 @@ import {
   nextResetAt,
   puzzleIndexForDay,
 } from "../shared/daily";
-import { parseGoalLoosely } from "../shared/goal";
 import {
   BOARD_WIDTH,
   type ClearRequirement,
@@ -216,78 +215,58 @@ export function withOverride(puzzle: Puzzle, override: OverrideFields): Puzzle {
     goal,
     difficulty: override.difficulty ?? puzzle.difficulty,
     set: override.set ?? puzzle.set,
-    requiredClears: goal === puzzle.goal ? puzzle.requiredClears : rederived(puzzle, goal),
+    // `requiredClears` rides the spread untouched, and that is the whole rule:
+    // the requirement is read off the puzzle's own replayed answer, so a fix to
+    // the *wording* cannot move it. This used to re-derive from the corrected
+    // sentence, which was the right instinct under a scheme where the sentence
+    // was the source. It is not any more — an officer rewriting a goal is
+    // describing the puzzle, not re-scoping it, and `targetAttack` is kept out
+    // of OVERRIDABLE_FIELDS for exactly the same reason.
   };
 }
 
 /**
- * The clears a corrected goal names — but only if the answer still makes them.
+ * The last gate: no puzzle demands a clear its own answer never makes.
  *
- * An officer can rewrite a goal, and `target_attack` is deliberately not
- * overridable because a run is filed with no record of the bar it was scored
- * against. A requirement is the same kind of thing, so it cannot simply follow
- * the new wording: an officer tightening "Clear a TSD" to "Clear 2 TSDs" would
- * otherwise make the puzzle unsolvable for everybody, including by its own
- * reference solution, from the next restart.
+ * Under the current scheme the requirement is *derived* from the answer, so at
+ * the moment it is written the two cannot disagree. This is what keeps that true
+ * afterwards. A creator may edit a published puzzle — `archive-rows.ts` has a
+ * content log and a discovery void for exactly that — and an edit that changes
+ * the answer leaves a requirement derived from a solve nobody can reproduce any
+ * more. A hand-fixed sqlite row and a backup restored from before a re-solve
+ * land in the same state.
  *
- * So the correction goes through the same gate the backfill does. The new
- * sentence is parsed and checked against the shipped answer; if the answer does
- * not satisfy it the puzzle keeps *no* requirement and scores on attack alone,
- * which is the state it would have had if nobody had ever written one. Loud in
- * the log, because an officer who tightened a goal and got nothing enforced
- * should be able to find out why.
+ * A disarmed puzzle is still scored on **attack**. `targetAttack` is derived
+ * from the answer and is the bar runs are actually filed against; a puzzle that
+ * is wrong about its clears is not thereby wrong about its damage. The player
+ * gets a puzzle that is merely easier than its prose claims, which is the
+ * failure worth having — the alternative is a puzzle nobody can solve.
  *
- * `[]` rather than the previous value on a mismatch, deliberately: leaving the
- * old requirement in force under new wording is the exact drift this exists to
- * prevent — the page would say one thing and the server hold another.
+ * No answer key on the box means no judgement, not a failed one:
+ * `solutions.json` is untracked, so on an ordinary deploy this runs blind and
+ * must leave the requirement alone. Silently — a warning per puzzle per boot, on
+ * every box with no answer key, is a log nobody reads twice.
  */
-function rederived(puzzle: Puzzle, goal: string): readonly ClearRequirement[] {
-  // What the puzzle is held to today. Every path that cannot *establish* a new
-  // requirement returns this rather than nothing, because the alternative is a
-  // wording fix silently un-enforcing a puzzle that already has runs against
-  // it — the exact re-scoping `targetAttack` is kept out of OVERRIDABLE_FIELDS
-  // to prevent, and the invariant `server/submissions.ts` states in as many
-  // words: what the author solved is what everybody else is held to.
-  const frozen = puzzle.requiredClears ?? [];
+export function withoutUnmeetableClears(puzzles: readonly Puzzle[]): Puzzle[] {
+  return puzzles.map((puzzle) => {
+    const required = puzzle.requiredClears ?? [];
+    const answer = puzzle.solution;
+    if (required.length === 0 || !answer) return puzzle;
 
-  const wanted = parseGoalLoosely(goal)?.clears ?? [];
-  if (wanted.length === 0) {
-    // The new wording names nothing a count can hold. That is a fact about the
-    // sentence, not a decision to stop enforcing — "Clear a TSD" corrected to
-    // "Clear a T-Spin Double" is the same puzzle, and the parser simply has no
-    // alias for the long form.
-    if (frozen.length > 0) {
-      console.warn(
-        `[puzzle] the corrected goal for ${puzzle.id} names no countable clear, so its ` +
-          `existing requirement stands (${frozen.map((e) => `${e.count} ${e.clear}`).join(", ")}). ` +
-          "The wording and the rule now differ; fix the wording or the puzzle.",
-      );
-    }
-    return frozen;
-  }
-
-  const answer = puzzle.solution;
-  if (!answer) {
-    // No answer key on this box — `data/solutions.json` is untracked, so this
-    // is an ordinary deployment rather than a broken one. It means the new
-    // requirement cannot be *gated*, which is a reason not to adopt it — not a
-    // reason to throw away one that was already gated when it was written.
-    return frozen;
-  }
-  const short = clearShortfall(
-    answer.flatMap((step) => (step.clear ? [step.clear] : [])),
-    wanted,
-  );
-  if (short.length > 0) {
-    console.warn(
-      `[puzzle] the corrected goal for ${puzzle.id} asks for clears its own solution does not ` +
-        `make (short ${short.map((entry) => `${entry.count} ${entry.clear}`).join(", ")}); keeping ` +
-        `the requirement it already had${frozen.length > 0 ? ` (${frozen.map((e) => `${e.count} ${e.clear}`).join(", ")})` : " (none)"}. ` +
-        "Fix the wording or the puzzle.",
+    const short = clearShortfall(
+      answer.flatMap((step) => (step.clear ? [step.clear] : [])),
+      required,
     );
-    return frozen;
-  }
-  return wanted;
+    if (short.length === 0) return puzzle;
+
+    console.warn(
+      `[puzzle] ${puzzle.id} requires clears its own answer does not make ` +
+        `(short ${short.map((entry) => `${entry.count} ${entry.clear}`).join(", ")}); ` +
+        `serving it on attack alone. Its goal is "${puzzle.goal}" — fix the wording, ` +
+        "the answer, or the requirement.",
+    );
+    return { ...puzzle, requiredClears: [] };
+  });
 }
 
 /**
@@ -496,7 +475,10 @@ export class PuzzleArchive {
     );
     const sources = [...file, ...accepted];
     const { puzzles, applied } = correctedOrSource(sources, overrides);
-    return new PuzzleArchive(puzzles, sources, dayOptions, applied);
+    // Last, over the corrected list: a correction can re-derive a requirement,
+    // so this has to see what will actually be served. `sources` is left as its
+    // author wrote it — the review tool's job is to say what the source says.
+    return new PuzzleArchive(withoutUnmeetableClears(puzzles), sources, dayOptions, applied);
   }
 
   get(id: number): Puzzle | undefined {

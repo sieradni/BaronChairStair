@@ -102,7 +102,20 @@
    ],
    "hold": null,
    "targetAttack": 13,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tsd",
+     "count": 1
+    },
+    {
+     "clear": "tsmini",
+     "count": 1
+    },
+    {
+     "clear": "tst",
+     "count": 1
+    }
+   ]
   },
   {
    "id": 4,
@@ -223,7 +236,16 @@
    ],
    "hold": "Z",
    "targetAttack": 12,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tst",
+     "count": 1
+    },
+    {
+     "clear": "tsd",
+     "count": 1
+    }
+   ]
   },
   {
    "id": 8,
@@ -248,7 +270,12 @@
    ],
    "hold": "T",
    "targetAttack": 6,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tst",
+     "count": 1
+    }
+   ]
   },
   {
    "id": 9,
@@ -439,11 +466,11 @@
    "targetAttack": 11,
    "requiredClears": [
     {
-     "clear": "tsd",
+     "clear": "tst",
      "count": 1
     },
     {
-     "clear": "tst",
+     "clear": "tsd",
      "count": 1
     }
    ]
@@ -510,7 +537,16 @@
    ],
    "hold": null,
    "targetAttack": 23,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tst",
+     "count": 2
+    },
+    {
+     "clear": "tsd",
+     "count": 1
+    }
+   ]
   },
   {
    "id": 17,
@@ -821,7 +857,16 @@
    ],
    "hold": "T",
    "targetAttack": 49,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tsd",
+     "count": 4
+    },
+    {
+     "clear": "quad",
+     "count": 2
+    }
+   ]
   },
   {
    "id": 25,
@@ -861,15 +906,15 @@
    "targetAttack": 24,
    "requiredClears": [
     {
-     "clear": "tss",
-     "count": 1
-    },
-    {
      "clear": "tsd",
      "count": 2
     },
     {
      "clear": "tst",
+     "count": 1
+    },
+    {
+     "clear": "tss",
      "count": 1
     }
    ]
@@ -1566,7 +1611,12 @@
    ],
    "hold": null,
    "targetAttack": 21,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tsd",
+     "count": 4
+    }
+   ]
   },
   {
    "id": 45,
@@ -1609,7 +1659,16 @@
    ],
    "hold": null,
    "targetAttack": 23,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tsd",
+     "count": 3
+    },
+    {
+     "clear": "tst",
+     "count": 1
+    }
+   ]
   },
   {
    "id": 46,
@@ -1906,7 +1965,16 @@
    ],
    "hold": null,
    "targetAttack": 13,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tss",
+     "count": 2
+    },
+    {
+     "clear": "tsd",
+     "count": 1
+    }
+   ]
   },
   {
    "id": 56,
@@ -1934,7 +2002,16 @@
    ],
    "hold": null,
    "targetAttack": 16,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tss",
+     "count": 1
+    },
+    {
+     "clear": "tsd",
+     "count": 2
+    }
+   ]
   },
   {
    "id": 57,
@@ -1963,7 +2040,16 @@
    ],
    "hold": null,
    "targetAttack": 15,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tsd",
+     "count": 2
+    },
+    {
+     "clear": "tss",
+     "count": 1
+    }
+   ]
   },
   {
    "id": 59,
@@ -2070,12 +2156,12 @@
    "targetAttack": 21,
    "requiredClears": [
     {
-     "clear": "tss",
-     "count": 1
-    },
-    {
      "clear": "tsd",
      "count": 3
+    },
+    {
+     "clear": "tss",
+     "count": 1
     }
    ]
   },
@@ -2199,7 +2285,16 @@
    ],
    "hold": null,
    "targetAttack": 19,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tsd",
+     "count": 2
+    },
+    {
+     "clear": "tss",
+     "count": 2
+    }
+   ]
   },
   {
    "id": 65,
@@ -2531,11 +2626,11 @@
    "targetAttack": 12,
    "requiredClears": [
     {
-     "clear": "tst",
+     "clear": "quad",
      "count": 1
     },
     {
-     "clear": "quad",
+     "clear": "tst",
      "count": 1
     }
    ]
@@ -3159,7 +3254,20 @@
    ],
    "hold": null,
    "targetAttack": 38,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tsd",
+     "count": 3
+    },
+    {
+     "clear": "tsmini",
+     "count": 1
+    },
+    {
+     "clear": "tst",
+     "count": 1
+    }
+   ]
   },
   {
    "id": 91,
@@ -3232,12 +3340,12 @@
    "targetAttack": 18,
    "requiredClears": [
     {
-     "clear": "tst",
-     "count": 1
-    },
-    {
      "clear": "tsd",
      "count": 2
+    },
+    {
+     "clear": "tst",
+     "count": 1
     }
    ]
   },
@@ -3481,7 +3589,12 @@
    ],
    "hold": null,
    "targetAttack": 18,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tsd",
+     "count": 3
+    }
+   ]
   },
   {
    "id": 100,
@@ -3512,7 +3625,12 @@
    ],
    "hold": null,
    "targetAttack": 18,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tsd",
+     "count": 3
+    }
+   ]
   },
   {
    "id": 101,
@@ -3569,7 +3687,20 @@
    ],
    "hold": null,
    "targetAttack": 9,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "spin",
+     "count": 1
+    },
+    {
+     "clear": "tsmini",
+     "count": 1
+    },
+    {
+     "clear": "quad",
+     "count": 1
+    }
+   ]
   },
   {
    "id": 103,
@@ -3653,7 +3784,16 @@
    ],
    "hold": null,
    "targetAttack": 31,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tsd",
+     "count": 4
+    },
+    {
+     "clear": "quad",
+     "count": 1
+    }
+   ]
   },
   {
    "id": 105,
@@ -3686,7 +3826,16 @@
    ],
    "hold": null,
    "targetAttack": 24,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tsd",
+     "count": 2
+    },
+    {
+     "clear": "perfect clear",
+     "count": 1
+    }
+   ]
   },
   {
    "id": 106,
@@ -4008,7 +4157,16 @@
    ],
    "hold": null,
    "targetAttack": 81,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tsd",
+     "count": 10
+    },
+    {
+     "clear": "quad",
+     "count": 3
+    }
+   ]
   },
   {
    "id": 113,
@@ -4040,7 +4198,20 @@
    ],
    "hold": null,
    "targetAttack": 13,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "spin",
+     "count": 1
+    },
+    {
+     "clear": "tsd",
+     "count": 1
+    },
+    {
+     "clear": "tst",
+     "count": 1
+    }
+   ]
   },
   {
    "id": 114,
@@ -4101,7 +4272,12 @@
    ],
    "hold": null,
    "targetAttack": 4,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tsd",
+     "count": 1
+    }
+   ]
   },
   {
    "id": 116,
@@ -4286,7 +4462,16 @@
    ],
    "hold": null,
    "targetAttack": 11,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tsd",
+     "count": 1
+    },
+    {
+     "clear": "tst",
+     "count": 1
+    }
+   ]
   },
   {
    "id": 121,
@@ -4318,15 +4503,15 @@
    "targetAttack": 15,
    "requiredClears": [
     {
-     "clear": "tss",
-     "count": 1
-    },
-    {
      "clear": "tsd",
      "count": 1
     },
     {
      "clear": "tst",
+     "count": 1
+    },
+    {
+     "clear": "tss",
      "count": 1
     }
    ]
@@ -4390,7 +4575,12 @@
    ],
    "hold": null,
    "targetAttack": 2,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "spin",
+     "count": 2
+    }
+   ]
   },
   {
    "id": 124,
@@ -4626,7 +4816,16 @@
    ],
    "hold": null,
    "targetAttack": 16,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tsd",
+     "count": 2
+    },
+    {
+     "clear": "quad",
+     "count": 1
+    }
+   ]
   },
   {
    "id": 130,
@@ -4784,7 +4983,20 @@
    ],
    "hold": null,
    "targetAttack": 22,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tsmini",
+     "count": 1
+    },
+    {
+     "clear": "tss",
+     "count": 1
+    },
+    {
+     "clear": "tsd",
+     "count": 3
+    }
+   ]
   },
   {
    "id": 134,
@@ -4940,7 +5152,16 @@
    ],
    "hold": null,
    "targetAttack": 10,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "spin",
+     "count": 2
+    },
+    {
+     "clear": "quad",
+     "count": 1
+    }
+   ]
   },
   {
    "id": 138,
@@ -4980,11 +5201,11 @@
    "targetAttack": 27,
    "requiredClears": [
     {
-     "clear": "tsd",
+     "clear": "tst",
      "count": 2
     },
     {
-     "clear": "tst",
+     "clear": "tsd",
      "count": 2
     }
    ]
@@ -5018,7 +5239,12 @@
    ],
    "hold": null,
    "targetAttack": 16,
-   "requiredClears": []
+   "requiredClears": [
+    {
+     "clear": "tsd",
+     "count": 3
+    }
+   ]
   },
   {
    "id": 140,
@@ -5046,11 +5272,11 @@
    "targetAttack": 6,
    "requiredClears": [
     {
-     "clear": "tsd",
+     "clear": "tsmini",
      "count": 1
     },
     {
-     "clear": "tsmini",
+     "clear": "tsd",
      "count": 1
     }
    ]

@@ -26,7 +26,7 @@
 
 import type { Database } from "bun:sqlite";
 import type { ClearRequirement, Mino, Puzzle, RowCode, SolutionStep } from "../shared/puzzle";
-import { clearShortfall, COMMUNITY_ID_BASE } from "../shared/puzzle";
+import { clearShortfall, COMMUNITY_ID_BASE, requirementFromSolution } from "../shared/puzzle";
 import type { ArchiveMeta } from "../tools/decode-archive";
 
 const COLUMNS = `
@@ -439,6 +439,12 @@ export function upsertArchive(
     );
   }
 
+  // One derivation for both paths below. An insert that stored the incoming
+  // field while an update stored this would make a fresh row and a re-synced row
+  // disagree about the same puzzle — which is exactly what the sync's own
+  // idempotence tests caught.
+  const derivedClears = requirementFromSolution(puzzle.solution ?? []);
+
   const existing = archiveEntry(db, puzzle.id);
   const incoming = contentHash(puzzle);
 
@@ -459,7 +465,7 @@ export function upsertArchive(
         puzzle.hold,
         puzzle.targetAttack,
         JSON.stringify(puzzle.solution ?? []),
-        puzzle.requiredClears ? JSON.stringify(puzzle.requiredClears) : null,
+        derivedClears.length > 0 ? JSON.stringify(derivedClears) : null,
         puzzle.source?.puzzle ?? "",
         puzzle.source?.solution ?? "",
         incoming,
@@ -482,7 +488,15 @@ export function upsertArchive(
     meta !== undefined &&
     ((meta.addedOn !== null && meta.addedOn !== existing.addedOn) ||
       (meta.solveCount !== null && meta.solveCount !== existing.solveCount));
-  if (!contentMoved && fields.length === 0 && !bookkeepingMoved) {
+  // The derived requirement counts as movement for the same reason the two
+  // archive columns above do: it is read off the answer, so a row written
+  // before the scheme existed carries none, and the sheet has not changed —
+  // the hash and every metadata field match, and the early return would skip
+  // the UPDATE that fills it in. Caught by a synced database reporting 153
+  // unchanged and 0 with a requirement.
+  const clearsMoved =
+    JSON.stringify(existing.puzzle.requiredClears ?? []) !== JSON.stringify(derivedClears);
+  if (!contentMoved && fields.length === 0 && !bookkeepingMoved && !clearsMoved) {
     return { kind: "unchanged" };
   }
 
@@ -502,13 +516,16 @@ export function upsertArchive(
     solutionsVoided = existing.publishedAt === null ? null : countDiscoveries(db, puzzle.id);
     logContentChange(db, existing, incoming, runsBefore, solutionsVoided, now, by);
 
+    // Reported, not acted on. The rule is re-derived from the new answer by the
+    // UPDATE below, so there is nothing here to drop — but an editor who has
+    // just invalidated the rule their puzzle used to enforce should be told
+    // which one stopped applying.
     const frozen = existing.puzzle.requiredClears;
     const made = (puzzle.solution ?? [])
       .map((step) => step.clear)
       .filter((clear): clear is NonNullable<typeof clear> => Boolean(clear));
     if (frozen?.length && clearShortfall(made, frozen).length > 0) {
       droppedClears = frozen;
-      db.run("UPDATE archive_puzzles SET required_clears = NULL WHERE id = ?1", [puzzle.id]);
     }
   }
 
@@ -517,7 +534,7 @@ export function upsertArchive(
         SET title = ?2, author = ?3, difficulty = ?4, goal = ?5, set_name = ?6,
             board = ?7, queue = ?8, hold = ?9, target_attack = ?10,
             solution = ?11, source_puzzle = ?12, source_solution = ?13,
-            content_hash = ?14, synced_at = ?15,
+            content_hash = ?14, synced_at = ?15, required_clears = ?18,
             added_on = COALESCE(?16, added_on), solve_count = COALESCE(?17, solve_count)
       WHERE id = ?1`,
     [
@@ -538,6 +555,12 @@ export function upsertArchive(
       now,
       meta?.addedOn ?? null,
       meta?.solveCount ?? null,
+      // Written on every upsert rather than frozen at insert. The requirement is
+      // now a pure function of the answer, and the answer is inside
+      // `contentHash` — so for unchanged content this writes back an identical
+      // value, and for changed content it is the only way the rule stays true.
+      // It also fills in rows inserted before the scheme, which carried none.
+      derivedClears.length > 0 ? JSON.stringify(derivedClears) : null,
     ],
   );
   // Named, so a sync that only backfills the two archive columns does not

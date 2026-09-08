@@ -29,7 +29,6 @@
  * Read-only. It writes nothing and touches no database.
  */
 
-import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseGoal, parseGoalLoosely } from "../shared/goal";
 import {
@@ -56,21 +55,6 @@ interface Audit {
   problems: string[];
   attack?: number;
   clears?: ClearName[];
-}
-
-/**
- * The frozen clear requirements, which are what players are actually judged
- * against. They live in the committed archive rather than on the sheet — the
- * sheet has no column for them — so a puzzle can only be audited against its
- * real solve condition by reading them from here.
- */
-function frozenRequirements(path: string): Map<number, Puzzle["requiredClears"]> {
-  const file = JSON.parse(readFileSync(path, "utf8")) as { puzzles: Puzzle[] };
-  const byId = new Map<number, Puzzle["requiredClears"]>();
-  for (const puzzle of file.puzzles) {
-    if (puzzle.requiredClears?.length) byId.set(puzzle.id, puzzle.requiredClears);
-  }
-  return byId;
 }
 
 function clearsOf(puzzle: Puzzle): ClearName[] {
@@ -166,16 +150,16 @@ async function main(): Promise<void> {
   ]);
   const codesById = indexById(parseCsv(codesCsv).slice(1));
   const metaById = indexById(parseCsv(metaCsv).slice(1));
-  const frozen = frozenRequirements(resolve(import.meta.dir, "../data/puzzles.json"));
-
   const audits: Audit[] = [];
   for (const [id, codes] of [...codesById].sort(([a], [b]) => a - b)) {
     if (!codes[1]) continue; // a metadata row with no puzzle behind it yet
     const meta = metaById.get(id);
     try {
-      const built = buildPuzzle(id, codes, meta);
-      const requiredClears = frozen.get(id);
-      audits.push(audit(requiredClears ? { ...built, requiredClears } : built));
+      // No overlay from data/puzzles.json any more. `buildPuzzle` derives the
+      // requirement from the answer it just replayed, so the rule travels with
+      // the puzzle rather than being joined on by id — a join that was quietly
+      // wrong wherever the two files disagree about which puzzle an id names.
+      audits.push(audit(buildPuzzle(id, codes, meta)));
     } catch (error) {
       audits.push({
         id,
