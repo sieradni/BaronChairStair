@@ -36,7 +36,7 @@ MAX_MESSAGE = 2000
 # A run of one is not a streak worth announcing.
 MIN_STREAK = 2
 
-# The day's three, in the order they are always shown.
+# The day's tiers, in the order they are always shown.
 # Must match `DAILY_TIERS` in activity/shared/daily.ts. The activity added
 # "extreme" and the recap kept counting three: the fourth mark went undrawn and
 # "All three" named players who had solved three of four.
@@ -199,7 +199,7 @@ def _grid(marks: dict) -> str:
 
 def _daily_lines(rows: list[dict]) -> list[str]:
     """
-    Everybody once, best first, with their three marks beside them.
+    Everybody once, best first, with their marks beside them.
 
     No grouping by score, unlike the Wordle bot it borrows from: a time is
     continuous, so no two players ever share a bucket and grouping would put
@@ -210,7 +210,7 @@ def _daily_lines(rows: list[dict]) -> list[str]:
 
     # No crown on the leader. It was written before the grid was, and a prefix
     # on one line only is what knocks that line out of alignment: the winner's
-    # three marks started an emoji-width right of everybody else's, so the one
+    # the marks started an emoji-width right of everybody else's, so the one
     # column the recap has ran crooked down the whole message. The board is the
     # thing being read here, and order already says who won.
     lines = []

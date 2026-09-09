@@ -574,7 +574,7 @@ export class PuzzleArchive {
   }
 
   /**
-   * The three puzzles for a given day number, defaulting to today.
+   * The puzzles for a given day number, defaulting to today.
    *
    * Memoised on the day. Everything in here is constant for a calendar day and
    * four routes ask for it per request; the cost is dominated by `nextResetAt`,
@@ -601,7 +601,7 @@ export class PuzzleArchive {
     return this.forDay();
   }
 
-  /** Which of a day's three a puzzle is, or null if it is not one of them. */
+  /** Which of a day's tiers a puzzle is, or null if it is not one of them. */
   tierOfDay(day: number, puzzleId: number): DailyTier | null {
     return DAILY_TIERS.find((tier) => this.forTier(day, tier).id === puzzleId) ?? null;
   }

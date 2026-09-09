@@ -46,7 +46,7 @@ export function pastDaysOf(archive: PuzzleArchive): PastDays {
 }
 
 /**
- * The three a pool's rotation deals for a day, before anything is written down.
+ * What a pool's rotation deals for a day, before anything is written down.
  *
  * One function for the backfill and the first-ask pin, because they must agree:
  * they are the same derivation run at two different moments, and a day pinned
@@ -73,10 +73,10 @@ export class DaySchedule {
      * The two halves of a day were freezing at different moments: the startup
      * backfill pins `day_puzzles` for today, but nothing pinned `day_rush`
      * until somebody actually started a rush — so between a start and that
-     * day's first ticket the pool was still floating while the day's three were
+     * day's first ticket the pool was still floating while the day's tiers were
      * already frozen. That gap is exactly where an acceptance lands, because
      * accepting a puzzle is what rebuilds the archive and restarts the server:
-     * measured on a same-day restart, the day's three held and 37 of 40 rush
+     * measured on a same-day restart, the day's tiers held and 37 of 40 rush
      * slots moved.
      *
      * It belongs here and not in `server/index.ts`, where a startup line is
@@ -91,7 +91,7 @@ export class DaySchedule {
   }
 
   /**
-   * The three puzzles for a given day number, defaulting to today.
+   * The puzzles for a given day number, defaulting to today.
    *
    * Memoised on the day, the same trade `PuzzleArchive.forDay` made and for the
    * same reason: four routes ask per request, and the cost is dominated by
@@ -122,7 +122,7 @@ export class DaySchedule {
   }
 
   /**
-   * Which of a day's three a puzzle is, or null if it is not one of them.
+   * Which of a day's tiers a puzzle is, or null if it is not one of them.
    *
    * Answered from the ids alone, without resolving a puzzle. This gates the
    * archive's answer key — a puzzle it calls "none of today's" has its solution
@@ -172,7 +172,7 @@ export class DaySchedule {
      * band are real: a reviewer can correct it, and `bun run puzzles` rewrites
      * `data/puzzles.json` wholesale from the club's sheet. Measured on the
      * second: editing one puzzle's rating and restarting left the membership
-     * and the day's three untouched and moved 26 of 40 slots, which
+     * and the day's tiers untouched and moved 26 of 40 slots, which
      * `sequenceFor` then scores an in-flight ranked run against.
      *
      * Reading it back from `day_rush` rather than from the archive is what
@@ -194,7 +194,7 @@ export class DaySchedule {
   }
 
   /**
-   * A day's three ids: what is on file, or a derivation written down now.
+   * A day's ids: what is on file, or a derivation written down now.
    *
    * The write is what makes the first ask authoritative. Deriving and *not*
    * writing would leave the day floating until somebody happened to file a run,

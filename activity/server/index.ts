@@ -258,7 +258,7 @@ app.post("/api/session", async (c) => {
 // ── Daily puzzle ─────────────────────────────────────────────────────────────
 
 /**
- * Which of the day's three a request is about.
+ * Which of the day's tiers a request is about.
  *
  * Client-supplied and never trusted for anything but selection: naming a tier
  * chooses the board a log is replayed against, so a log played on the hard one
@@ -437,7 +437,7 @@ app.get("/api/today", (c) => {
     day,
     resetsAt,
     puzzles: DAILY_TIERS.map((tier) => ({ tier, ...describe(puzzles[tier]) })),
-    // People, not rows: a player has three results a day now, and this is the
+    // People, not rows: a player has one result per tier a day now, and this is the
     // "solved by N so far" line on the announcement.
     solvedCount: store.solvedCount(day),
   });
@@ -570,7 +570,7 @@ function maySeeSolution(session: Session, puzzleId: number): boolean {
   // gate has to be the run for *this* puzzle's tier. Read as "solved today" it
   // would hand the hard answer to somebody who solved the easy one.
   //
-  // Sound only because the day is pinned: while the three were re-derived, a
+  // Sound only because the day is pinned: while the day's puzzles were re-derived, a
   // puzzle that had been today's easy an hour ago was suddenly none of today's,
   // and this answered `true` for it while players were still holding its
   // prompt.

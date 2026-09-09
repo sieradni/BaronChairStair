@@ -3,7 +3,7 @@
  *
  * The header carries the club's block mark and whatever control the current
  * screen slots into it. It used to carry the day's number, which meant
- * something while a day was one puzzle and named nothing once it became three;
+ * something while a day was one puzzle and named nothing once it became several;
  * and then a streak and a total-solved tally, which said in the corner of every
  * screen what the front page already says in a sentence. The strip underneath
  * credits whoever

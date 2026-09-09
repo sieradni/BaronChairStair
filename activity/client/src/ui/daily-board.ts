@@ -1,10 +1,10 @@
 /**
  * One board for the whole day, not one per difficulty.
  *
- * Three boards meant clicking between three, which asks the reader to hold two
+ * One board per tier meant clicking between them, which asks the reader to hold two
  * of them in their head to answer the only question they came with: how did my
  * server do today, and where am I in it. So everybody appears once, with what
- * they did to each of the three beside their name.
+ * they did to each tier beside their name.
  *
  * Ranked by how many they solved and then by how long it took, which is the
  * order rush already uses. Time alone would put somebody who solved nothing at
@@ -108,7 +108,7 @@ export function createDailyBoard(): DailyBoard {
             el("span", { class: "board-list__rank", text: `${index + 1}` }),
             el("span", { class: "board-list__name", text: row.player.username }),
             // Beside the score rather than beside the name: the squares are
-            // three of that row's results, and every other result on the row
+            // the marks on that row, and every other result on the row
             // is at this end. In front of the name they read as a prefix to
             // it, and pushed every name to a different starting column.
             el("span", { class: "board__marks" }, ...DAILY_TIERS.map((tier) => mark(row, tier))),

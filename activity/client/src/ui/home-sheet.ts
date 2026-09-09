@@ -1,5 +1,5 @@
 /**
- * One of the day's three, as a card you press to play it.
+ * One of the day's tiers, as a card you press to play it.
  *
  * Split out of `home.ts` the way `builder-goal.ts` was split out of
  * `builder.ts`: the front door is four regions and this is the only one with

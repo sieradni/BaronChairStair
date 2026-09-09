@@ -192,7 +192,7 @@ class ReportLimiter:
 
         For the report that was allowed and then could not be filed — an unset
         token, a GitHub 5xx. Without this a club that has not finished setting
-        up lets a player burn all three attempts on "Reports aren't wired up
+        up lets a player burn every attempt on "Reports aren't wired up
         yet" and then locks them out for an hour with nothing filed, which is
         the rate limit punishing them for the club's own misconfiguration.
 

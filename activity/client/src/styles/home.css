@@ -1,5 +1,5 @@
 /*
- * The front door: the day's three, the other four ways in, and the day's board.
+ * The front door: the day's tiers, the other four ways in, and the day's board.
  *
  * Its own file rather than another heading in panels.css, which was already at
  * the length where a reader stops scrolling and starts grepping. Loaded after
@@ -69,7 +69,7 @@
 .home__day .home__day-note { font-size: 12px; }
 
 /*
- * The three sheets, and the receipt that replaces the hero once the day is
+ * The sheets, and the receipt that replaces the hero once the day is
  * over. This is the elastic: it takes what the daystrip and the ways panel
  * leave, and hands it to the hero inside it.
  */

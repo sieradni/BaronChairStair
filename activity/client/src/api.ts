@@ -32,7 +32,7 @@ export interface StoredRun {
   readonly createdAt: number;
 }
 
-/** A day's board row: one player, and how each of the three went for them. */
+/** A day's board row: one player, and how each tier went for them. */
 export interface DayBoardRow {
   readonly player: PlayerProfile;
   readonly solved: number;
@@ -41,7 +41,7 @@ export interface DayBoardRow {
   readonly marks: Partial<Record<DailyTier, boolean>>;
 }
 
-/** One of the day's three, with whatever this player has done to it. */
+/** One of the day's tiers, with whatever this player has done to it. */
 export interface DailyEntry {
   readonly tier: DailyTier;
   readonly puzzle: PuzzlePrompt;
@@ -53,7 +53,7 @@ export interface DailyEntry {
 export interface DailyResponse {
   readonly day: number;
   readonly resetsAt: number;
-  /** Easiest first, and always all three. */
+  /** Easiest first, and always every tier. */
   readonly puzzles: readonly DailyEntry[];
   readonly streak: number;
   readonly totalSolved: number;
@@ -254,7 +254,7 @@ export class Api {
   }
 
   submitRun(body: {
-    /** Which of the day's three this log was played on. */
+    /** Which of the day's tiers this log was played on. */
     tier: DailyTier;
     handling: unknown;
     events: unknown;

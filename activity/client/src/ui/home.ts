@@ -10,9 +10,9 @@
  * one puzzle still worth ten minutes is the largest object on the page, and
  * Build is the last row of a panel called "More ways to play".
  *
- * The screen is handed all three of the day's puzzles — title, author, goal,
+ * The screen is handed every one of the day's puzzles — title, author, goal,
  * difficulty, length, and how this player has done on each — and rendered one
- * sentence off it. So the three are cards carrying what the choice actually
+ * sentence off it. So they are cards carrying what the choice actually
  * turns on, which is the chooser's own list; the chooser itself is gone, and
  * with it a click between opening the activity and being on a board.
  *
@@ -43,7 +43,7 @@ import { TIER_LABELS, todaySheet } from "./home-sheet";
 import { el, formatDuration, panel, replaceChildren, stat } from "./dom";
 
 export interface HomeCallbacks {
-  /** Opens one of the day's three. There is no chooser between; this is it. */
+  /** Opens one of the day's tiers. There is no chooser between; this is it. */
   readonly onPick: (tier: DailyTier) => void;
   readonly onRush: () => void;
   readonly onDuel: () => void;
@@ -74,7 +74,7 @@ export interface Home {
 /**
  * Counts read as words here, never as digits.
  *
- * The codebase already says "All three done.", and the masthead two rows above
+ * The codebase already says "All four done.", and the masthead two rows above
  * owns the tallies — a screen that prints "1 of 3" under a header showing "1"
  * and "247" is three numbers deep before it has said anything.
  */
@@ -91,7 +91,7 @@ function countWord(count: number): string {
  * The state of the day, in one sentence under the heading.
  *
  * The streak is spent as a *reason* inside a sentence and never printed as a
- * tally: what it is for — any one of the three keeps it — is the part a player
+ * tally: what it is for — any one of them keeps it — is the part a player
  * does not already know from a number.
  *
  * It has to appear in every branch, which it did not. The sentence naming it
@@ -106,7 +106,7 @@ function countWord(count: number): string {
  */
 function dayNote(entries: readonly DailyEntry[], streak: number): string {
   const total = entries.length;
-  // The server sends three, always. Nothing below reads sensibly against none.
+  // The server sends one per tier, always. Nothing below reads sensibly against none.
   if (total === 0) return "";
   const solved = entries.filter((entry) => entry.run?.solved).length;
   const left = entries.filter((entry) => entry.run === null).length;
@@ -183,10 +183,10 @@ function waysPanel(callbacks: HomeCallbacks): Ways {
 }
 
 /**
- * The receipt, once all three are filed.
+ * The receipt, once they are all filed.
  *
  * There is no hero to grow into the freed height then, and the alternative was
- * letting the three short sheets float at the top of an empty column — a
+ * letting the short sheets float at the top of an empty column — a
  * finished day getting a shrug. It gets what it did instead, and the one thing
  * left to do tonight.
  *
@@ -256,7 +256,7 @@ function dayDonePanel(
 export function createHome(callbacks: HomeCallbacks): Home {
   const dayNumber = el("span", { class: "readout home__day-number", text: "" });
   const note = el("p", { class: "note home__day-note", text: "" });
-  /** The three sheets, and the receipt that replaces the hero once they are done. */
+  /** The sheets, and the receipt that replaces the hero once they are done. */
   const today = el("div", { class: "home__today" });
   const ways = waysPanel(callbacks);
   // `.rail` for its gap, its shadow gutter, its thin scrollbar, its narrow
@@ -324,7 +324,7 @@ export function createHome(callbacks: HomeCallbacks): Home {
         return;
       }
       const best = Math.max(...runs.map((run) => run.solved));
-      // No "today" in either: the heading above says TODAY'S THREE and the
+      // No "today" in either: the heading above says TODAY'S PUZZLES and the
       // sentence under it says today, and the three words this line can spare
       // are the difference between the row fitting on one line and its sentence
       // wrapping into the count beside it.
