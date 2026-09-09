@@ -514,9 +514,17 @@ app.get("/api/recap", (c) => {
   if (!guildId) throw new HTTPException(400, { message: "guild is required" });
 
   const { puzzles } = schedule.forDay(day);
+  // The tiers this day actually dealt, which for any day pinned before `extreme`
+  // existed is three. Reporting four would have the bot draw a fourth, always
+  // blank square for a puzzle nobody was ever shown, and — because it sizes its
+  // sweep line off the same list — deny the sweep to players who solved every
+  // puzzle the day really had.
+  const held = store.pinnedTiers(day);
+  const dealt = DAILY_TIERS.filter((tier) => held[tier] !== undefined);
+  const reported = dealt.length > 0 ? dealt : DAILY_TIERS;
   return c.json({
     day,
-    puzzles: DAILY_TIERS.map((tier) => ({
+    puzzles: reported.map((tier) => ({
       tier,
       id: puzzles[tier].id,
       title: puzzles[tier].title,

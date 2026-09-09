@@ -189,15 +189,36 @@ def _rows(payload_daily: dict) -> list[dict]:
     return list(payload_daily.get("rows") or [])
 
 
-def _grid(marks: dict) -> str:
-    """One mark per tier, always all of them and always in the same order."""
+def _tiers_of(payload: dict) -> tuple:
+    """
+    Which tiers the day being recapped actually dealt.
+
+    Read from the payload rather than from TIER_ORDER, because a day is not
+    always the shape the bot is currently built for: every day pinned before
+    `extreme` existed dealt three, and sizing the grid off the constant drew a
+    fourth blank square for a puzzle nobody was shown while the sweep line —
+    which counts against the same list — went to nobody.
+
+    Falls back to TIER_ORDER, which is the right answer for any day the server
+    did not enumerate and for an older server that does not send the list.
+    """
+    named = tuple(
+        entry.get("tier")
+        for entry in (payload.get("puzzles") or [])
+        if entry.get("tier") in TIER_ORDER
+    )
+    return named or TIER_ORDER
+
+
+def _grid(marks: dict, tiers: tuple = TIER_ORDER) -> str:
+    """One mark per tier the day dealt, always in the same order."""
     return "".join(
         MARK_SOLVED if marks.get(tier) else MARK_MISSED if tier in marks else MARK_ABSENT
-        for tier in TIER_ORDER
+        for tier in tiers
     )
 
 
-def _daily_lines(rows: list[dict]) -> list[str]:
+def _daily_lines(rows: list[dict], tiers: tuple = TIER_ORDER) -> list[str]:
     """
     Everybody once, best first, with their marks beside them.
 
@@ -220,15 +241,15 @@ def _daily_lines(rows: list[dict]) -> list[str]:
             if row.get("solved", 0) > 0
             else ""
         )
-        lines.append(f"{_grid(row.get('marks') or {})} {_mention(row)}{tail}")
+        lines.append(f"{_grid(row.get('marks') or {}, tiers)} {_mention(row)}{tail}")
 
     rest = rows[RANKED_SHOWN:]
     if rest:
         lines.append(f"also played — {_names(rest)}")
 
-    swept = [row for row in rows if row.get("solved", 0) == len(TIER_ORDER)]
+    swept = [row for row in rows if row.get("solved", 0) == len(tiers)]
     if swept:
-        lines.append(f"All {len(TIER_ORDER)}: {_names(swept)}")
+        lines.append(f"All {len(tiers)}: {_names(swept)}")
     return lines
 
 
@@ -278,7 +299,7 @@ def format_recap(payload: dict) -> str:
         payload.get("streak", 0),
         any(row.get("solved", 0) > 0 for row in rows),
     )]
-    lines += _daily_lines(rows)
+    lines += _daily_lines(rows, _tiers_of(payload))
 
     # The board is capped server-side and misses sort last, so a very busy
     # server would lose exactly the people this message exists to tease.
