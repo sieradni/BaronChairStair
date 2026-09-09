@@ -184,7 +184,7 @@ app.use("/api/daily/run", rateLimit({ max: 20, windowMs: MINUTE }, callerKey));
 app.use("/api/rush/start", rateLimit({ max: 6, windowMs: MINUTE }, callerKey));
 app.use("/api/rush/run", rateLimit({ max: 12, windowMs: MINUTE }, callerKey));
 // Tighter than the daily's twenty, because a submission replays a board the
-// caller chose rather than one of today's three. Nobody writes five puzzles a
+// caller chose rather than one of today's. Nobody writes five puzzles a
 // minute, so this only ever costs somebody who is not writing puzzles.
 app.use("/api/submissions", rateLimit({ max: 5, windowMs: MINUTE }, callerKey));
 // Ten a minute on the exchange, knowing it may be one shared bucket: behind a
@@ -258,7 +258,7 @@ app.post("/api/session", async (c) => {
 // ── Daily puzzle ─────────────────────────────────────────────────────────────
 
 /**
- * Which of the day's three a request is about.
+ * Which of the day's tiers a request is about.
  *
  * Client-supplied and never trusted for anything but selection: naming a tier
  * chooses the board a log is replayed against, so a log played on the hard one
@@ -269,7 +269,7 @@ app.post("/api/session", async (c) => {
  */
 function readTier(value: unknown): DailyTier {
   const tier = DAILY_TIERS.find((candidate) => candidate === value);
-  if (!tier) throw new HTTPException(400, { message: "That is not one of today's three puzzles" });
+  if (!tier) throw new HTTPException(400, { message: "That is not one of today's puzzles" });
   return tier;
 }
 
@@ -437,7 +437,7 @@ app.get("/api/today", (c) => {
     day,
     resetsAt,
     puzzles: DAILY_TIERS.map((tier) => ({ tier, ...describe(puzzles[tier]) })),
-    // People, not rows: a player has three results a day now, and this is the
+    // People, not rows: a player has one result per tier a day now, and this is the
     // "solved by N so far" line on the announcement.
     solvedCount: store.solvedCount(day),
   });
@@ -565,12 +565,12 @@ function maySeeSolution(session: Session, puzzleId: number): boolean {
   // Never the puzzle they are on right now: a duel round names its puzzle, and
   // this route would otherwise answer with the way to win it.
   if (puzzlesInPlayFor(session.player.id).has(puzzleId)) return false;
-  // Which of today's three this is, if it is one of them at all. Asking "is it
+  // Which of today's tiers this is, if it is one of them at all. Asking "is it
   // today's puzzle" no longer has a single answer, and the tier matters: the
   // gate has to be the run for *this* puzzle's tier. Read as "solved today" it
   // would hand the hard answer to somebody who solved the easy one.
   //
-  // Sound only because the day is pinned: while the three were re-derived, a
+  // Sound only because the day is pinned: while the day's puzzles were re-derived, a
   // puzzle that had been today's easy an hour ago was suddenly none of today's,
   // and this answered `true` for it while players were still holding its
   // prompt.

@@ -90,11 +90,11 @@ describe("daily rotation", () => {
   });
 });
 
-// ── The three tiers a day holds ──────────────────────────────────────────────
+// ── The four tiers a day holds ───────────────────────────────────────────────
 
 const archive: Puzzle[] = JSON.parse(readFileSync("data/puzzles.json", "utf8")).puzzles;
 
-describe("the day's three tiers", () => {
+describe("the day's four tiers", () => {
   const tiers = byTier(archive);
 
   test("every puzzle lands in exactly one tier, and none is lost", () => {
@@ -102,24 +102,42 @@ describe("the day's three tiers", () => {
     expect(total).toBe(archive.length);
   });
 
-  test("no tier is so thin that it repeats months before the others", () => {
-    // A tier's size is how many days it takes to come round again, because each
-    // walks its own rotation. A lopsided split would mean the hard puzzle
-    // repeating while the easy one was still on its first pass.
+  test("no tier is empty, because an empty one takes the server down", () => {
+    // Load-bearing rather than tidy: `correctedOrSource` refuses a correction
+    // that empties a tier, and the constructor throws on one — at module scope,
+    // before any route exists.
+    for (const tier of DAILY_TIERS) expect(tiers[tier].length).toBeGreaterThan(0);
+  });
+
+  test("no tier is so thin it comes round inside a fortnight", () => {
+    // The bands used to be chosen to be close to equal, so that no tier lapped
+    // another. They are now chosen in *squares* — the unit the club states
+    // difficulty in — and that is deliberately not the same thing: measured on
+    // today's archive it gives easy 21, medium 24, extreme 27 and hard 66,
+    // because hard spans two squares' worth of ratings and takes the unrated
+    // besides. So hard repeats about every nine weeks and easy about every
+    // three, and the guarantee that survives is only that none of them is
+    // thin enough to feel like a loop.
     const sizes = DAILY_TIERS.map((tier) => tiers[tier].length);
-    expect(Math.min(...sizes) * 1.5).toBeGreaterThan(Math.max(...sizes));
+    expect(Math.min(...sizes)).toBeGreaterThanOrEqual(14);
+  });
+
+  test("the bands are the squares a player is shown", () => {
+    // Easy at most one square, medium two, hard three or four, extreme five up.
+    expect(dailyTierOf({ difficulty: 2 })).toBe("easy");
+    expect(dailyTierOf({ difficulty: 4 })).toBe("medium");
+    expect(dailyTierOf({ difficulty: 8 })).toBe("hard");
+    expect(dailyTierOf({ difficulty: 9 })).toBe("extreme");
   });
 
   test("an unrated puzzle is hard, not easy", () => {
-    // Rated nothing because nobody got round to it, not because it is gentle.
+    // Rated nothing because nobody got round to it, not because it is gentle —
+    // and it fills no squares, so "at most one square" would otherwise take it.
     expect(dailyTierOf({ difficulty: 0 })).toBe("hard");
-    expect(dailyTierOf({ difficulty: 4 })).toBe("easy");
-    expect(dailyTierOf({ difficulty: 5 })).toBe("medium");
-    expect(dailyTierOf({ difficulty: 8 })).toBe("hard");
   });
 });
 
-describe("three rotations running side by side", () => {
+describe("four rotations running side by side", () => {
   test("a tier deals every one of its puzzles before repeating any", () => {
     for (const size of [45, 46, 47]) {
       const seen = Array.from({ length: size }, (_, day) => puzzleIndexForDay(day + 1, size, 1));

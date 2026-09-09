@@ -1,10 +1,10 @@
 /**
  * One board for the whole day, not one per difficulty.
  *
- * Three boards meant clicking between three, which asks the reader to hold two
+ * One board per tier meant clicking between them, which asks the reader to hold two
  * of them in their head to answer the only question they came with: how did my
  * server do today, and where am I in it. So everybody appears once, with what
- * they did to each of the three beside their name.
+ * they did to each tier beside their name.
  *
  * Ranked by how many they solved and then by how long it took, which is the
  * order rush already uses. Time alone would put somebody who solved nothing at
@@ -33,7 +33,7 @@ interface Row extends DayBoardRow {
  * its own. It can add rows as well as fill them in: somebody who spent their
  * day on rush has no daily row at all, and is not somebody who did nothing.
  *
- * The daily still decides the order and rush only breaks ties. Three puzzles
+ * The daily still decides the order and rush only breaks ties. Four puzzles
  * chosen for you and as many as you can take in five minutes are not the same
  * unit, and summing them would say they are.
  */
@@ -91,7 +91,7 @@ export function createDailyBoard(): DailyBoard {
     update(board, rush, selfId) {
       const merged = withRush(board, rush);
       note.textContent = merged.length
-        ? "Solved, then fastest. Squares are easy, medium, hard; ⚡ is today's rush."
+        ? "Solved, then fastest. Squares are the day's tiers in order; ⚡ is today's rush."
         : EMPTY_DAY;
       replaceChildren(
         rows,
@@ -100,7 +100,7 @@ export function createDailyBoard(): DailyBoard {
             "div",
             {
               // `--marks` because this row has a fourth column the shared one
-              // does not: the three tier squares, which sit with the score.
+              // does not: the four tier squares, which sit with the score.
               class:
                 `board-list__row board-list__row--marks` +
                 (row.player.id === selfId ? " board-list__row--self" : ""),
@@ -108,7 +108,7 @@ export function createDailyBoard(): DailyBoard {
             el("span", { class: "board-list__rank", text: `${index + 1}` }),
             el("span", { class: "board-list__name", text: row.player.username }),
             // Beside the score rather than beside the name: the squares are
-            // three of that row's results, and every other result on the row
+            // the marks on that row, and every other result on the row
             // is at this end. In front of the name they read as a prefix to
             // it, and pushed every name to a different starting column.
             el("span", { class: "board__marks" }, ...DAILY_TIERS.map((tier) => mark(row, tier))),

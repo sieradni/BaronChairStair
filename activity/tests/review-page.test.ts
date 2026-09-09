@@ -460,11 +460,15 @@ describe("the submission screen", () => {
     const { element } = drive();
     const rating = find<HTMLInputElement>(element, ".explore__number");
     const tier = find(element, ".review__tier");
-    expect(tier.textContent).toBe("medium");
+    expect(tier.textContent).toBe("hard");
 
-    rating.value = "2";
-    rating.dispatchEvent(new window.Event("input") as unknown as Event);
-    expect(tier.textContent).toBe("easy");
+    // Every band, since there are four of them now and the boundaries are the
+    // squares a player is shown: one, two, three-or-four, five-and-up.
+    for (const [value, expected] of [["2", "easy"], ["4", "medium"], ["8", "hard"], ["9", "extreme"]]) {
+      rating.value = value!;
+      rating.dispatchEvent(new window.Event("input") as unknown as Event);
+      expect(tier.textContent).toBe(expected!);
+    }
 
     // `Number("")` is 0 and 0 is a tier — "hard" — so an emptied box would sit
     // there naming one the server would refuse in the same breath.

@@ -173,11 +173,11 @@ async def puzzle_command(interaction: discord.Interaction):
         return
     embed = discord.Embed(
         title=f"Puzzle #{day}",
-        description="Three today — solving any one of them keeps your streak.",
+        description="Solving any one of today's keeps your streak.",
         colour=PUZZLE_COLOUR,
         url=launch)
-    # One field per tier rather than three embeds: they are one day's puzzle,
-    # and splitting them would read as three announcements to scroll past.
+    # One field per tier rather than one embed each: they are one day's puzzle,
+    # and splitting them would read as several announcements to scroll past.
     for entry in puzzles:
         tier = str(entry.get("tier", "")).title() or "Puzzle"
         embed.add_field(
@@ -189,7 +189,7 @@ async def puzzle_command(interaction: discord.Interaction):
                    f"by {entry.get('author', 'unknown')}_"),
             inline=False)
     # People, not results: the server counts players who solved anything today,
-    # so this does not treble now that a day holds three puzzles.
+    # so this does not treble now that a day holds one per tier.
     embed.add_field(name="Solved by", value=f"{solved} so far", inline=False)
     # Leaderboards, rush and the rules all live one click away now, so the
     # embed says where rather than reproducing any of them.

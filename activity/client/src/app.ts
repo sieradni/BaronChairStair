@@ -187,9 +187,9 @@ export class App {
   private builderPuzzle: PuzzlePrompt | null = null;
   private daily: DailyResponse | null = null;
   /**
-   * Which of the day's three is on the board.
+   * Which of the day's tiers is on the board.
    *
-   * The day holds three now, and only one can be played at a time — this is
+   * The day holds one per tier now, and only one can be played at a time — this is
    * the one the sheet, the credits, the submission and the leaderboard are all
    * about. It opens on the easy one: a day should start somewhere anybody can
    * begin, and the other two are a click away.
@@ -219,7 +219,7 @@ export class App {
    */
   private readonly sittings: Sittings;
   /**
-   * Which of the day's three this player has opened, across sessions.
+   * Which of the day's tiers this player has opened, across sessions.
    *
    * Assigned in the constructor rather than here because it is keyed on the
    * player, and a field initialiser cannot see a constructor parameter.
@@ -380,7 +380,7 @@ export class App {
   }
 
   /**
-   * The front door: the day's three, where else to go, and a board.
+   * The front door: the day's tiers, where else to go, and a board.
    *
    * Every mode leaves through here and the activity opens on it, so it is the
    * screen most often looked at and the one that had least on it. It is now
@@ -408,7 +408,7 @@ export class App {
   }
 
   /**
-   * Puts one of the day's three on the board.
+   * Puts one of the day's tiers on the board.
    *
    * The single funnel for it: the sheet, the credits strip, the goal panel and
    * whether a filed run is shown all have to agree about which puzzle is in
@@ -459,7 +459,7 @@ export class App {
     );
   }
 
-  /** The one of the day's three currently on the board. */
+  /** The one of the day's tiers currently on the board. */
   private get dailyEntry(): DailyEntry | null {
     return this.daily?.puzzles.find((entry) => entry.tier === this.dailyTier) ?? null;
   }
@@ -535,7 +535,7 @@ export class App {
 
   private async openArchivePuzzle(id: number): Promise<void> {
     if (this.lockedPuzzleIds().has(id)) {
-      this.toast("That is one of today's three — play it on the daily first");
+      this.toast("That is one of today's — play it on the daily first");
       return;
     }
     try {
@@ -624,7 +624,7 @@ export class App {
     if (!this.daily) return;
     // Home, not the last puzzle. Leaving a rush or a duel means leaving the
     // thing you were doing, and the front door is where the next choice gets
-    // made — and where the day's three now are.
+    // made — and where the day's tiers now are.
     this.showHome();
   }
 
@@ -1332,7 +1332,7 @@ export class App {
     this.toast("Filing sheet…");
     try {
       const response = await this.connection.api.submitRun({
-        // Which of the three this log was played on. The server replays it
+        // Which tier this log was played on. The server replays it
         // against that board, so naming the wrong one fails to solve rather
         // than filing anything.
         tier: this.dailyTier,

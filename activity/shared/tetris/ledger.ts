@@ -29,6 +29,20 @@ export class PieceLedger {
     return this.outstanding;
   }
 
+  /**
+   * Whether a hold swap could still bring a piece the puzzle owes.
+   *
+   * A swap is a trade, and with one piece left there is nothing on the other
+   * side of it: the queue beyond the last real piece is the padding this class
+   * exists to keep out of play, so holding there pulls a tetromino the puzzle
+   * never offered into the player's hand. `spend` catches it if they lock it,
+   * but by then they have been looking at a free piece and the puzzle's one
+   * constraint appears broken.
+   */
+  get canSwap(): boolean {
+    return this.outstanding > 1;
+  }
+
   /** Whether the puzzle still owes this piece. */
   owes(piece: Mino): boolean {
     return (this.owed.get(piece) ?? 0) > 0;

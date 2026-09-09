@@ -84,7 +84,7 @@ export interface PlayerProfile {
   readonly avatarUrl: string | null;
 }
 
-/** A day's board row: one player, and how each of the three went for them. */
+/** A day's board row: one player, and how each tier went for them. */
 export interface DayBoardRow {
   readonly player: PlayerProfile;
   readonly solved: number;
@@ -103,6 +103,7 @@ interface DayBoardRaw {
   easy: number;
   medium: number;
   hard: number;
+  extreme: number;
 }
 
 /** One player's best rush ever, for the all-time board. */
@@ -378,7 +379,7 @@ CREATE TABLE IF NOT EXISTS runs (
   pieces_placed INTEGER NOT NULL,
   clears        TEXT NOT NULL,
   created_at    INTEGER NOT NULL,
-  -- Which of the day's three puzzles this run is. 'legacy' marks a row filed
+  -- Which of the day's puzzles this run is. 'legacy' marks a row filed
   -- when a day held one puzzle and there was nothing to name.
   slot          TEXT NOT NULL DEFAULT 'legacy',
   PRIMARY KEY (day, player_id, slot)
@@ -416,7 +417,7 @@ CREATE TABLE IF NOT EXISTS preferences (
   updated_at INTEGER NOT NULL
 );
 
--- Which three puzzles a day dealt, written down the first time the day is
+-- Which puzzles a day dealt, written down the first time the day is
 -- asked for. The rotation is derived from the pool's size, so a pool that
 -- grows deals a different puzzle for almost every day that has already been
 -- played; this is what stops the archive growing from rewriting history.
@@ -710,7 +711,7 @@ export interface SolutionCount {
 export interface PastDays {
   /** The last day that has been dealt. Everything up to it is history. */
   readonly throughDay: number;
-  /** The three ids a day held, derived the way the code has always derived them. */
+  /** The ids a day held, derived the way the code has always derived them. */
   puzzleIdsFor(day: number): Readonly<Record<DailyTier, number>>;
 }
 
@@ -894,7 +895,7 @@ export class Store {
   /**
    * The days somebody has already played, taken from the runs they played.
    *
-   * Runs from before the archive held three a day carry the legacy slot, which
+   * Runs from before the archive held more than one a day carry the legacy slot, which
    * names no tier — they are skipped rather than guessed at. Everything else is
    * a `(day, tier, puzzle_id)` triple that is true by construction: it is what
    * the server dealt that player, recorded at the time.
@@ -914,7 +915,7 @@ export class Store {
   }
 
   /**
-   * One day's three rows, whichever of them are still missing.
+   * One day's rows, whichever of them are still missing.
    *
    * `INSERT OR IGNORE`, and the caller owns the transaction. Both writers — the
    * one-time backfill and the first request to reach an unpinned day — must
@@ -929,7 +930,7 @@ export class Store {
   }
 
   /**
-   * Gives `runs` a slot, and a primary key that admits three a day.
+   * Gives `runs` a slot, and a primary key that admits one per tier a day.
    *
    * `PRIMARY KEY (day, player_id)` was the rule "one run per player per day",
    * and it was enforced by the key itself rather than by any code. SQLite
@@ -1277,10 +1278,11 @@ export class Store {
                 SUM(CASE WHEN runs.solved = 1 THEN runs.total_ms ELSE 0 END) AS totalMs,
                 MAX(CASE WHEN runs.slot = 'easy'   THEN runs.solved + 1 ELSE 0 END) AS easy,
                 MAX(CASE WHEN runs.slot = 'medium' THEN runs.solved + 1 ELSE 0 END) AS medium,
-                MAX(CASE WHEN runs.slot = 'hard'   THEN runs.solved + 1 ELSE 0 END) AS hard
+                MAX(CASE WHEN runs.slot = 'hard'   THEN runs.solved + 1 ELSE 0 END) AS hard,
+                  MAX(CASE WHEN runs.slot = 'extreme' THEN runs.solved + 1 ELSE 0 END) AS extreme
          FROM runs JOIN players ON players.id = runs.player_id
          WHERE runs.day = ?1 AND (?2 IS NULL OR runs.guild_id = ?2)
-           AND runs.slot IN ('easy', 'medium', 'hard')
+           AND runs.slot IN ('easy', 'medium', 'hard', 'extreme')
          GROUP BY runs.player_id
          ORDER BY solved DESC, totalMs ASC
          LIMIT ?3`,
@@ -1314,7 +1316,7 @@ export class Store {
     const runs: Partial<Record<DailyTier, StoredRun>> = {};
     for (const row of rows) {
       // 'legacy' rows are from a day that held one puzzle. They are kept for
-      // streaks and totals, and belong to none of today's three.
+      // streaks and totals, and belong to none of today's tiers.
       if (DAILY_TIERS.includes(row.slot as DailyTier)) runs[row.slot as DailyTier] = toStoredRun(row);
     }
     return runs;
@@ -1353,9 +1355,9 @@ export class Store {
     const rows = this.db
       .query<{ day: number }, [string, number]>(
         // DISTINCT is what makes this a streak and not a count of solves: a
-        // day now holds three puzzles, and solving two of them would otherwise
+        // day now holds several puzzles, and solving two of them would otherwise
         // put the same day in this list twice and stop the walk dead on the
-        // duplicate. Solving any one of the three keeps the day.
+        // duplicate. Solving any one of them keeps the day.
         `SELECT DISTINCT day FROM runs
          WHERE player_id = ?1 AND solved = 1 AND day <= ?2
          ORDER BY day DESC LIMIT 400`,
@@ -1422,7 +1424,7 @@ export class Store {
     return (
       this.db
         .query<{ n: number }, [number, string]>(
-          // DISTINCT: three rows a day per player, and this counts people.
+          // DISTINCT: one row per tier a day per player, and this counts people.
           "SELECT COUNT(DISTINCT player_id) AS n FROM runs WHERE day = ?1 AND guild_id = ?2",
         )
         .get(day, guildId)?.n ?? 0
@@ -1456,7 +1458,7 @@ export class Store {
       this.db
         .query<{ n: number }, [string]>(
           // Days, not rows. The header calls this "solved", and a day holding
-          // three puzzles would otherwise let one day count three times — the
+          // several puzzles would otherwise let one day count more than once — the
           // same correction dayCount and solvedCount needed.
           "SELECT COUNT(DISTINCT day) AS n FROM runs WHERE player_id = ?1 AND solved = 1",
         )
@@ -1626,16 +1628,26 @@ export class Store {
   // ── What a day dealt ───────────────────────────────────────────────────────
 
   /**
-   * The three puzzle ids a day is pinned to, or null when nobody has asked for
+   * The puzzle ids a day is pinned to, or null when nobody has asked for
    * that day yet.
    *
-   * A day is all three tiers or it is nothing. A partial day would deal one
+   * A day is every tier or it is nothing. A partial day would deal one
    * tier out of history and two out of whatever the pool holds now, which is
    * precisely the half-rewritten day this table exists to make impossible — so
    * a partial day reads as unpinned and {@link pinDay} fills the gaps, leaving
    * the tier already on file exactly where it was.
    */
-  pinnedDay(day: number): Record<DailyTier, number> | null {
+  /**
+   * Whatever tiers a day already has on file, which may be fewer than all of
+   * them.
+   *
+   * Every day pinned before `extreme` existed holds three rows, and those days
+   * are history: the puzzles they name were played. {@link pinnedDay} answers
+   * null for them because it demands the full set, and the caller then tops the
+   * day up — so it needs to know what is already there, or it will deal a fourth
+   * puzzle that may be one of the three already on the day.
+   */
+  pinnedTiers(day: number): Partial<Record<DailyTier, number>> {
     const rows = this.db
       .query<{ tier: string; puzzle_id: number }, [number]>(
         "SELECT tier, puzzle_id FROM day_puzzles WHERE day = ?1",
@@ -1645,12 +1657,17 @@ export class Store {
     for (const row of rows) {
       if (DAILY_TIERS.includes(row.tier as DailyTier)) ids[row.tier as DailyTier] = row.puzzle_id;
     }
+    return ids;
+  }
+
+  pinnedDay(day: number): Record<DailyTier, number> | null {
+    const ids = this.pinnedTiers(day);
     if (!DAILY_TIERS.every((tier) => ids[tier] !== undefined)) return null;
     return ids as Record<DailyTier, number>;
   }
 
   /**
-   * Pins a day's three, and answers with what is on file afterwards.
+   * Pins a day's tiers, and answers with what is on file afterwards.
    *
    * `INSERT OR IGNORE` and a read-back, rather than writing and returning the
    * argument: two requests can reach an unpinned day in the same millisecond,

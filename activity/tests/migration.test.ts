@@ -382,6 +382,7 @@ describe("writing down what a day dealt", () => {
       easy: day * 10 + 1 + offset,
       medium: day * 10 + 2 + offset,
       hard: day * 10 + 3 + offset,
+      extreme: day * 10 + 4 + offset,
     }),
   });
 
@@ -468,8 +469,8 @@ describe("writing down what a day dealt", () => {
   test("every day up to today is written down, and tomorrow is not", () => {
     const store = new Store(path, dealing(3));
     try {
-      expect(store.pinnedDay(1)).toEqual({ easy: 11, medium: 12, hard: 13 });
-      expect(store.pinnedDay(3)).toEqual({ easy: 31, medium: 32, hard: 33 });
+      expect(store.pinnedDay(1)).toEqual({ easy: 11, medium: 12, hard: 13, extreme: 14 });
+      expect(store.pinnedDay(3)).toEqual({ easy: 31, medium: 32, hard: 33, extreme: 34 });
       // Days that have not arrived still float, which is the entire point: an
       // accepted puzzle has to be able to reach the rotation eventually.
       expect(store.pinnedDay(4)).toBeNull();
@@ -486,8 +487,8 @@ describe("writing down what a day dealt", () => {
     new Store(path, dealing(3)).close();
     const second = new Store(path, dealing(3, 500));
     try {
-      expect(second.pinnedDay(1)).toEqual({ easy: 11, medium: 12, hard: 13 });
-      expect(second.pinnedDay(3)).toEqual({ easy: 31, medium: 32, hard: 33 });
+      expect(second.pinnedDay(1)).toEqual({ easy: 11, medium: 12, hard: 13, extreme: 14 });
+      expect(second.pinnedDay(3)).toEqual({ easy: 31, medium: 32, hard: 33, extreme: 34 });
     } finally {
       second.close();
     }
@@ -512,15 +513,17 @@ describe("writing down what a day dealt", () => {
     // the same day — the one outcome nothing else in the system could detect.
     const store = new Store(path);
     try {
-      expect(store.pinDay(9, { easy: 1, medium: 2, hard: 3 })).toEqual({
+      expect(store.pinDay(9, { easy: 1, medium: 2, hard: 3, extreme: 4 })).toEqual({
         easy: 1,
         medium: 2,
         hard: 3,
+        extreme: 4,
       });
-      expect(store.pinDay(9, { easy: 7, medium: 8, hard: 9 })).toEqual({
+      expect(store.pinDay(9, { easy: 7, medium: 8, hard: 9, extreme: 10 })).toEqual({
         easy: 1,
         medium: 2,
         hard: 3,
+        extreme: 4,
       });
     } finally {
       store.close();
@@ -542,10 +545,11 @@ describe("writing down what a day dealt", () => {
     const store = new Store(path, dealing(90));
     try {
       expect(store.pinnedDay(77)).toBeNull();
-      expect(store.pinDay(77, { easy: 1, medium: 2, hard: 3 })).toEqual({
+      expect(store.pinDay(77, { easy: 1, medium: 2, hard: 3, extreme: 4 })).toEqual({
         easy: 5,
         medium: 2,
         hard: 3,
+        extreme: 4,
       });
     } finally {
       store.close();

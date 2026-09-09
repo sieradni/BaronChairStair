@@ -666,7 +666,7 @@
 
 /*
  * A row of two or three short labels that share the width they are given —
- * now the record book's scopes, and once the day's three difficulties.
+ * now the record book's scopes, and once the day's tiers difficulties.
  *
  * Wrapping rather than scrolling: the labels fit on one line at any width the
  * activity is given, and a row that scrolled would hide one of them, which is

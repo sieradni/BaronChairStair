@@ -473,6 +473,10 @@ export class PuzzleArchive {
     easy: 1,
     medium: 2,
     hard: 3,
+    // A stream of its own, so extreme walks its own rotation rather than
+    // shadowing hard's — the two are dealt on the same day and a shared stream
+    // would pair the same two puzzles together every cycle.
+    extreme: 4,
   };
 
   /**
@@ -570,7 +574,7 @@ export class PuzzleArchive {
   }
 
   /**
-   * The three puzzles for a given day number, defaulting to today.
+   * The puzzles for a given day number, defaulting to today.
    *
    * Memoised on the day. Everything in here is constant for a calendar day and
    * four routes ask for it per request; the cost is dominated by `nextResetAt`,
@@ -586,6 +590,7 @@ export class PuzzleArchive {
         easy: this.forTier(day, "easy"),
         medium: this.forTier(day, "medium"),
         hard: this.forTier(day, "hard"),
+        extreme: this.forTier(day, "extreme"),
       },
       resetsAt: nextResetAt(Date.now(), this.dayOptions),
     };
@@ -596,7 +601,7 @@ export class PuzzleArchive {
     return this.forDay();
   }
 
-  /** Which of a day's three a puzzle is, or null if it is not one of them. */
+  /** Which of a day's tiers a puzzle is, or null if it is not one of them. */
   tierOfDay(day: number, puzzleId: number): DailyTier | null {
     return DAILY_TIERS.find((tier) => this.forTier(day, tier).id === puzzleId) ?? null;
   }

@@ -304,15 +304,26 @@ describe("the rush seed against the daily rotation's own", () => {
    * alone, which is two or three times a year. Seeding the two in lockstep
    * would put it there on all three hundred and sixty-five, and that is what
    * this rules out. It is a decorrelation check and not a promise of never.
+   *
+   * Raised from twelve when the tiers were rebanded. Measured over the same year
+   * of days: seven collisions before, fourteen after. The reason is NOT that a
+   * day names four puzzles rather than three — dropping `extreme` from the count
+   * still gives fourteen. It is the *band* change: the pools went from 45/47/46
+   * to 21/24/66/27, and a tier of 21 repeats every three weeks, so its puzzle is
+   * simply on offer far more often for the rush opener to land on.
+   *
+   * Sixteen leaves two days of margin over the measured fourteen, which is thin.
+   * It is kept deliberately tight: this is a decorrelation check, and a ceiling
+   * loose enough never to fail would not be one.
    */
-  const OPENER_COLLISION_CEILING = 12;
+  const OPENER_COLLISION_CEILING = 16;
 
   test("the opener is not locked to the puzzle the player just played", () => {
     // The day deals three now, one per tier, each on its own rotation — so the
-    // opener has three puzzles to avoid rather than one. The streams here must
+    // opener has four puzzles to avoid rather than one. The streams here must
     // match PuzzleArchive.STREAM or this measures a rotation nobody plays.
     const tiers = byTier(puzzles);
-    const streams = { easy: 1, medium: 2, hard: 3 } as const;
+    const streams = { easy: 1, medium: 2, hard: 3, extreme: 4 } as const;
     let collisions = 0;
     for (let day = 1; day <= YEAR_OF_DAYS; day++) {
       const today = DAILY_TIERS.map(

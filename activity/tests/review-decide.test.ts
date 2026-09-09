@@ -767,6 +767,7 @@ describe("accepting a puzzle does not move a day anybody has played", () => {
       easy,
       medium: first.schedule.forTier(today, "medium").id,
       hard: first.schedule.forTier(today, "hard").id,
+      extreme: first.schedule.forTier(today, "extreme").id,
     };
     try {
       const filed = first.store.recordSubmission(draft());

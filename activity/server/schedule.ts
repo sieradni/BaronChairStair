@@ -26,7 +26,8 @@
  * keep working, and being tested, with no database anywhere near it.
  */
 
-import { DAILY_TIERS, type DailyTier } from "../shared/daily";
+import {
+  byTier, DAILY_TIERS, type DailyTier } from "../shared/daily";
 import type { Puzzle } from "../shared/puzzle";
 import { isRushEligible } from "../shared/rush";
 import type { PastDays, Store } from "./db";
@@ -45,7 +46,7 @@ export function pastDaysOf(archive: PuzzleArchive): PastDays {
 }
 
 /**
- * The three a pool's rotation deals for a day, before anything is written down.
+ * What a pool's rotation deals for a day, before anything is written down.
  *
  * One function for the backfill and the first-ask pin, because they must agree:
  * they are the same derivation run at two different moments, and a day pinned
@@ -57,6 +58,7 @@ function derive(archive: PuzzleArchive, day: number): Record<DailyTier, number> 
     easy: archive.forTier(day, "easy").id,
     medium: archive.forTier(day, "medium").id,
     hard: archive.forTier(day, "hard").id,
+    extreme: archive.forTier(day, "extreme").id,
   };
 }
 
@@ -71,10 +73,10 @@ export class DaySchedule {
      * The two halves of a day were freezing at different moments: the startup
      * backfill pins `day_puzzles` for today, but nothing pinned `day_rush`
      * until somebody actually started a rush — so between a start and that
-     * day's first ticket the pool was still floating while the day's three were
+     * day's first ticket the pool was still floating while the day's tiers were
      * already frozen. That gap is exactly where an acceptance lands, because
      * accepting a puzzle is what rebuilds the archive and restarts the server:
-     * measured on a same-day restart, the day's three held and 37 of 40 rush
+     * measured on a same-day restart, the day's tiers held and 37 of 40 rush
      * slots moved.
      *
      * It belongs here and not in `server/index.ts`, where a startup line is
@@ -89,7 +91,7 @@ export class DaySchedule {
   }
 
   /**
-   * The three puzzles for a given day number, defaulting to today.
+   * The puzzles for a given day number, defaulting to today.
    *
    * Memoised on the day, the same trade `PuzzleArchive.forDay` made and for the
    * same reason: four routes ask per request, and the cost is dominated by
@@ -108,6 +110,7 @@ export class DaySchedule {
         easy: this.resolve(day, "easy puzzle", ids.easy),
         medium: this.resolve(day, "medium puzzle", ids.medium),
         hard: this.resolve(day, "hard puzzle", ids.hard),
+        extreme: this.resolve(day, "extreme puzzle", ids.extreme),
       },
       resetsAt: this.archive.resetsAt(),
     };
@@ -119,7 +122,7 @@ export class DaySchedule {
   }
 
   /**
-   * Which of a day's three a puzzle is, or null if it is not one of them.
+   * Which of a day's tiers a puzzle is, or null if it is not one of them.
    *
    * Answered from the ids alone, without resolving a puzzle. This gates the
    * archive's answer key — a puzzle it calls "none of today's" has its solution
@@ -169,7 +172,7 @@ export class DaySchedule {
      * band are real: a reviewer can correct it, and `bun run puzzles` rewrites
      * `data/puzzles.json` wholesale from the club's sheet. Measured on the
      * second: editing one puzzle's rating and restarting left the membership
-     * and the day's three untouched and moved 26 of 40 slots, which
+     * and the day's tiers untouched and moved 26 of 40 slots, which
      * `sequenceFor` then scores an in-flight ranked run against.
      *
      * Reading it back from `day_rush` rather than from the archive is what
@@ -191,14 +194,60 @@ export class DaySchedule {
   }
 
   /**
-   * A day's three ids: what is on file, or a derivation written down now.
+   * A day's ids: what is on file, or a derivation written down now.
    *
    * The write is what makes the first ask authoritative. Deriving and *not*
    * writing would leave the day floating until somebody happened to file a run,
    * which is the same drift with a smaller window.
    */
+  /**
+   * The day's puzzles, pinning them the first time anybody asks.
+   *
+   * A day pinned before `extreme` existed holds three rows, so `pinnedDay`
+   * answers null for it and the day is topped up rather than left short. What
+   * is already on file is kept — those puzzles were played — and only the
+   * missing tier is derived.
+   *
+   * **Avoiding what the day already deals.** The old `hard` band ran from eight
+   * upwards and the new `extreme` band from nine, so a puzzle pinned as that
+   * day's hard can sit in today's extreme pool: deriving blind would hand the
+   * same puzzle to a player twice on one day, on roughly one legacy day in
+   * thirty. The derivation steps along that tier's own rotation until it finds
+   * one the day does not already hold. Fresh days never enter this path — the
+   * tiers partition the archive, so a complete derivation cannot collide.
+   */
   private pinFor(day: number): Record<DailyTier, number> {
-    return this.store.pinnedDay(day) ?? this.store.pinDay(day, derive(this.archive, day));
+    const complete = this.store.pinnedDay(day);
+    if (complete) return complete;
+
+    const known = this.store.pinnedTiers(day);
+    const taken = new Set(Object.values(known));
+    const ids = {} as Record<DailyTier, number>;
+    for (const tier of DAILY_TIERS) {
+      const already = known[tier];
+      if (already !== undefined) {
+        ids[tier] = already;
+        continue;
+      }
+      ids[tier] = this.freshFor(day, tier, taken);
+      taken.add(ids[tier]);
+    }
+    return this.store.pinDay(day, ids);
+  }
+
+  /** This day's puzzle for a tier, stepped past anything the day already holds. */
+  private freshFor(day: number, tier: DailyTier, taken: ReadonlySet<number>): number {
+    const chosen = this.archive.forTier(day, tier);
+    if (!taken.has(chosen.id)) return chosen.id;
+    const pool = byTier(this.archive.all)[tier];
+    const at = pool.findIndex((puzzle) => puzzle.id === chosen.id);
+    for (let step = 1; step < pool.length; step += 1) {
+      const next = pool[(at + step) % pool.length]!;
+      if (!taken.has(next.id)) return next.id;
+    }
+    // Every puzzle in the tier is already on this day, which needs a pool of one
+    // and a collision in it. Nothing better to offer than the derived answer.
+    return chosen.id;
   }
 
   /**
