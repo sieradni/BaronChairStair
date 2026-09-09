@@ -48,6 +48,35 @@ and the officer review tool (`client/review/`), which build together.
 `activity/DEPLOY.md` has the sequence and the verification steps, including how to tell
 whether a *specific* change reached the bundle. Use them; a restart is not a deploy.
 
+## A player-visible change needs a release note, and nothing will remind you
+
+`client/changelog.py` is both the version and the changelog: `RELEASES` is a
+newest-first tuple, `VERSION` is just `RELEASES[0].version`, and shipping a version
+means putting a new `Release` at the top. `/puzzle` announces to a server every
+version it has not been told about, so the note is how players find out anything
+changed.
+
+**Add one whenever a change is visible to a player.** The file's own rule for what
+counts: "Refactored the planner" is not a change to announce; "the drag lands where
+the preview showed" is. A new tier, a fixed error message, a button that now asks
+before doing something irreversible — all of those.
+
+This is the easiest rule in the repository to skip, because skipping it breaks
+nothing. No test fails, no deploy stops, the bot simply goes quiet and players are
+never told. It has already happened: **seven merged PRs — #58 through #64 — shipped
+four daily tiers, a restored answer walkthrough, a confirmation on "Hand it in" and
+three fixed player-facing bugs, and not one of them touched `changelog.py`.** The
+whole lot had to be written up afterwards as `beta 0.2`, from the git log, by
+somebody guessing what a player would have noticed.
+
+Write the note in the same commit as the change, while you still know what a player
+would see.
+
+There is only one version, and it is that tuple. `activity/package.json` carries a
+`"version": "1.0.0"` that nothing reads — do not bump it and do not go looking for a
+second place. (`preferences.version` and `SETTINGS_VERSION` are schema versions for
+stored data, unrelated to what the bot announces.)
+
 ## Decisions that are not yours to make
 
 Report these and stop; do not act on them unasked.

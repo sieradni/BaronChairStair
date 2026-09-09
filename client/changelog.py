@@ -37,6 +37,26 @@ class Release:
 #: change to announce; "the drag lands where the preview showed" is.
 RELEASES: tuple[Release, ...] = (
     Release(
+        version="beta 0.2",
+        changes=(
+            "The day now holds **four** puzzles, not three: a new **extreme** tier "
+            "above hard, for the ones rated five squares and up.",
+            "Solved a puzzle? The walkthrough of the answer is back. It had been "
+            "coming up empty on the live server, which was a missing file rather "
+            "than a missing feature.",
+            "**Hand it in** asks before it ends a rush. It files the run and "
+            "discards the puzzles left in it, and there is no undo.",
+            "Finding a line nobody had found is credited properly. Playing the "
+            "puzzle's own intended solution no longer reports a discovery.",
+            "Finishing a daily no longer says the sheet could not be filed when it "
+            "was filed, scored, and already on the board.",
+            "Holding at the end of the queue no longer hands you a tetromino the "
+            "puzzle never offered.",
+            "A puzzle's required clears now come from its own recorded answer, so "
+            "the line its maker played is always one that counts.",
+        ),
+    ),
+    Release(
         version="beta 0.1",
         changes=(
             "Puzzles can now require the clears their goal names — a goal that says "
