@@ -535,7 +535,7 @@ export class App {
 
   private async openArchivePuzzle(id: number): Promise<void> {
     if (this.lockedPuzzleIds().has(id)) {
-      this.toast("That is one of today's three — play it on the daily first");
+      this.toast("That is one of today's — play it on the daily first");
       return;
     }
     try {

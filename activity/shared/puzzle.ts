@@ -19,7 +19,6 @@ export const BOARD_HEIGHT = 20;
  */
 export const ENGINE_ROWS = 40;
 
-/** A named line clear, matching how players talk about them. */
 /** Rating points per square: two, so the archive's 1-to-10 covers the five. */
 export const DIFFICULTY_PER_SQUARE = 2;
 /** Above this a puzzle is shown as "and then some" rather than more squares. */
@@ -42,6 +41,7 @@ export function difficultySquares(difficulty: number): number {
   return Math.min(MAX_DIFFICULTY_SQUARES, Math.ceil(difficulty / DIFFICULTY_PER_SQUARE));
 }
 
+/** A named line clear, matching how players talk about them. */
 export type ClearName =
   | "single"
   | "double"

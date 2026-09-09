@@ -100,12 +100,12 @@ export interface Credits {
 /**
  * The archive's difficulty is a loose 1-to-10-and-beyond vibe scale, so it is
  * shown as filled blocks rather than a precise number it does not deserve.
- * `PIP_SCALE` carries the bands; `tests/render.test.ts` pins them.
+ * `difficultySquares` carries the bands; `tests/render.test.ts` pins them.
  *
  * Zero is unrated rather than easy, so it fills nothing and says so — the
  * archive has seven of them, and they ask for things like "2 TSS, 3 TSD".
  *
- * Exported rather than re-implemented on the front door: `PIP_SCALE` and its
+ * Exported rather than re-implemented on the front door: `difficultySquares` and its
  * bands are a contract, and a second copy of the arithmetic is a second place
  * for it to drift from the test that pins it.
  */

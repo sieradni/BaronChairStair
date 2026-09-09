@@ -20,7 +20,7 @@
  */
 
 import { decodeBlueprint } from "../shared/blueprint/decode";
-import { pieceCells, type Playfield } from "../shared/blueprint/playfield";
+import { type CellType, pieceCells, type Playfield } from "../shared/blueprint/playfield";
 import {
   type BoardCell,
   encodeBoard,
@@ -91,12 +91,12 @@ export function decodeAnswerPlacements(code: string) {
     }));
 }
 
-/** Every cell the playfield holds on this page, as "x,y". */
-function settled(playfield: Playfield): Set<string> {
-  const cells = new Set<string>();
+/** Every cell the playfield holds on this page, keyed "x,y", with its type. */
+function settled(playfield: Playfield): Map<string, CellType> {
+  const cells = new Map<string, CellType>();
   playfield.toRows(playfield.stackHeight).forEach((row, y) =>
     row.forEach((cell, x) => {
-      if (cell) cells.add(`${x},${y}`);
+      if (cell) cells.set(`${x},${y}`, cell as CellType);
     }),
   );
   return cells;
@@ -139,10 +139,17 @@ export function decodeCommittedPlacements(code: string) {
   pages.forEach((page, index) => {
     if (index > 0) {
       const now = settled(page.playfield);
-      const gained = [...now].filter((cell) => !previous.has(cell));
-      const lost = [...previous].filter((cell) => !now.has(cell));
+      const gained = [...now.keys()].filter((cell) => !previous.has(cell));
+      const lost = [...previous.keys()].filter((cell) => !now.has(cell));
       const fell = pages[index - 1]?.piece?.type;
-      if (gained.length === 4 && lost.length === 0 && fell && !claimed.has(key(gained))) {
+      // The four cells must all carry the falling piece's own type. Without it
+      // any four cells an author paints — garbage, a hand-drawn wall — read as a
+      // placement of whatever happened to be hovering, at a seat they never put
+      // it, and that phantom step reaches the reveal and the frozen requirement.
+      // The archive already stores the type; #115's four gained cells are all
+      // "L" and the page before it is falling an L.
+      const allFell = gained.length > 0 && gained.every((cell) => now.get(cell) === fell);
+      if (gained.length === 4 && lost.length === 0 && fell && allFell && !claimed.has(key(gained))) {
         claimed.add(key(gained));
         placements.push({
           piece: fell,

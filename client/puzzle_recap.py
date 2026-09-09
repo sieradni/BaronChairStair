@@ -37,7 +37,10 @@ MAX_MESSAGE = 2000
 MIN_STREAK = 2
 
 # The day's three, in the order they are always shown.
-TIER_ORDER = ("easy", "medium", "hard")
+# Must match `DAILY_TIERS` in activity/shared/daily.ts. The activity added
+# "extreme" and the recap kept counting three: the fourth mark went undrawn and
+# "All three" named players who had solved three of four.
+TIER_ORDER = ("easy", "medium", "hard", "extreme")
 
 # One mark per tier, in that order. Three states, not two: a puzzle somebody
 # filed and failed is a different day from one they never opened, and the grid
@@ -187,7 +190,7 @@ def _rows(payload_daily: dict) -> list[dict]:
 
 
 def _grid(marks: dict) -> str:
-    """The three marks, always three and always in the same order."""
+    """One mark per tier, always all of them and always in the same order."""
     return "".join(
         MARK_SOLVED if marks.get(tier) else MARK_MISSED if tier in marks else MARK_ABSENT
         for tier in TIER_ORDER
@@ -225,7 +228,7 @@ def _daily_lines(rows: list[dict]) -> list[str]:
 
     swept = [row for row in rows if row.get("solved", 0) == len(TIER_ORDER)]
     if swept:
-        lines.append(f"All three: {_names(swept)}")
+        lines.append(f"All {len(TIER_ORDER)}: {_names(swept)}")
     return lines
 
 

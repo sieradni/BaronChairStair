@@ -426,7 +426,22 @@ export class PuzzleRun {
    * the engine runs its own auto-repeat from the player's DAS and ARR.
    */
   input(key: GameKey, down: boolean): void {
+    // Before anything reads the ledger, and before the phase guard, because
+    // flushing can end the attempt and the guard below is what should notice.
+    // A hold is screened on how many pieces the puzzle still owes, and that
+    // count is a frame out of date until the pending ticks are applied: a hold
+    // pressed in the same animation frame as the hard drop that spends the
+    // second-to-last piece would otherwise be judged against the count from
+    // before that drop and sail through — the whole bug, on the one input
+    // timing a player hurrying to the end is most likely to produce.
+    if (key === "hold" && down && (this.phase === "ready" || this.phase === "playing")) {
+      this.flushPending();
+    }
     if (this.phase === "solved" || this.phase === "failed") return;
+    // A hold with one piece left has nothing to trade with, and the engine would
+    // answer it out of the padding beyond the queue — handing the player a
+    // tetromino the puzzle never offered. Dropped here rather than let through
+    // and caught at the lock, because by then they have already been shown it.
     // A hold with one piece left has nothing to trade with, and the engine would
     // answer it out of the padding beyond the queue — handing the player a
     // tetromino the puzzle never offered. Dropped here rather than let through

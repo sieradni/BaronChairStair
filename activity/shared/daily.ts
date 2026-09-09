@@ -138,7 +138,7 @@ export function puzzleIndexForDay(day: number, puzzleCount: number, stream: numb
 }
 
 /**
- * The three puzzles a day holds: one within reach, one to work at, one to lose
+ * The four puzzles a day holds: one within reach, two to work at, one to lose
  * to.
  *
  * A tier is a band of the archive's own difficulty rating, and unrated puzzles
@@ -146,10 +146,14 @@ export function puzzleIndexForDay(day: number, puzzleCount: number, stream: numb
  * because they are gentle, and they ask for things like "2 TSS, 3 TSD" over a
  * dozen pieces.
  *
- * The bands are chosen to be close to equal rather than to be round numbers.
- * Each tier walks its own rotation, so a tier's size is how long it takes that
- * tier to repeat itself, and a lopsided split would mean the hard puzzle came
- * round again months before the easy one did.
+ * The bands are chosen in *squares* — the unit the club states difficulty in and
+ * the unit a player is shown — and deliberately not to be close to equal. They
+ * used to be: each tier walks its own rotation, so a tier's size is how long it
+ * takes to repeat, and an even split kept them in step. Measured on today's
+ * archive the square bands give easy 21, medium 24, extreme 27 and hard 66,
+ * because hard spans two squares' worth of ratings and takes the unrated
+ * besides — so hard comes round about every nine weeks and easy about every
+ * three. That is the accepted cost of bands a player can read off the screen.
  */
 export type DailyTier = "easy" | "medium" | "hard" | "extreme";
 
@@ -175,7 +179,7 @@ export function dailyTierOf(puzzle: { readonly difficulty: number }): DailyTier 
 }
 
 /**
- * Splits a list into the three tiers, keeping each tier's own order.
+ * Splits a list into the four tiers, keeping each tier's own order.
  *
  * The caller is responsible for handing in a list whose order is stable across
  * restarts — the rotation is an index into these arrays, so a list that came

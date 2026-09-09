@@ -91,7 +91,7 @@ export function createDailyBoard(): DailyBoard {
     update(board, rush, selfId) {
       const merged = withRush(board, rush);
       note.textContent = merged.length
-        ? "Solved, then fastest. Squares are easy, medium, hard; ⚡ is today's rush."
+        ? "Solved, then fastest. Squares are the day's tiers in order; ⚡ is today's rush."
         : EMPTY_DAY;
       replaceChildren(
         rows,

@@ -25,8 +25,18 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { buildPuzzle, decodeAnswerPlacements, decodeCommittedPlacements } from "../tools/decode-archive";
+import { hasSolutions } from "./archive";
 
-const solutions = JSON.parse(readFileSync("data/solutions.json", "utf8")).solutions as {
+/*
+ * `data/solutions.json` is untracked — an answer key beside the puzzles is an
+ * answer key for everybody — so a fresh clone and every deploy box are without
+ * it, and `activity/DEPLOY.md` makes `bun test` a deploy gate. Read behind the
+ * same guard every other block needing the answers uses, rather than at module
+ * scope where a missing file takes the whole file down.
+ */
+const solutions = (hasSolutions
+  ? JSON.parse(readFileSync("data/solutions.json", "utf8")).solutions
+  : []) as {
   id: number;
   title?: string;
   source: { puzzle: string; solution: string };
@@ -36,7 +46,7 @@ const entry = (id: number) => solutions.find((s) => s.id === id)!;
 /** The CSV row shape `buildPuzzle` reads: code at 1, answer at 2, title at 4. */
 const row = (id: number) => ["", entry(id).source.puzzle, entry(id).source.solution, "", `p${id}`];
 
-describe("an answer whose first piece was never locked", () => {
+describe.skipIf(!hasSolutions)("an answer whose first piece was never locked", () => {
   test("reading only locked pages drops it", () => {
     expect(decodeAnswerPlacements(entry(115).source.solution)).toHaveLength(1);
   });
@@ -58,7 +68,7 @@ describe("an answer whose first piece was never locked", () => {
   });
 });
 
-describe("the recovery does not fire where locked pages already agree", () => {
+describe.skipIf(!hasSolutions)("the recovery does not fire where locked pages already agree", () => {
   test("#112's seventy-three placements survive", () => {
     // The puzzle the unguarded version destroyed, reduced to thirteen. Its
     // blueprint clears rows repeatedly, which is exactly the case where a

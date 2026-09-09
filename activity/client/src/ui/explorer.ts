@@ -33,7 +33,7 @@ export interface ExplorerCallbacks {
 
 export interface Explorer {
   readonly element: HTMLElement;
-  /** `locked` is whichever of today's three are still unplayed. */
+  /** `locked` is whichever of today's tiers are still unplayed. */
   update(entries: readonly ArchiveListing[], filter: ArchiveFilter, locked: ReadonlySet<number>): void;
 }
 
@@ -179,7 +179,7 @@ export function createExplorer(callbacks: ExplorerCallbacks): Explorer {
         class: `explore__item${locked ? " explore__item--locked" : ""}`,
         attrs: locked ? { disabled: true } : {},
         title: locked
-          ? "One of today's three. Solve it on the daily and it opens here."
+          ? "One of today's. Solve it on the daily and it opens here."
           : `${entry.goal} · ${entry.targetAttack} attack`,
       },
       el("span", { class: "explore__id", text: `#${entry.id}` }),

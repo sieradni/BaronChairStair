@@ -1316,7 +1316,7 @@ export class Store {
     const runs: Partial<Record<DailyTier, StoredRun>> = {};
     for (const row of rows) {
       // 'legacy' rows are from a day that held one puzzle. They are kept for
-      // streaks and totals, and belong to none of today's three.
+      // streaks and totals, and belong to none of today's tiers.
       if (DAILY_TIERS.includes(row.slot as DailyTier)) runs[row.slot as DailyTier] = toStoredRun(row);
     }
     return runs;
@@ -1637,7 +1637,17 @@ export class Store {
    * a partial day reads as unpinned and {@link pinDay} fills the gaps, leaving
    * the tier already on file exactly where it was.
    */
-  pinnedDay(day: number): Record<DailyTier, number> | null {
+  /**
+   * Whatever tiers a day already has on file, which may be fewer than all of
+   * them.
+   *
+   * Every day pinned before `extreme` existed holds three rows, and those days
+   * are history: the puzzles they name were played. {@link pinnedDay} answers
+   * null for them because it demands the full set, and the caller then tops the
+   * day up — so it needs to know what is already there, or it will deal a fourth
+   * puzzle that may be one of the three already on the day.
+   */
+  pinnedTiers(day: number): Partial<Record<DailyTier, number>> {
     const rows = this.db
       .query<{ tier: string; puzzle_id: number }, [number]>(
         "SELECT tier, puzzle_id FROM day_puzzles WHERE day = ?1",
@@ -1647,6 +1657,11 @@ export class Store {
     for (const row of rows) {
       if (DAILY_TIERS.includes(row.tier as DailyTier)) ids[row.tier as DailyTier] = row.puzzle_id;
     }
+    return ids;
+  }
+
+  pinnedDay(day: number): Record<DailyTier, number> | null {
+    const ids = this.pinnedTiers(day);
     if (!DAILY_TIERS.every((tier) => ids[tier] !== undefined)) return null;
     return ids as Record<DailyTier, number>;
   }

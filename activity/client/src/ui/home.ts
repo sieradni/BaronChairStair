@@ -38,7 +38,7 @@
  */
 
 import type { DailyEntry, RushRun } from "../api";
-import type { DailyTier } from "@shared/daily";
+import { DAILY_TIERS, type DailyTier } from "@shared/daily";
 import { TIER_LABELS, todaySheet } from "./home-sheet";
 import { el, formatDuration, panel, replaceChildren, stat } from "./dom";
 
@@ -78,7 +78,10 @@ export interface Home {
  * owns the tallies — a screen that prints "1 of 3" under a header showing "1"
  * and "247" is three numbers deep before it has said anything.
  */
-const COUNT_WORDS = ["None", "One", "Two", "Three"] as const;
+// Through the number of tiers a day holds, so a count of them is a word and
+// not a digit. `countWord` falls back to the digit above this, which is how
+// "All 3 done." reached the front page when a fourth tier was added.
+const COUNT_WORDS = ["None", "One", "Two", "Three", "Four"] as const;
 
 function countWord(count: number): string {
   return COUNT_WORDS[count] ?? String(count);
@@ -110,7 +113,7 @@ function dayNote(entries: readonly DailyEntry[], streak: number): string {
 
   if (left === total) {
     return (
-      "Four puzzles — easy, medium, hard, extreme. " +
+      `${countWord(total)} puzzles — ${DAILY_TIERS.join(", ")}. ` +
       (streak > 0
         ? `Any one of them keeps your ${streak}-day streak.`
         : "Solve any one of them to start a streak.")
@@ -128,9 +131,9 @@ function dayNote(entries: readonly DailyEntry[], streak: number): string {
       : `${countWord(left)} left to play.${riding}`;
   }
   return solved === total
-    ? `All three done. Back tomorrow.${held}`
+    ? `All ${countWord(total).toLowerCase()} done. Back tomorrow.${held}`
     : solved > 0
-      ? `Today is filed. ${countWord(solved)} of three solved.${held}`
+      ? `Today is filed. ${countWord(solved)} of ${countWord(total).toLowerCase()} solved.${held}`
       : "Today is filed, with none solved.";
 }
 
@@ -243,8 +246,8 @@ function dayDonePanel(
       class: "note",
       text:
         (solved === filed.length
-          ? "All three, solved and filed."
-          : `${countWord(solved)} of three today.`) + " Rush is open until midnight.",
+          ? `All ${countWord(filed.length).toLowerCase()}, solved and filed.`
+          : `${countWord(solved)} of ${countWord(filed.length).toLowerCase()} today.`) + " Rush is open until midnight.",
     }),
     el("div", { class: "btnrow" }, rush, duel),
   );
@@ -277,7 +280,7 @@ export function createHome(callbacks: HomeCallbacks): Home {
           // Not "Puzzle #247": the wordmark two rows above already reads
           // PUZZLE, and a heading repeating it is the duplication this screen
           // exists to remove. The number is still here, quietly, beside it.
-          el("h2", { class: "display home__day-title", text: "Today's three" }),
+          el("h2", { class: "display home__day-title", text: "Today's puzzles" }),
           dayNumber,
         ),
         note,

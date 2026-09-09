@@ -215,7 +215,8 @@ bun -e 'import {Database} from "bun:sqlite";
         console.log("runs:       ", db.query("SELECT count(*) c FROM runs").get().c);'
 ```
 
-Expect `day_puzzles` to be roughly three times the current day number, and
+Expect `day_puzzles` to be roughly four times the current day number — three
+times for any stretch of days pinned before the `extreme` tier existed — and
 `day_rush` to be at least 1. **If `day_puzzles` is 0 the server has not started
 successfully** — fix that before doing anything else, and before rebuilding the
 puzzle data.

@@ -305,10 +305,16 @@ describe("the rush seed against the daily rotation's own", () => {
    * would put it there on all three hundred and sixty-five, and that is what
    * this rules out. It is a decorrelation check and not a promise of never.
    *
-   * Raised from twelve when `extreme` was added: a day names four puzzles now
-   * rather than three, so the opener has a third more to collide with and the
-   * expected count rises with it. The headroom over chance is what this test is
-   * for, and it is unchanged — the number moved because the population did.
+   * Raised from twelve when the tiers were rebanded. Measured over the same year
+   * of days: seven collisions before, fourteen after. The reason is NOT that a
+   * day names four puzzles rather than three — dropping `extreme` from the count
+   * still gives fourteen. It is the *band* change: the pools went from 45/47/46
+   * to 21/24/66/27, and a tier of 21 repeats every three weeks, so its puzzle is
+   * simply on offer far more often for the rush opener to land on.
+   *
+   * Sixteen leaves two days of margin over the measured fourteen, which is thin.
+   * It is kept deliberately tight: this is a decorrelation check, and a ceiling
+   * loose enough never to fail would not be one.
    */
   const OPENER_COLLISION_CEILING = 16;
 

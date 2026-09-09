@@ -302,18 +302,27 @@ describe("the front door", () => {
     return made;
   };
 
-  const unplayed = () => [entry("easy", 2, null), entry("medium", 6, null), entry("hard", 11, null)];
+  // All four tiers, because the front page counts what it is given: a fixture
+  // one tier short would have let "Three of three solved" ship on a four-puzzle
+  // day, which is exactly what it did.
+  const unplayed = () => [
+    entry("easy", 2, null),
+    entry("medium", 6, null),
+    entry("hard", 11, null),
+    entry("extreme", 18, null),
+  ];
   const chips = (made: { element: HTMLElement }) =>
     [...made.element.querySelectorAll(".today__chip")].map((chip) => chip.textContent);
 
-  test("shows all three, with what the choice actually turns on", () => {
+  test("shows every tier, with what the choice actually turns on", () => {
     const made = home(unplayed());
     const sheets = [...made.element.querySelectorAll(".today__sheet")];
-    expect(sheets).toHaveLength(3);
+    expect(sheets).toHaveLength(4);
     expect(sheets.map((sheet) => sheet.querySelector(".today__tier")!.textContent)).toEqual([
       "Easy",
       "Medium",
       "Hard",
+      "Extreme",
     ]);
     // The length and the bar are part of the decision, so they are on the card.
     const meta = sheets[0]!.querySelector(".explore__meta")!.textContent!;
@@ -338,6 +347,7 @@ describe("the front door", () => {
     expect(chips(home(unplayed(), { started: [6] }))).toEqual([
       "Not played",
       "In progress",
+      "Not played",
       "Not played",
     ]);
   });

@@ -173,7 +173,7 @@ async def puzzle_command(interaction: discord.Interaction):
         return
     embed = discord.Embed(
         title=f"Puzzle #{day}",
-        description="Three today — solving any one of them keeps your streak.",
+        description="Solving any one of today's keeps your streak.",
         colour=PUZZLE_COLOUR,
         url=launch)
     # One field per tier rather than three embeds: they are one day's puzzle,
