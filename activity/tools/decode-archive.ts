@@ -178,12 +178,23 @@ export interface BuildFailure {
   reason: string;
 }
 
-/** How tall the board stands once an answer has been replayed. */
+/**
+ * How tall the board stands once an answer has been replayed.
+ *
+ * Highest occupied row, exclusive — the same measure `Playfield.stackHeight`
+ * reports, because the two are compared. Counting *non-empty rows* instead is
+ * a different number the moment a board has a gap under an overhang, and the
+ * archive has one such board today (#34 finishes four filled rows tall with its
+ * highest at seven).
+ */
 function boardHeight(replay: { steps: readonly { board: BoardCell[][] }[] }): number {
   const last = replay.steps[replay.steps.length - 1]?.board;
   if (!last) return 0;
-  const filled = last.filter((row) => row.some((cell) => cell !== null)).length;
-  return filled;
+  let highest = 0;
+  last.forEach((row, y) => {
+    if (row.some((cell) => cell !== null)) highest = y + 1;
+  });
+  return highest;
 }
 
 export function buildPuzzle(

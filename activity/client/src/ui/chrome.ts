@@ -11,22 +11,15 @@
  * playing a club's own puzzles — and, in its far corner, Petr.
  */
 
-import type { PuzzlePrompt } from "@shared/puzzle";
+import {
+  DIFFICULTY_PER_SQUARE,
+  difficultySquares,
+  MAX_DIFFICULTY_SQUARES,
+  type PuzzlePrompt,
+} from "@shared/puzzle";
 import { MINO_INK } from "../render/skin";
 import { el, replaceChildren } from "./dom";
 
-/** Difficulty above this is shown as "and then some" rather than more pips. */
-const MAX_PIPS = 5;
-/**
- * Rating points per square: two, so the archive's 1-to-10 covers the five.
- *
- * The bands that falls out to, written down because it is the contract rather
- * than an accident of the arithmetic — 1–2 fills one square, 3–4 two, 5–6
- * three, 7–8 four, 9–10 five, and anything above ten is five and a `+`. The
- * archive runs to 20, so that last band is fourteen real puzzles and not a
- * theoretical one.
- */
-const PIP_SCALE = 2;
 
 /** The club's logo motif: four coloured blocks in a square. */
 function blockMark(): HTMLElement {
@@ -117,8 +110,8 @@ export interface Credits {
  * for it to drift from the test that pins it.
  */
 export function difficultyPips(difficulty: number): HTMLElement {
-  const filled = Math.min(MAX_PIPS, Math.ceil(difficulty / PIP_SCALE));
-  const dots = Array.from({ length: MAX_PIPS }, (_, index) =>
+  const filled = difficultySquares(difficulty);
+  const dots = Array.from({ length: MAX_DIFFICULTY_SQUARES }, (_, index) =>
     el("span", { class: `pips__dot${index < filled ? " pips__dot--on" : ""}` }),
   );
   const label = difficulty > 0 ? `difficulty ${difficulty} of 10+` : "not yet rated";
@@ -126,7 +119,7 @@ export function difficultyPips(difficulty: number): HTMLElement {
     "span",
     { class: "pips", title: label, attrs: { "aria-label": label } },
     ...dots,
-    difficulty > MAX_PIPS * PIP_SCALE ? el("span", { class: "pips__plus", text: "+" }) : null,
+    difficulty > MAX_DIFFICULTY_SQUARES * DIFFICULTY_PER_SQUARE ? el("span", { class: "pips__plus", text: "+" }) : null,
   );
 }
 
