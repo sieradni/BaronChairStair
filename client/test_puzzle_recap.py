@@ -224,3 +224,67 @@ class WhenThePuzzleServerCannotBeReached(unittest.TestCase):
 
         self.assertIn("ServerDisconnectedError", written)
         self.assertIn("Server disconnected", written)
+
+
+class DayThatDealtFewerTiers(unittest.TestCase):
+    """
+    A day recapped after a tier was added dealt fewer puzzles than the bot knows
+    about.
+
+    Every day pinned before `extreme` existed holds three. Sizing the grid off
+    `TIER_ORDER` drew a fourth, always-blank square for a puzzle nobody was ever
+    shown, and the sweep line — counted against the same list — went to nobody,
+    so a player who solved all three of what the day actually offered read as one
+    short. The server now names the tiers a day held, and the bot measures itself
+    against that.
+    """
+
+    @staticmethod
+    def _payload(tiers, rows):
+        return {
+            "day": 250,
+            "streak": 2,
+            "puzzles": [{"tier": tier, "id": i, "title": tier} for i, tier in enumerate(tiers)],
+            "daily": {"rows": rows, "total": len(rows)},
+            "rush": {"entries": [], "total": 0},
+        }
+
+    def test_three_tier_day_draws_three_marks(self):
+        rows = [{"player": {"id": "1", "username": "Ann"}, "solved": 3, "totalMs": 75000,
+                 "marks": {"easy": True, "medium": True, "hard": True}}]
+
+        said = puzzle_recap.format_recap(self._payload(("easy", "medium", "hard"), rows))
+
+        grid = said.splitlines()[1].split(" ")[0]
+        self.assertEqual(len(grid), 3, f"expected three marks, got {grid!r}")
+
+    def test_solving_every_puzzle_the_day_had_is_still_a_sweep(self):
+        rows = [{"player": {"id": "1", "username": "Ann"}, "solved": 3, "totalMs": 75000,
+                 "marks": {"easy": True, "medium": True, "hard": True}}]
+
+        said = puzzle_recap.format_recap(self._payload(("easy", "medium", "hard"), rows))
+
+        self.assertIn("All 3:", said)
+
+    def test_a_four_tier_day_still_reads_as_four(self):
+        rows = [{"player": {"id": "1", "username": "Ann"}, "solved": 4, "totalMs": 75000,
+                 "marks": {"easy": True, "medium": True, "hard": True, "extreme": True}}]
+
+        said = puzzle_recap.format_recap(
+            self._payload(("easy", "medium", "hard", "extreme"), rows))
+
+        self.assertEqual(len(said.splitlines()[1].split(" ")[0]), 4)
+        self.assertIn("All 4:", said)
+
+    def test_a_server_that_names_no_tiers_falls_back(self):
+        # An older activity, or a payload without the list: the constant is the
+        # right answer rather than a crash or an empty grid.
+        rows = [{"player": {"id": "1", "username": "Ann"}, "solved": 1, "totalMs": 1000,
+                 "marks": {"easy": True}}]
+        payload = self._payload((), rows)
+        payload.pop("puzzles")
+
+        said = puzzle_recap.format_recap(payload)
+
+        self.assertEqual(len(said.splitlines()[1].split(" ")[0]), len(puzzle_recap.TIER_ORDER))
+
