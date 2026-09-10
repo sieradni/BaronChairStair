@@ -457,7 +457,8 @@ export class Api {
    *
    * Unscored, like the run it describes: nothing here reaches a leaderboard, a
    * streak or the discovery board. The log is sent because the server replays
-   * it — a claim on its own would be an unlock button for the whole archive.
+   * it — a bare claim would let `puzzle_clears` fill with puzzles nobody played,
+   * and the Explore ticks and the Archive board both read it as fact.
    */
   clearPuzzle(
     id: number,

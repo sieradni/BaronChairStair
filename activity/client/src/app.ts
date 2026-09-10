@@ -1849,8 +1849,9 @@ export class App {
    * Files a practice solve, and remembers it locally the moment it lands.
    *
    * The log goes with it because the server replays it: a client that could
-   * simply assert "I solved #92" would be an unlock button for every answer in
-   * the archive, which is the one thing the gallery gate exists to prevent.
+   * simply assert "I solved #92" would fill this player's record with puzzles
+   * they never played, and that record is what the Explore ticks, the Archive
+   * board and their own profile are made of.
    *
    * Quietly on failure. A player who has just solved a puzzle for fun is owed
    * nothing by this call, and an error toast over a practice board would be

@@ -857,11 +857,22 @@ app.get("/api/archive", requireSession, (c) => {
  * records is "this person has solved this board", which is what ticks the
  * Explore list and unlocks the puzzle's solutions.
  *
- * **The log is replayed, not believed.** The client could otherwise post an
- * empty body naming a puzzle id and unlock every answer in the archive, which
- * is precisely the thing the gallery is gated to prevent. `verifyRun` is the
- * same path the daily and the rush already trust, and the verdict comes from
- * `solvedUnderPolicy` so a practice solve is held to exactly the bar a daily is.
+ * **The log is replayed, not believed** — but be clear about what that buys.
+ * It stops a body with no run in it counting as a solve, which keeps
+ * `puzzle_clears` an honest record of what people actually played: the Explore
+ * ticks, the Archive leaderboard and the profile all read it. `verifyRun` is
+ * the same path the daily and the rush already trust, and the verdict comes
+ * from `solvedUnderPolicy`, so a practice solve is held to exactly a daily's bar.
+ *
+ * It is **not** a secrecy boundary, and nothing downstream should be built as
+ * if it were. `/api/archive/:id` hands the reference answer to anyone signed
+ * in for every puzzle that is not one of today's — `maySeeSolution` returns
+ * `true` outright once the tier check passes — and `pathfinder.ts` ships in the
+ * browser bundle, so a determined caller can route that answer into an input
+ * log and file a real solve without ever playing the board. That is accepted:
+ * the club's answers are public, and the gate on the gallery is there so a
+ * reader does not spoil a puzzle they were about to try, not to keep a secret
+ * there is none of.
  *
  * Today's puzzles are refused outright. A player could otherwise practise the
  * board they are about to be scored on and read its answers first — the exact
