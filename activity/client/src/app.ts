@@ -11,7 +11,7 @@ import { BOARD_HEIGHT, type PuzzlePrompt, type SolutionStep } from "@shared/puzz
 import type { Handling } from "@shared/tetris/handling";
 import type { InputEvent } from "@shared/tetris/verify";
 import type { Connection } from "./discord";
-import type { DailyEntry, DailyResponse, RushState, StoredRun } from "./api";
+import type { DailyEntry, DailyResponse, GalleryLine, RushState, StoredRun } from "./api";
 import type { ArchiveListing } from "@shared/puzzle";
 import { filterArchive } from "@shared/archive-filter";
 import { ApiError } from "./api";
@@ -22,6 +22,11 @@ import { RushSession, type RushSummary } from "./game/rush";
 import { PuzzleRun, type RunSnapshot } from "./game/runner";
 import { createDailyBoard } from "./ui/daily-board";
 import { createDiscoveryBoard } from "./ui/discovery-board";
+import { createSolutionsPanel } from "./ui/solutions";
+import { createProfile } from "./ui/profile";
+import { createLeaderboards } from "./ui/leaderboards";
+import { playerAvatar } from "./ui/avatar";
+import { createSolutionsMenu } from "./ui/solutions-menu";
 import { createHome } from "./ui/home";
 import type { DailyTier } from "@shared/daily";
 import { activeRun, type PlayMode } from "./game/active-run";
@@ -29,13 +34,12 @@ import { SolutionPlayer } from "./game/solution-player";
 import { BoardRenderer } from "./render/board";
 import type { SettingsStore } from "./settings";
 import { createCredits, createMasthead } from "./ui/chrome";
-import { el, formatCountdown, replaceChildren } from "./ui/dom";
+import { el, formatCountdown, panel, replaceChildren } from "./ui/dom";
 import { createHud } from "./ui/hud";
 import {
   createLeaderboardPanel,
   createVerdictBadge,
   createVerdictPanel,
-  createWalkthroughPanel,
 } from "./ui/results";
 import { createExplorer } from "./ui/explorer";
 import { createBuilder, type Builder } from "./ui/builder";
@@ -85,8 +89,19 @@ export class App {
   });
   private readonly badge = createVerdictBadge();
   private readonly leaderboard = createLeaderboardPanel();
-  private readonly dailyBoard = createDailyBoard();
+  private readonly dailyBoard = createDailyBoard(() => void this.enterLeaderboards());
   private readonly discoveryBoard = createDiscoveryBoard();
+  private readonly profile = createProfile();
+  private readonly leaderboards = createLeaderboards({
+    onPlayer: (id) => void this.enterProfile(id),
+  });
+  private readonly solutionsMenu = createSolutionsMenu({
+    onOpen: (line) => this.stepSolution(line),
+    onClose: () => this.backToPuzzle(),
+  });
+  /** The puzzle whose solutions are being read, and its lines. */
+  private solutionsFor: PuzzlePrompt | null = null;
+  private solutionsLines: readonly GalleryLine[] = [];
   private readonly canvas = el("canvas", {
     class: "field",
     attrs: { role: "img", "aria-label": "Puzzle playfield" },
@@ -104,7 +119,7 @@ export class App {
   private readonly input: InputRouter;
   private readonly settingsDialog;
   private readonly verdict;
-  private readonly walkthrough = createWalkthroughPanel();
+  private readonly walkthrough = createSolutionsPanel();
   /**
    * The pending auto-dismiss of the verdict badge, if one is running.
    *
@@ -230,6 +245,14 @@ export class App {
   /** Keeps the clock moving before the first input and between attempts. */
   private clockTimer: ReturnType<typeof setInterval> | null = null;
   private archive: readonly ArchiveListing[] | null = null;
+  /**
+   * Every puzzle this player has ever solved, however they solved it.
+   *
+   * Ticks the Explore list and decides whether a puzzle will open its
+   * solutions. Refreshed whenever a solve could have added to it, because it is
+   * the one piece of state on the client that a run can change.
+   */
+  private cleared: ReadonlySet<number> = new Set();
 
   constructor(
     private readonly root: HTMLElement,
@@ -269,6 +292,7 @@ export class App {
       onToggleLeaderboard: () => this.toggleLeaderboard(),
       onPractice: () => void this.startPractice(),
       onBackToDaily: () => this.returnToDaily(),
+      onSolutions: () => void this.openSolutions(this.sheet?.puzzle.id ?? -1),
     });
 
     this.rushIntro = createRushIntro(
@@ -373,6 +397,10 @@ export class App {
    * forgot, so the prologue is now one place instead of eight.
    */
   private leaveForScreen(): void {
+    // `relayout` draws the solution player in preference to the live board, so
+    // a reader who stepped a solution and then went anywhere else had that
+    // board painted over whatever they went to.
+    this.solutionPlayer = null;
     this.disposeActiveMode();
     this.mode = "daily";
     this.input.setGameInputEnabled(false);
@@ -384,7 +412,7 @@ export class App {
    *
    * Every mode leaves through here and the activity opens on it, so it is the
    * screen most often looked at and the one that had least on it. It is now
-   * also the chooser — pressing one of the three goes straight to a board.
+   * also the chooser — pressing one of the day's sheets goes straight to a board.
    */
   private showHome(): void {
     if (!this.daily) return;
@@ -477,7 +505,11 @@ export class App {
   }
 
   private async loadArchive(): Promise<readonly ArchiveListing[]> {
-    this.archive ??= (await this.connection.api.archive()).puzzles;
+    if (!this.archive) {
+      const { puzzles, cleared } = await this.connection.api.archive();
+      this.archive = puzzles;
+      this.cleared = new Set(cleared);
+    }
     return this.archive;
   }
 
@@ -531,6 +563,205 @@ export class App {
     // is already filed, so there is no longer a time for the tally to protect.
     this.sittings.forget(this.daily?.day ?? 0, id);
     await this.openArchivePuzzle(id);
+  }
+
+  /**
+   * Opens a puzzle to *read* rather than to play: the board, and every way it
+   * has been solved.
+   *
+   * No run is started, and that is the whole difference from
+   * {@link openArchivePuzzle}. There is nothing to score, nothing to file and
+   * no clock — the keyboard does nothing because `activeRun` answers null with
+   * no run in flight, which is the same state a duel sits in between rounds.
+   *
+   * Reached from the explorer, where a row says how many lines a puzzle has.
+   * That is the entry point the feature needed: the panel beside the board has
+   * always appeared *after* a run, so a player who wanted to see how others
+   * solved something had to solve it again first.
+   */
+  /**
+   * The player's own record.
+   *
+   * `leaveForScreen` rather than a hand-rolled prologue: it was extracted
+   * precisely because the next screen added forgot one of its four lines, and
+   * three of the existing `enter*` paths still hand-roll it. This one does not.
+   *
+   * Fetched on every open. It is a page somebody navigates to deliberately, the
+   * numbers move whenever they play, and a cached profile that still says 0
+   * after a solve reads as broken.
+   */
+  private async enterProfile(id?: string): Promise<void> {
+    this.leaveForScreen();
+    this.credits.update(null);
+    // Same reason as the boards: the screen goes up on the click, not on the
+    // response. Blanked rather than left showing the last profile, because
+    // unlike the boards this screen's *subject* changes — leaving somebody
+    // else's numbers under a new name for a round trip would be a lie rather
+    // than merely stale.
+    this.profile.loading();
+    this.showScreen({ wide: true }, this.profile.element);
+    try {
+      // Back to the boards, not to wherever they were before: a profile opened
+      // from a row is read *about* that row, and the reader is mid-comparison.
+      const onBack = id ? () => void this.enterLeaderboards() : undefined;
+      this.profile.update(await this.connection.api.profile(id), onBack, (puzzleId) =>
+        void this.openSolutions(puzzleId),
+      );
+    } catch (error) {
+      this.toast(error instanceof ApiError ? error.message : "Could not read that profile");
+      // `loading()` blanked every card on the way in; without this the screen
+      // reads "Reading…" for the rest of the session.
+      this.profile.failed();
+    }
+  }
+
+  /**
+   * Every board on one page.
+   *
+   * Fetched on every open, like the profile: the numbers move whenever anybody
+   * plays, and a cached board that still shows this morning reads as broken.
+   * One request for all five — see `/api/leaderboards`.
+   */
+  private async enterLeaderboards(): Promise<void> {
+    this.leaveForScreen();
+    this.credits.update(null);
+    // Shown *before* the request, not after it. Awaiting first meant a press of
+    // the button did nothing at all for a whole round trip — the old screen sat
+    // there, then the page appeared — which reads as the app having missed the
+    // click. It is a millisecond and a half on this box and a real trip through
+    // Discord's proxy from a player's browser.
+    //
+    // The second visit keeps the boards it already has on screen while the new
+    // ones are fetched. They are the same five boards; the numbers may have
+    // moved, and showing yesterday's number for 200ms is better than showing
+    // nothing for 200ms.
+    this.showScreen({ wide: true }, this.leaderboards.element);
+    try {
+      const { categories, daily } = await this.connection.api.leaderboards();
+      this.leaderboards.update(categories, this.connection.player.id, daily);
+    } catch (error) {
+      this.toast(error instanceof ApiError ? error.message : "Could not read the boards");
+    }
+  }
+
+  private async openSolutions(id: number): Promise<void> {
+    if (id < 0) return;
+    if (this.lockedPuzzleIds().has(id)) {
+      this.toast("That is one of today's — play it on the daily first");
+      return;
+    }
+    // The gate the server enforces, asked here too so a player gets a sentence
+    // instead of a 403. Reading how other people did it is a reward for having
+    // done it; the server is what makes that true rather than merely displayed.
+    if (!this.cleared.has(id)) {
+      this.toast("Solve it yourself first — then you can read how others did");
+      return;
+    }
+    try {
+      const [{ puzzle }, { solutions }] = await Promise.all([
+        this.connection.api.archivePuzzle(id),
+        this.connection.api.puzzleSolutions(id),
+      ]);
+      // Remembered so Back can put the player on the board they came from, and
+      // so an entry can be stepped without fetching the puzzle a second time.
+      this.solutionsFor = puzzle;
+      this.solutionsLines = solutions;
+      this.showSolutionsMenu();
+    } catch (error) {
+      this.toast(error instanceof ApiError ? error.message : "Could not open that puzzle");
+    }
+  }
+
+  /**
+   * The gallery as its own screen.
+   *
+   * It used to be a card in the rail beside the board and did not survive a
+   * real puzzle: list, stepper and sentence in a 300px column, the sentence
+   * clipped mid-word. Comparing lines is also the one thing a single board
+   * cannot do, which is what the previews are for.
+   */
+  private showSolutionsMenu(): void {
+    const puzzle = this.solutionsFor;
+    if (!puzzle) return;
+    this.leaveForScreen();
+    this.solutionsMenu.update(puzzle, this.solutionsLines, this.connection.player.id);
+    this.credits.update(puzzle);
+    this.showScreen({ wide: true }, this.solutionsMenu.element);
+  }
+
+  /**
+   * One line from the menu, stepped out on the real board.
+   *
+   * The board is what a solution has to be read on, one placement at a time,
+   * and the app already has a good one. Nothing is playable here: no run is
+   * started, so `activeRun` answers null and the keyboard does nothing.
+   */
+  private stepSolution(line: GalleryLine): void {
+    const puzzle = this.solutionsFor;
+    if (!puzzle) return;
+    this.disposeActiveMode();
+    this.mode = "daily";
+    this.sheet = { puzzle, solution: line.placements, scored: false };
+    this.credits.update(puzzle);
+    this.hud.setPuzzle(puzzle);
+    replaceChildren(this.hud.left, this.hud.panels.hold);
+    this.showPlayfield();
+    this.playSolution(puzzle, line.placements);
+    replaceChildren(
+      this.hud.right,
+      this.hud.panels.goal,
+      // The way back to the list, at the top of the rail where the way back
+      // lives on every other screen here.
+      panel(
+        "Reading",
+        { class: "solutions" },
+        el("p", { class: "note", text: this.creditFor(line) }),
+        el(
+          "div",
+          { class: "btnrow" },
+          el("button", {
+            class: "btn",
+            text: "← All solutions",
+            on: { click: () => this.showSolutionsMenu() },
+          }),
+        ),
+      ),
+      this.walkthrough.element,
+    );
+    // Deliberately no `show([line])`. It would fill the rail's list with a
+    // single row that cannot be clicked to anywhere, under a note reading "One
+    // solution on file" — one click after the menu said "4 ways through this
+    // board". The line's credit is already printed in the panel above.
+    //
+    // Cleared rather than merely not set: the panel is one long-lived instance,
+    // so a reader who came through the post-run gallery would otherwise still
+    // be looking at the note that path wrote.
+    this.walkthrough.readingOnly();
+    this.relayout();
+  }
+
+  /**
+   * Back out of the solutions, to the puzzle they are about.
+   *
+   * Opens the board unplayed rather than returning to whatever screen launched
+   * this: a player arrives here from the results card *and* from a board they
+   * were reading, and "the puzzle" is the one thing both of those mean.
+   */
+  private backToPuzzle(): void {
+    const puzzle = this.solutionsFor;
+    if (!puzzle) {
+      this.showHome();
+      return;
+    }
+    void this.openArchivePuzzle(puzzle.id);
+  }
+
+  /** Who a line belongs to, for the header over the board. */
+  private creditFor(line: GalleryLine): string {
+    if (line.source !== "player" || !line.finder) return "The maker's answer";
+    return line.finder.id === this.connection.player.id
+      ? "Your line"
+      : `Found by ${line.finder.username}`;
   }
 
   private async openArchivePuzzle(id: number): Promise<void> {
@@ -608,7 +839,12 @@ export class App {
   }
 
   private paintExplorer(): void {
-    this.explorer.update(this.archive ?? [], this.settings.value.filter, this.lockedPuzzleIds());
+    this.explorer.update(
+      this.archive ?? [],
+      this.settings.value.filter,
+      this.lockedPuzzleIds(),
+      this.cleared,
+    );
   }
 
   private leaveExplorer(): void {
@@ -1140,6 +1376,10 @@ export class App {
         timeToLastSolveMs: summary.timeToLastSolveMs,
         skipsUsed: summary.skipsUsed,
       });
+      // A rush files a clear for every puzzle it solved, so the set the
+      // Solutions gate reads is stale the moment one ends. Re-read rather than
+      // reconstructed: the server decided which segments counted.
+      void this.refreshCleared();
       this.rushResult.update({
         run: response.run,
         played: response.played,
@@ -1210,9 +1450,9 @@ export class App {
     this.masthead.mountControl(
       el("button", {
         class: "btn",
-        text: "1v1",
-        title: "Play somebody in this server",
-        on: { click: () => this.enterDuel() },
+        text: "Leaderboards",
+        title: "Every leaderboard, and whose name is on them",
+        on: { click: () => void this.enterLeaderboards() },
       }),
     );
     this.masthead.mountControl(
@@ -1238,6 +1478,22 @@ export class App {
         title: "Handling and key bindings (Esc)",
         on: { click: () => this.openSettings() },
       }),
+    );
+    // Your own face, not the word "Profile". It is the one control here that is
+    // about *you* rather than about a place, and every app the players already
+    // use puts the account behind a portrait in exactly this corner. It keeps a
+    // `title` and an `aria-label`, because a picture is not a word.
+    this.masthead.mountControl(
+      el(
+        "button",
+        {
+          class: "btn masthead__me",
+          title: "What you have solved, and how long it took",
+          attrs: { "aria-label": "Your profile" },
+          on: { click: () => void this.enterProfile() },
+        },
+        playerAvatar(this.connection.player, { size: 22 }),
+      ),
     );
   }
 
@@ -1320,7 +1576,22 @@ export class App {
 
     if (!sheet.scored) {
       this.presentVerdict(this.toShareFields(snapshot), null);
+      // A practice solve is still somebody solving a board. It reaches the
+      // server for one reason only — so it counts towards what this player has
+      // cleared, which ticks the Explore list and opens this puzzle's
+      // solutions. Nothing about it is scored.
       if (sheet.solution) this.attachWalkthrough(sheet.puzzle, sheet.solution);
+      // Filed after the verdict is on screen, but the card is re-rendered when
+      // it lands: `presentVerdict` reads `cleared` synchronously, so the first
+      // ever solve of a puzzle used to miss the Solutions button it had just
+      // earned by one round trip.
+      if (snapshot.phase === "solved") {
+        void this.fileClear(sheet.puzzle.id, events).then(() => {
+          if (this.sheet?.puzzle.id === sheet.puzzle.id) {
+            this.presentVerdict(this.toShareFields(snapshot), null);
+          }
+        });
+      }
       return;
     }
     if (snapshot.phase !== "solved") {
@@ -1373,10 +1644,24 @@ export class App {
         // would turn a discovery into a scoreboard nobody asked for, and would
         // quietly tell a player how many answers a puzzle has — which is the
         // reveal the whole archive is careful not to give away.
-        this.toast("New line! Nobody had solved it this way.");
+        //
+        // Two sentences because a discovery is now two things. A line credited
+        // without solving is one that out-attacked the target by another route,
+        // and calling that "solved it this way" tells a player they met a goal
+        // the same screen has just told them they missed.
+        this.toast(
+          response.run.solved
+            ? "New line! Nobody had solved it this way."
+            : "New line! Nobody had sent that much attack this way.",
+        );
         void this.loadDiscoveries();
       }
       if (!response.isFirst) this.toast("Today's sheet was already filed");
+      // The server has just recorded a clear for this puzzle if the run solved
+      // it. Without this the gate it opens stays shut on the client.
+      if (response.run.solved) {
+        this.cleared = new Set([...this.cleared, sheet.puzzle.id]);
+      }
     } catch (error) {
       this.presentVerdict(this.toShareFields(snapshot), null);
       this.toast(error instanceof ApiError ? error.message : "Could not file the sheet");
@@ -1440,7 +1725,14 @@ export class App {
   }
 
   private presentVerdict(fields: ShareFields, run: StoredRun | null): void {
-    this.verdict.update(fields, run, { scored: this.sheet?.scored ?? true });
+    // `cleared` is about the player, not this run: somebody replaying a puzzle
+    // they cracked last month is still owed its solutions, and somebody who has
+    // just failed one they have never solved is not.
+    const id = this.sheet?.puzzle.id;
+    this.verdict.update(fields, run, {
+      scored: this.sheet?.scored ?? true,
+      cleared: id !== undefined && this.cleared.has(id),
+    });
     replaceChildren(this.hud.left, this.verdict.element, this.leaderboard.element);
     this.hud.showFinal(fields.attack, fields.targetAttack, fields.clears);
     this.relayout();
@@ -1460,14 +1752,12 @@ export class App {
     solution: readonly SolutionStep[] | null,
   ): void {
     if (!solution) return;
-    this.solutionPlayer = new SolutionPlayer(puzzle, solution, BOARD_HEIGHT);
-    this.walkthrough.bind(this.solutionPlayer, (stepped) => {
-      // A fast player who reaches for the controls before the badge has cleared
-      // itself. Still worth keeping alongside the timer below: pressing a step
-      // is an unambiguous "I am reading the board now".
-      if (stepped) this.badge.hide();
-      if (this.solutionPlayer) this.renderer.draw(this.solutionPlayer.view());
-    });
+    // The maker's answer immediately, from what the run response already
+    // carried, as a one-line gallery rather than as a bare stepper. One path
+    // in, so there is no moment where the panel has been emptied and not yet
+    // refilled — an earlier version showed it, then wiped it, and a player
+    // whose fetch failed was left with no step controls at all.
+    this.showGallery(puzzle, [App.makerLine(solution)]);
     // And it clears itself, because a solution appearing IS the player asking to
     // read the board.
     //
@@ -1486,6 +1776,21 @@ export class App {
       this.badgeLinger = null;
       this.badge.hide();
     }, BADGE_LINGER_MS);
+    this.mountWalkthrough();
+  }
+
+  /**
+   * Puts the solutions panel in the rail, in place of the queue.
+   *
+   * Its own method because the gallery can arrive *after* the decision to show
+   * it: a puzzle with no reference answer has nothing worth mounting until the
+   * fetch lands, and mounting an empty card in the meantime would replace the
+   * queue with the words "No solutions on file".
+   *
+   * Idempotent — `replaceChildren` sets the rail rather than adding to it — so
+   * the seeded path and the fetched path can both call it.
+   */
+  private mountWalkthrough(): void {
     replaceChildren(
       this.hud.right,
       this.hud.panels.goal,
@@ -1493,6 +1798,99 @@ export class App {
       this.walkthrough.element,
     );
     this.relayout();
+  }
+
+  /**
+   * Puts a gallery in the panel and its first line on the board.
+   *
+   * The one place either path renders, so the seeded maker's answer and the
+   * fetched gallery cannot disagree about how a line is loaded.
+   */
+  private showGallery(puzzle: PuzzlePrompt, lines: readonly GalleryLine[]): void {
+    this.walkthrough.show(lines, this.connection.player.id, (line) => {
+      this.playSolution(puzzle, line.placements);
+    });
+  }
+
+  /**
+   * The maker's own answer as a gallery line, for the moment before the real
+   * gallery lands.
+   *
+   * Not fetched, because the run response already carried it — the panel would
+   * otherwise sit empty across a round trip on every single solve. The id is a
+   * sentinel: this row is a stand-in and never one the server sent.
+   */
+  private static makerLine(solution: readonly SolutionStep[]): GalleryLine {
+    return {
+      solutionId: -1,
+      placements: solution,
+      attack: solution.reduce((sum, step) => sum + (step.attack ?? 0), 0),
+      clears: solution.flatMap((step) => (step.clear ? [step.clear] : [])),
+      source: "reference",
+      finder: null,
+      foundAt: 0,
+      solvedStrict: true,
+    };
+  }
+
+  /** Loads one line onto the board and points the stepper at it. */
+  private playSolution(puzzle: PuzzlePrompt, placements: readonly SolutionStep[]): void {
+    this.solutionPlayer = new SolutionPlayer(puzzle, placements, BOARD_HEIGHT);
+    this.walkthrough.bind(this.solutionPlayer, (stepped) => {
+      // A fast player who reaches for the controls before the badge has cleared
+      // itself. Still worth keeping alongside the timer in `attachWalkthrough`:
+      // pressing a step is an unambiguous "I am reading the board now".
+      if (stepped) this.badge.hide();
+      if (this.solutionPlayer) this.renderer.draw(this.solutionPlayer.view());
+    });
+  }
+
+  /**
+   * Files a practice solve, and remembers it locally the moment it lands.
+   *
+   * The log goes with it because the server replays it: a client that could
+   * simply assert "I solved #92" would fill this player's record with puzzles
+   * they never played, and that record is what the Explore ticks, the Archive
+   * board and their own profile are made of.
+   *
+   * Quietly on failure. A player who has just solved a puzzle for fun is owed
+   * nothing by this call, and an error toast over a practice board would be
+   * reporting the failure of something they never asked for. The clear is
+   * recoverable: solving it again files it again.
+   */
+  /**
+   * Re-reads what this player has solved.
+   *
+   * `cleared` gates the Solutions control and the Explore ticks, and it used to
+   * be filled once by `loadArchive` — which only runs when somebody opens the
+   * explorer. So the server would record a daily or rush solve, open the gate,
+   * and the client would go on refusing: the button never appeared on the run
+   * that earned it, and a profile row saying "read it" answered with a toast
+   * saying the opposite.
+   *
+   * Quiet on failure: this is a refresh of something already on screen.
+   */
+  private async refreshCleared(): Promise<void> {
+    try {
+      const { cleared } = await this.connection.api.archive();
+      this.cleared = new Set(cleared);
+    } catch {
+      // Whatever is known stays known.
+    }
+  }
+
+  private async fileClear(puzzleId: number, events: readonly InputEvent[]): Promise<void> {
+    try {
+      const { solved } = await this.connection.api.clearPuzzle(puzzleId, {
+        handling: this.run?.handling ?? this.settings.value.handling,
+        events,
+      });
+      // Locally too, so the Solutions control opens without a round trip and
+      // the Explore tick is there when they go back to the list.
+      if (solved) this.cleared = new Set([...this.cleared, puzzleId]);
+    } catch {
+      // Nothing here is worth a message over a board played for fun.
+    }
   }
 
   /** The all-time board. Its own call: it does not change when a day does. */
@@ -1529,14 +1927,16 @@ export class App {
    * Its own request rather than a field on the leaderboard response, because it
    * is the one board here that does not change when a day does: it moves only
    * when somebody finds a line nobody had, which is rare enough that tying it
-   * to the daily refresh would mostly re-fetch an identical list. Failing
-   * quietly for the same reason the board beside it does — an empty card is a
-   * better morning than an error where a name should be.
+   * to the daily refresh would mostly re-fetch an identical list. It is also
+   * the one board that is not this server's, so it has nothing to say about the
+   * day the leaderboard response is about. Failing quietly for the same reason
+   * the board beside it does — an empty card is a better morning than an error
+   * where a name should be.
    */
   private async loadDiscoveries(): Promise<void> {
     try {
-      const { board } = await this.connection.api.discoveries();
-      this.discoveryBoard.update(board, this.connection.player.id);
+      const { board, self } = await this.connection.api.discoveries();
+      this.discoveryBoard.update(board, this.connection.player.id, self);
     } catch {
       // A standing offer is not worth an error message.
     }

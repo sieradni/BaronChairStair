@@ -85,3 +85,28 @@ describe.skipIf(!hasSolutions)("the recovery does not fire where locked pages al
     }
   });
 });
+
+/**
+ * The build being right is half of it. `data/puzzles.json` is what the server
+ * actually serves, it is tracked, and it is rebuilt by a command nobody runs on
+ * a schedule — so the correction reached players only when somebody ran
+ * `bun run puzzles` and committed the result.
+ *
+ * No `hasSolutions` guard: this file is tracked, so this runs everywhere,
+ * including on a deploy box that has no answers at all.
+ */
+describe("the shipped archive carries the correction", () => {
+  test("#115 is served asking for a TST, not a TSD", () => {
+    const shipped = (
+      JSON.parse(readFileSync("data/puzzles.json", "utf8")) as {
+        puzzles: { id: number; targetAttack: number; requiredClears: unknown }[];
+      }
+    ).puzzles.find((puzzle) => puzzle.id === 115);
+
+    expect(shipped).toBeDefined();
+    // Before the rebuild: 4 and `tsd`, which made the goal's own TST a refusal
+    // under GOAL_ENFORCEMENT=on while lines ignoring half the queue passed.
+    expect(shipped!.targetAttack).toBe(6);
+    expect(shipped!.requiredClears).toEqual([{ clear: "tst", count: 1 }]);
+  });
+});

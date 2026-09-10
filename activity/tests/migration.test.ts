@@ -422,6 +422,10 @@ describe("writing down what a day dealt", () => {
         // five fields meant the second officer to correct a puzzle took credit
         // for the first one's work, and a revert erased that a correction had
         // ever been made.
+        // Which puzzles a player has ever solved, however they solved them.
+        // `runs` is keyed by day and cannot answer it, and practice never
+        // reached the server at all before this table existed.
+        "puzzle_clears",
         "puzzle_override_log",
         // Corrections to a puzzle's metadata. Plain `CREATE TABLE IF NOT
         // EXISTS` and nothing to migrate — there has never been another shape
@@ -429,8 +433,8 @@ describe("writing down what a day dealt", () => {
         // `tests/puzzle-override.test.ts` is where it is opened and used.
         "puzzle_overrides",
         // Every distinct way a puzzle has been solved, and who got there first.
-        // The UNIQUE (puzzle_id, canonical_key) on it is what stops the same
-        // discovery being credited twice.
+        // The UNIQUE (puzzle_id, canonical_key) on its live rows is what stops
+        // the same discovery being credited twice.
         "puzzle_solutions",
         "runs",
         "rush_runs",
@@ -442,12 +446,18 @@ describe("writing down what a day dealt", () => {
         // Partial, on published_at: the boot read's only question.
         "archive_published",
         "puzzle_override_log_puzzle",
-        // One credit per discovery: `_key` is UNIQUE and is the whole novelty
-        // test, so if it ever fails to appear the leaderboard silently starts
-        // paying twice for the same line. `_finder` and `_puzzle` are only for
-        // reading the board back.
+        // One credit per discovery: `_live_key` is UNIQUE and is the whole
+        // novelty test, so if it ever fails to appear the leaderboard silently
+        // starts paying twice for the same line. `_finder` and `_puzzle` are
+        // only for reading the board back.
+        //
+        // The name is the migration: the index used to be `_key` and to cover
+        // every row, which meant a voided line held its key forever and refused
+        // the next player to genuinely find it. An exact list is what proves
+        // the old one was dropped rather than left beside the new one — two
+        // unique indexes on the same columns and the partial one buys nothing.
         "puzzle_solutions_finder",
-        "puzzle_solutions_key",
+        "puzzle_solutions_live_key",
         "puzzle_solutions_puzzle",
         "runs_board",
         "runs_by_day",
@@ -797,6 +807,110 @@ describe("the archive table arriving on a deployed database", () => {
       } finally {
         db.close();
       }
+    } finally {
+      store.close();
+    }
+  });
+});
+
+describe("the discovery table learning to void without destroying", () => {
+  /** A puzzle_solutions as it stood before credit outlived the board. */
+  function seedTotalIndex(): void {
+    const legacy = new Database(path, { create: true });
+    legacy.run(`CREATE TABLE puzzle_solutions (
+      solution_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+      puzzle_id     INTEGER NOT NULL,
+      canonical_key TEXT    NOT NULL,
+      key_version   INTEGER NOT NULL,
+      placements    TEXT    NOT NULL,
+      events        TEXT, handling TEXT,
+      attack        INTEGER NOT NULL,
+      clears        TEXT    NOT NULL,
+      solved_strict INTEGER NOT NULL,
+      source        TEXT    NOT NULL,
+      found_by      TEXT, guild_id TEXT,
+      found_at      INTEGER NOT NULL
+    )`);
+    legacy.run(
+      "CREATE UNIQUE INDEX puzzle_solutions_key ON puzzle_solutions (puzzle_id, canonical_key)",
+    );
+    legacy.run(`INSERT INTO puzzle_solutions
+      (puzzle_id, canonical_key, key_version, placements, attack, clears,
+       solved_strict, source, found_by, guild_id, found_at)
+      VALUES (93,'k1',1,'[]',4,'["tsd"]',1,'player','p1','g1',1000),
+             (94,'k2',1,'[]',4,'["tsd"]',1,'player','p1','g1',2000)`);
+    legacy.close();
+  }
+
+  test("an existing table gains voided_at, and every row on it reads live", () => {
+    // No backfill, deliberately. Every row that exists when the column arrives
+    // is a live claim — voiding used to remove rows, so there is no population
+    // of already-dead ones to find.
+    seedTotalIndex();
+
+    const store = new Store(path);
+    try {
+      const columns = store.archiveReader
+        .query<{ name: string }, []>("PRAGMA table_info(puzzle_solutions)")
+        .all()
+        .map((row) => row.name);
+      expect(columns).toContain("voided_at");
+      expect(
+        store.archiveReader
+          .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM puzzle_solutions WHERE voided_at IS NULL")
+          .get()!.n,
+      ).toBe(2);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("the old total index is dropped rather than left beside the partial one", () => {
+    // Two unique indexes over the same columns and the partial one buys
+    // nothing: the total one still refuses the next finder of a voided line.
+    seedTotalIndex();
+
+    const store = new Store(path);
+    try {
+      const indexes = store.archiveReader
+        .query<{ name: string }, []>(
+          "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='puzzle_solutions'",
+        )
+        .all()
+        .map((row) => row.name);
+      expect(indexes).toContain("puzzle_solutions_live_key");
+      expect(indexes).not.toContain("puzzle_solutions_key");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("credit filed under the old shape survives the upgrade", () => {
+    seedTotalIndex();
+
+    const store = new Store(path);
+    try {
+      store.upsertPlayer(player);
+      expect(store.discoveryBoard().map((row) => [row.player.id, row.found])).toEqual([["p1", 2]]);
+      expect(store.discoveryStanding("p1")).toEqual({ rank: 1, found: 2 });
+    } finally {
+      store.close();
+    }
+  });
+
+  test("runs clean a second time on a database it has already migrated", () => {
+    // `DROP INDEX IF EXISTS` and `CREATE ... IF NOT EXISTS` both have to be
+    // no-ops on the second boot; the assertion is on the data rather than on
+    // the statements, because an empty board would pass an absent-player join
+    // whatever the second boot did.
+    seedTotalIndex();
+    const first = new Store(path);
+    first.upsertPlayer(player);
+    first.close();
+
+    const store = new Store(path);
+    try {
+      expect(store.discoveryBoard().map((row) => [row.player.id, row.found])).toEqual([["p1", 2]]);
     } finally {
       store.close();
     }

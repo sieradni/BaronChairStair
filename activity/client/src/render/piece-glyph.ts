@@ -5,7 +5,7 @@
  * with the layout, and cost nothing to redraw when the queue shifts.
  */
 
-import { BOARD_WIDTH, decodeBoard, type Mino, type RowCode } from "@shared/puzzle";
+import { BOARD_WIDTH, type BoardCell, decodeBoard, type Mino, type RowCode } from "@shared/puzzle";
 import { MINO_INK, PAPER, PIECE_SHAPES } from "./skin";
 
 const INK = PAPER.ink;
@@ -96,7 +96,27 @@ export function boardGlyph(board: readonly RowCode[]): SVGSVGElement {
   // padded upward. Padding is honest: empty field above the stack is exactly
   // what the player will see when they open it.
   const rows = Math.max(MIN_BOARD_ROWS, board.length);
-  const cells = decodeBoard(board, rows);
+  return cellsGlyph(decodeBoard(board, rows));
+}
+
+/**
+ * The same picture, from cells that were never a `RowCode`.
+ *
+ * A solution's finished board is built by locking squares one placement at a
+ * time — see `SolutionPlayer` — and never round-trips through the encoded row
+ * strings the archive ships. Re-encoding it just to decode it again would be
+ * two lossy conversions in service of a type.
+ *
+ * Draws exactly the rows it is given, padded up to {@link MIN_BOARD_ROWS} the
+ * way `boardGlyph` pads a shallow archive board. It does **not** trim: an
+ * encoded board's height is a fact about that board and `boardGlyph`'s contract
+ * is that the picture keeps it. A caller holding a full-height engine board —
+ * a solution's finished field is mostly empty sky — trims first; see
+ * {@link stackOnly}.
+ */
+export function cellsGlyph(board: readonly (readonly BoardCell[])[]): SVGSVGElement {
+  const rows = Math.max(MIN_BOARD_ROWS, board.length);
+  const cells = board;
 
   const svg = document.createElementNS(SVG_NS, "svg");
   svg.setAttribute("viewBox", `0 0 ${BOARD_WIDTH * UNIT} ${rows * UNIT}`);
@@ -124,4 +144,20 @@ export function boardGlyph(board: readonly RowCode[]): SVGSVGElement {
     }
   }
   return svg;
+}
+
+/**
+ * A full-height engine board cut down to the part with anything in it.
+ *
+ * A finished solution's field is twenty-odd rows of which four might be
+ * occupied, and drawn whole every preview is a thumbnail of empty sky with a
+ * smudge at the bottom. `cellsGlyph` pads the result back up if it cuts too
+ * deep, so a one-row stack still draws as a board.
+ */
+export function stackOnly(
+  board: readonly (readonly BoardCell[])[],
+): readonly (readonly BoardCell[])[] {
+  let filled = board.length;
+  while (filled > 0 && (board[filled - 1] ?? []).every((cell) => cell === null)) filled -= 1;
+  return board.slice(0, filled);
 }

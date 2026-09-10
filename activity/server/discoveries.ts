@@ -7,17 +7,24 @@
  * and what to tell the player about it.
  *
  * The two readers pull in opposite directions and both are served by keeping
- * *more* than the leaderboard pays for. A player is credited only for a line
- * that met the goal and that nobody had recorded. A maker needs the other
- * ones — the lines that beat the target attack while missing the required
- * clears are the exact evidence that a condition says less than its sentence
- * does, and they only exist while goal enforcement is still logging rather than
- * refusing. So both are filed, and `solvedStrict` is what tells them apart.
+ * *more* than the leaderboard pays for. A player is credited for a line nobody
+ * had recorded that either solved the puzzle or sent more attack than it asked
+ * for — `countsAsAlternate`. A maker needs the rest as well: a line that met
+ * the target exactly while missing the required clears is the exact evidence
+ * that a condition says less than its sentence does. So both are filed, and
+ * `solvedStrict` is the stored fact that tells them apart.
  */
 
 import type { Store } from "./db";
 import { SOLUTION_KEY_VERSION, solutionFingerprint } from "../shared/solution-key";
-import { meetsTarget, solvesPuzzle, type Puzzle, type SolutionStep } from "../shared/puzzle";
+import type { ClearName } from "../shared/puzzle";
+import {
+  countsAsAlternate,
+  meetsTarget,
+  solvesPuzzle,
+  type Puzzle,
+  type SolutionStep,
+} from "../shared/puzzle";
 import type { InputEvent } from "../shared/tetris/verify";
 import type { VerifiedRun } from "../shared/tetris/verify";
 import type { Handling } from "../shared/tetris/handling";
@@ -27,11 +34,12 @@ export interface Discovery {
   /**
    * Nobody had recorded this line before **and** it will be credited.
    *
-   * Both halves, because the board pays on the goal and not on the attack
-   * target. A run that reached the number without the clears the goal names is
-   * still filed — it is the evidence a maker needs — but telling the player
-   * "nobody had solved it this way" would promise a place on a board that
-   * filters it out, and they would go looking for a name that never appears.
+   * Both halves, because the board does not pay for everything that is filed.
+   * A run that reached the target without the clears the goal names, and
+   * without beating the target either, is still filed — it is the evidence a
+   * maker needs — but telling that player "nobody had solved it this way" would
+   * promise a place on a board that filters it out, and they would go looking
+   * for a name that never appears. See `countsAsAlternate`.
    */
   readonly isNew: boolean;
   /** Distinct lines on record for this puzzle, including this one. */
@@ -104,6 +112,7 @@ export function seedReferenceSolutions(
         events: null,
         handling: null,
         attack,
+        targetAttack: puzzle.targetAttack,
         clears,
         // Computed rather than assumed. It is true for every puzzle the current
         // scheme builds, because the requirement is derived from this very
@@ -160,9 +169,15 @@ export function recordDiscovery(
     attack: placement.attack,
   }));
   const outcome = { attack: verified.attack, clears: verified.clears };
-  // The whole goal, not the attack bar the filing decision uses. This is what
-  // `discoveryBoard` filters on, so it is what "new" has to mean.
+  // Stored as the fact it is: did this line make the clears the goal named.
+  // `solutionCounts` reports the ones that did not, which is a maker's view of
+  // whether a condition says less than its sentence does.
   const meetsGoal = solvesPuzzle(verified.attack, verified.clears, puzzle);
+  // What the *board* will pay for, which is a wider bar than the solve: a line
+  // that sent more attack than the puzzle asked for is a find too. This is the
+  // one the player is told about, so `isNew` promises exactly the credit
+  // `discoveryBoard` is about to hand out.
+  const credited = countsAsAlternate(verified.attack, verified.clears, puzzle);
 
   // Nothing here may cost a player the run they just earned. The run is already
   // recorded by the time this is called, so a throw would take the *response*
@@ -188,6 +203,7 @@ export function recordDiscovery(
       events,
       handling,
       attack: verified.attack,
+      targetAttack: puzzle.targetAttack,
       clears: verified.clears,
       solvedStrict: meetsGoal,
       source: "player",
@@ -202,11 +218,65 @@ export function recordDiscovery(
   }
 
   try {
-    return { isNew: discovered && meetsGoal, known: store.countSolutions(puzzle.id) };
+    return { isNew: discovered && credited, known: store.countSolutions(puzzle.id) };
   } catch (error) {
     // The row is written; only the count failed. Say what is true rather than
     // discarding a discovery that happened.
     console.error(`[discovery] could not count solutions for puzzle ${puzzle.id}: ${String(error)}`);
-    return { isNew: discovered && meetsGoal, known: 0 };
+    return { isNew: discovered && credited, known: 0 };
   }
+}
+
+/** One line as a profile lists it. */
+export interface ProfileLine {
+  readonly puzzleId: number;
+  readonly title: string;
+  readonly attack: number | null;
+  readonly clears: readonly ClearName[];
+  readonly foundAt: number;
+  readonly voided: boolean;
+  readonly openable: boolean;
+}
+
+/**
+ * What a profile may say about the lines its subject found.
+ *
+ * Two different questions, and conflating them is how the first version of this
+ * leaked. `openable` is about the *click*: may this reader step this line on a
+ * board. `attack` and `clears` are the line's **content** — what it sent and
+ * what it made — and shipping those to somebody who has not solved the puzzle
+ * is precisely the disclosure the click is gated against. So a shut row carries
+ * neither.
+ *
+ * A pure function, and exported, because the rule was previously inline in the
+ * route: seeding a discovery for a route test means opening a second Store on
+ * the database the app already holds, so the invariant had nowhere it could be
+ * checked and was checked nowhere.
+ *
+ * @param cleared puzzles the *reader* has solved — not the finder.
+ */
+export function profileLines(
+  rows: readonly {
+    puzzleId: number;
+    attack: number;
+    clears: ClearName[];
+    foundAt: number;
+    voided: boolean;
+  }[],
+  titleOf: (puzzleId: number) => string | null,
+  cleared: ReadonlySet<number>,
+): ProfileLine[] {
+  return rows.map((row) => {
+    const title = titleOf(row.puzzleId);
+    const openable = !row.voided && title !== null && cleared.has(row.puzzleId);
+    return {
+      puzzleId: row.puzzleId,
+      title: title ?? "",
+      attack: openable ? row.attack : null,
+      clears: openable ? row.clears : [],
+      foundAt: row.foundAt,
+      voided: row.voided,
+      openable,
+    };
+  });
 }

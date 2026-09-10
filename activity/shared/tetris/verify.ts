@@ -12,6 +12,7 @@ import type { ClearName, Mino } from "../puzzle";
 import { createPuzzleEngine, type PuzzleSetup, toLetter } from "./engine";
 import { type Handling, sanitizeHandling } from "./handling";
 import { nameClear } from "./replay";
+import { clearsOf, creditPlacements, total } from "./credit";
 
 const FRAMES_PER_SECOND = 60;
 
@@ -145,7 +146,10 @@ export function verifyRun(
   handling: Handling,
   events: readonly InputEvent[],
 ): VerifiedRun {
-  const { engine, ledger } = createPuzzleEngine(setup, sanitizeHandling(handling));
+  // Hoisted: the credit re-score below must replay under the very handling the
+  // run was judged with, and `sanitizeHandling` can move it.
+  const played = sanitizeHandling(handling);
+  const { engine, ledger } = createPuzzleEngine(setup, played);
   const placements: VerifiedPlacement[] = [];
   let toppedOut = false;
   let spentBeyondThePuzzle = false;
@@ -208,10 +212,19 @@ export function verifyRun(
 
   const lastPlacementFrame = placements[placements.length - 1]?.frame ?? firstInputFrame;
   const claimed = ((lastPlacementFrame - firstInputFrame) / FRAMES_PER_SECOND) * 1000;
+  // What the placements are worth, not what this particular route earned. On a
+  // polymer setup the same four squares score two different ways depending on
+  // the kick that reached them, and the puzzle's own target was derived from
+  // the better one — see `credit.ts`. Costs nothing on a run with no T-spin to
+  // recover, which is nearly every run.
+  const credited = creditPlacements(setup, played, placements);
+  const scored: VerifiedPlacement[] = credited
+    ? credited.map((placement, index) => ({ ...placements[index]!, ...placement }))
+    : placements;
   return {
-    attack: placements.reduce((total, placement) => total + placement.attack, 0),
-    placements,
-    clears: placements.flatMap((placement) => (placement.clear ? [placement.clear] : [])),
+    attack: total(scored),
+    placements: scored,
+    clears: clearsOf(scored),
     durationMs: Math.round(Math.max(claimed, placements.length * MIN_MS_PER_PIECE)),
     toppedOut,
   };

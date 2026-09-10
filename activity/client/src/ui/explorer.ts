@@ -33,8 +33,18 @@ export interface ExplorerCallbacks {
 
 export interface Explorer {
   readonly element: HTMLElement;
-  /** `locked` is whichever of today's tiers are still unplayed. */
-  update(entries: readonly ArchiveListing[], filter: ArchiveFilter, locked: ReadonlySet<number>): void;
+  /**
+   * @param locked whichever of today's tiers are still unplayed.
+   * @param cleared every puzzle this player has ever solved, however they
+   *   solved it. Ticked on the row, and the same set that decides whether a
+   *   puzzle will open its solutions once you are inside it.
+   */
+  update(
+    entries: readonly ArchiveListing[],
+    filter: ArchiveFilter,
+    locked: ReadonlySet<number>,
+    cleared: ReadonlySet<number>,
+  ): void;
 }
 
 function labelled(label: string, ...controls: (HTMLElement | string)[]): HTMLElement {
@@ -171,7 +181,7 @@ export function createExplorer(callbacks: ExplorerCallbacks): Explorer {
   let setSelect: HTMLSelectElement | null = null;
   let authorSelect: HTMLSelectElement | null = null;
 
-  function row(entry: ArchiveListing, locked: boolean): HTMLElement {
+  function row(entry: ArchiveListing, locked: boolean, cleared: boolean): HTMLElement {
     const rating = entry.difficulty > 0 ? `d${entry.difficulty}` : "unrated";
     const line = el(
       "button",
@@ -197,6 +207,17 @@ export function createExplorer(callbacks: ExplorerCallbacks): Explorer {
           : null,
       ),
       el("span", { class: "explore__meta", text: `${rating} · ${entry.pieces}p` }),
+      // A fourth column rather than a control beside the row. The row itself is
+      // the play button, HTML forbids a button inside a button, and a tick is
+      // not something to click anyway — it is a fact about the row it sits on.
+      // Always rendered, so every row has the same four columns and the titles
+      // line up whether or not anybody has solved anything.
+      el("span", {
+        class: `explore__solved${cleared ? " explore__solved--on" : ""}`,
+        text: cleared ? "✓" : "",
+        title: cleared ? "You have solved this one" : "",
+        attrs: cleared ? { "aria-label": "solved" } : { "aria-hidden": "true" },
+      }),
     );
     if (!locked) line.addEventListener("click", () => callbacks.onPlay(entry.id));
     return line;
@@ -204,7 +225,7 @@ export function createExplorer(callbacks: ExplorerCallbacks): Explorer {
 
   return {
     element,
-    update(entries, next, locked) {
+    update(entries, next, locked, cleared) {
       filter = next;
 
       if (!builtOptions && entries.length > 0) {
@@ -252,7 +273,9 @@ export function createExplorer(callbacks: ExplorerCallbacks): Explorer {
       }
       replaceChildren(
         list,
-        ...matches.slice(0, MAX_ROWS).map((entry) => row(entry, locked.has(entry.id))),
+        ...matches
+          .slice(0, MAX_ROWS)
+          .map((entry) => row(entry, locked.has(entry.id), cleared.has(entry.id))),
         matches.length > MAX_ROWS
           ? el("p", { class: "note", text: `…and ${matches.length - MAX_ROWS} more.` })
           : null,

@@ -93,15 +93,16 @@ comes back, so the two can never disagree about a score. Needs
 still registers and explains what is missing rather than failing shut.
 
 Once a day, after the puzzle turns over, the bot replies to that server's own
-`/puzzle` message with how yesterday went — who solved which of the three and
-how fast, who missed, and how long the server's run of solves is. It happens
+`/puzzle` message with how yesterday went — who solved which of the day's puzzles
+and how fast, who missed, and how long the server's run of solves is. It happens
 once per server per day, and only in servers that announced the puzzle in the
 first place, because the reply needs something to reply to.
 
 ### Versions, and how a server hears about them
 
-The bot carries a version — `beta 0.1` at the time of writing — in
-`client/changelog.py`, next to the list of what each one changed.
+The project carries a version — `beta 0.3` at the time of writing — in
+`changelog.json` at the repository root, next to the list of what each one changed.
+Read by the bot's `/puzzle` announcement, below.
 
 **A server is told the first time somebody runs `/puzzle` on a build it has not
 heard about**, as a plain message behind the puzzle embed. Not on a timer and
@@ -195,8 +196,8 @@ invocations still resolve and the picker looks unchanged.
 ## The daily puzzle activity
 
 `activity/` is a self-contained Bun + TypeScript app served as a Discord
-Activity: three puzzles a day from the club's archive — an easy, a medium and a
-hard — scored on the server by replaying the keys you actually pressed, plus a
+Activity: four puzzles a day from the club's archive — an easy, a medium, a
+hard and an extreme — scored on the server by replaying the keys you actually pressed, plus a
 five-minute puzzle rush, 1v1 duels, an explorer for the whole archive, and a
 builder that writes Blueprint codes for new puzzles.
 

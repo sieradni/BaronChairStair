@@ -9,7 +9,6 @@
 import type { ClearName } from "@shared/puzzle";
 import type { StoredRun } from "../api";
 import type { SolutionPlayer } from "../game/solution-player";
-import { pieceGlyph } from "../render/piece-glyph";
 import { el, formatDuration, panel, replaceChildren, stat } from "./dom";
 import { copyText, shareText, type ShareFields } from "./share";
 
@@ -63,11 +62,27 @@ export interface VerdictHandlers {
   readonly onToggleLeaderboard: () => void;
   readonly onPractice: () => void;
   readonly onBackToDaily: () => void;
+  /**
+   * Open the puzzle's solutions.
+   *
+   * Offered only once this player has solved this board — see
+   * {@link VerdictOptions.cleared}. Reading how other people did it is a reward
+   * for having done it, and a shortcut for anybody who has not.
+   */
+  readonly onSolutions: () => void;
 }
 
 export interface VerdictOptions {
   /** Practice puzzles are not filed, so they get no share slip or leaderboard. */
   readonly scored: boolean;
+  /**
+   * Whether this player has ever solved this puzzle — including just now.
+   *
+   * Not "did this run solve it": somebody replaying a puzzle they cracked last
+   * month should still be offered its solutions, and somebody who has just
+   * failed one they have never solved should not.
+   */
+  readonly cleared: boolean;
 }
 
 export interface VerdictPanel {
@@ -142,105 +157,20 @@ export function createVerdictPanel(handlers: VerdictHandlers): VerdictPanel {
             title: "Play one from the archive. Not recorded.",
             on: { click: () => handlers.onPractice() },
           }),
-        ),
-      );
-    },
-  };
-}
-
-// ── Solution walkthrough ─────────────────────────────────────────────────────
-
-export interface WalkthroughPanel {
-  readonly element: HTMLElement;
-  /**
-   * @param onChange called whenever the board behind this panel should be
-   *   redrawn. `stepped` is true only when the player moved the solution
-   *   themselves, and false for the first render that happens as the panel is
-   *   built. The caller needs the difference: the verdict badge
-   *   sits on the board, and it should survive landing on a solve and then get
-   *   out of the way the moment somebody starts stepping through it.
-   */
-  bind(player: SolutionPlayer, onChange: (stepped: boolean) => void): void;
-}
-
-const CLEAR_LABELS: Readonly<Record<ClearName, string>> = {
-  single: "single",
-  double: "double",
-  triple: "triple",
-  quad: "quad",
-  tss: "TSS",
-  tsd: "TSD",
-  tst: "TST",
-  tsmini: "T mini",
-  spin: "spin",
-  "perfect clear": "perfect clear",
-};
-
-export function createWalkthroughPanel(): WalkthroughPanel {
-  const body = el("div", { class: "walkthrough" });
-  const element = panel("Solution", {}, body);
-
-  return {
-    element,
-    bind(player, onChange) {
-      const stepLabel = el("span", { class: "walkthrough__step" });
-      const caption = el("div", { class: "walkthrough__caption" });
-
-      const render = (stepped: boolean) => {
-        const current = player.current;
-        stepLabel.textContent = `${Math.min(player.position + 1, player.stepCount)} / ${player.stepCount}`;
-        replaceChildren(
-          caption,
-          current
-            ? pieceGlyph(current.piece, { cell: 10 })
-            : el("span", { class: "label", text: "done" }),
-          current?.clear
-            ? el("span", {
-                class: "walkthrough__clear",
-                text: `${CLEAR_LABELS[current.clear]} +${current.attack}`,
+          // Last, and absent rather than disabled when it is not earned. A
+          // greyed control here would advertise that there is something to read
+          // and refuse to say what — which is worse than not mentioning it, and
+          // is itself a small reveal about a puzzle nobody has solved.
+          options.cleared
+            ? el("button", {
+                class: "btn",
+                text: "Solutions",
+                title: "Every way this puzzle has been solved, including yours.",
+                on: { click: () => handlers.onSolutions() },
               })
             : null,
-        );
-        onChange(stepped);
-      };
-
-      const control = (label: string, title: string, action: () => void) =>
-        el("button", {
-          class: "btn btn--small",
-          text: label,
-          title,
-          on: {
-            click: () => {
-              action();
-              render(true);
-            },
-          },
-        });
-
-      replaceChildren(
-        body,
-        el(
-          "div",
-          { class: "walkthrough__head" },
-          el("span", { class: "label", text: "step" }),
-          stepLabel,
         ),
-        caption,
-        el(
-          "div",
-          { class: "btnrow" },
-          control("◀", "Previous placement", () => player.previous()),
-          control("▶", "Next placement", () => player.next()),
-          control("↺", "Back to the start", () => player.reset()),
-        ),
-        el("p", {
-          class: "note",
-          text: "One solution on file — there may well be others.",
-        }),
       );
-      // Not a step: this is the panel drawing itself for the first time, and a
-      // result the player has not moved off yet.
-      render(false);
     },
   };
 }

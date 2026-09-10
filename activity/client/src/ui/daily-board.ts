@@ -77,7 +77,7 @@ function mark(row: Row, tier: DailyTier): HTMLElement {
   });
 }
 
-export function createDailyBoard(): DailyBoard {
+export function createDailyBoard(onOpen?: () => void): DailyBoard {
   // Seeded rather than blank: this card is on the front door from the moment
   // it mounts, and most mornings the fetch it is waiting on comes back empty.
   const note = el("p", { class: "note", text: EMPTY_DAY });
@@ -85,6 +85,30 @@ export function createDailyBoard(): DailyBoard {
   // renders inline and pushes the rest of the card off the bottom.
   const rows = el("div", { class: "board-list" });
   const element = panel("Leaderboard", {}, note, rows);
+
+  /*
+   * The whole card is the way through to every board.
+   *
+   * A card that lists the day's top few and cannot be opened is a dead end —
+   * and the page it leads to now carries seven boards this one is a slice of.
+   * `role="button"` with a key handler rather than a real `<button>`, because a
+   * button may not contain the list this card is mostly made of, and a card
+   * that is clickable only in its caption is a card nobody discovers.
+   */
+  if (onOpen) {
+    element.classList.add("panel--opens");
+    element.setAttribute("role", "button");
+    element.setAttribute("tabindex", "0");
+    element.setAttribute("aria-label", "Open every leaderboard");
+    element.title = "Every leaderboard — streaks, rush records, the archive";
+    element.addEventListener("click", () => onOpen());
+    element.addEventListener("keydown", (event) => {
+      // The two keys a `role="button"` is required to answer to.
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      onOpen();
+    });
+  }
 
   return {
     element,

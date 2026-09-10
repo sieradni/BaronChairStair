@@ -125,9 +125,12 @@ describe("the pointer adapter", () => {
     ) as unknown as typeof getComputedStyle;
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     globalThis.document = saved.document;
     globalThis.getComputedStyle = saved.getComputedStyle;
+    // Last hook in the file: happy-dom keeps its timers and its tree alive
+    // until told to stop.
+    await window.happyDOM.close();
   });
 
   /** happy-dom has no pointer capture; the adapter only sets it. */

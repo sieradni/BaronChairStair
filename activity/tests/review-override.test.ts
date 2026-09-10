@@ -478,6 +478,7 @@ describe("what a correction does to the row's solution counts", () => {
         events: null,
         handling: null,
         attack: 1,
+        targetAttack: 1,
         clears: strict ? ["double"] : [],
         solvedStrict: strict,
         source: "player",

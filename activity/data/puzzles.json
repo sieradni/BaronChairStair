@@ -4271,10 +4271,10 @@
     "T"
    ],
    "hold": null,
-   "targetAttack": 4,
+   "targetAttack": 6,
    "requiredClears": [
     {
-     "clear": "tsd",
+     "clear": "tst",
      "count": 1
     }
    ]

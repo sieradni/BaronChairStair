@@ -72,8 +72,11 @@ beforeAll(() => {
   builds = mkdtempSync(join(tmpdir(), "review-static-"));
 });
 
-afterAll(() => {
+afterAll(async () => {
   rmSync(builds, { recursive: true, force: true });
+  // happy-dom holds timers, observers and the whole tree until it is told to stop.
+  // Without this the window outlives the file and the process has no reason to exit.
+  await window.happyDOM.close();
 });
 
 describe("what /review serves", () => {

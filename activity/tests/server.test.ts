@@ -448,6 +448,7 @@ describe.skipIf(!hasSolutions)("what a solved run teaches the archive", () => {
         events: null,
         handling: null,
         attack: 999,
+        targetAttack: 999,
         clears: [],
         solvedStrict: true,
         source: "player",

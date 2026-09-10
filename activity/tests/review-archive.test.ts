@@ -51,9 +51,12 @@ beforeAll(() => {
   window.document.head.append(style);
 });
 
-afterAll(() => {
+afterAll(async () => {
   globalThis.document = saved.document;
   globalThis.window = saved.window;
+  // happy-dom holds timers, observers and the whole tree until it is told to stop.
+  // Without this the window outlives the file and the process has no reason to exit.
+  await window.happyDOM.close();
 });
 
 // ── Three puzzles: untouched, corrected, and a player's ──────────────────────

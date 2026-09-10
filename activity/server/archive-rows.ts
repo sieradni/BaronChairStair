@@ -258,11 +258,15 @@ export function runsAgainst(db: Database, puzzleId: number): number | null {
  * and clear names with no board in it, so the rows keep matching and no code
  * path anywhere re-validates them.
  *
- * Left alone they do active harm rather than merely going stale. They are shown
+ * Left live they do active harm rather than merely going stale. They are shown
  * to makers as the evidence for "is my clear requirement too loose", they
- * inflate the line counts on the review tool's archive tab, and the unique
- * index on (puzzle_id, canonical_key) means the next player to genuinely find
- * one of those lines on the *new* board is refused credit as a duplicate.
+ * inflate the line counts on the review tool's archive tab, and they hold their
+ * keys in the unique index — so the next player to genuinely find one of those
+ * lines on the *new* board would be refused credit as a duplicate.
+ *
+ * Counts the live rows only, which is exactly the set {@link voidDiscoveries}
+ * is about to retire. Rows an earlier edit already retired are not this edit's
+ * to report.
  */
 export function countDiscoveries(db: Database, puzzleId: number): number | null {
   const present = db
@@ -274,23 +278,43 @@ export function countDiscoveries(db: Database, puzzleId: number): number | null 
   return (
     db
       .query<{ n: number }, [number]>(
-        "SELECT COUNT(*) AS n FROM puzzle_solutions WHERE puzzle_id = ?1",
+        "SELECT COUNT(*) AS n FROM puzzle_solutions WHERE puzzle_id = ?1 AND voided_at IS NULL",
       )
       .get(puzzleId)?.n ?? 0
   );
 }
 
 /**
- * Deletes them. Separate from {@link countDiscoveries}, and called **last**.
+ * Retires them. Separate from {@link countDiscoveries}, and called **last**.
  *
- * This is the one statement in the edit path that destroys something nothing
- * else holds a copy of: the archive row can be re-synced from the sheet, but a
- * deleted discovery exists nowhere. Run first — as it was — a later throw
- * committed the deletion while the edit that justified it rolled back, and the
- * sync then printed "nothing was saved" over three destroyed rows.
+ * It used to remove the rows, and that made it the one statement in the edit
+ * path that destroyed something nothing else held a copy of — the archive row
+ * can be re-synced from the sheet, a discarded discovery exists nowhere. It is
+ * now a stamp, and that is the whole of the difference: **a player never loses
+ * credit for a line they found.** The claim dies, the finding does not.
+ *
+ * What the stamp still buys, all of which the old statement was really for:
+ *
+ * - a voided line is out of the maker's evidence, out of the review tool's
+ *   counts, and out of the "N distinct lines" a player is shown — every reader
+ *   of a live board filters on `voided_at IS NULL`.
+ * - the next player to genuinely find that line on the *new* board is credited
+ *   rather than refused as a duplicate, because the unique index is partial
+ *   over the live rows.
+ *
+ * Still called last, and the reason is unchanged: run first, a later throw
+ * committed this while the edit that justified it rolled back, and the sync
+ * printed "nothing was saved" over three retired rows.
+ *
+ * `AND voided_at IS NULL` so a second edit does not restamp rows the first one
+ * retired — the timestamp says when a line stopped describing its board, and
+ * moving it forward would lose that.
  */
 export function voidDiscoveries(db: Database, puzzleId: number): void {
-  db.run("DELETE FROM puzzle_solutions WHERE puzzle_id = ?1", [puzzleId]);
+  db.run("UPDATE puzzle_solutions SET voided_at = ?2 WHERE puzzle_id = ?1 AND voided_at IS NULL", [
+    puzzleId,
+    Date.now(),
+  ]);
 }
 
 /**
@@ -407,7 +431,8 @@ export interface ContentChange {
  *
  * Discovered alternate solutions are **voided** by an edit — see
  * {@link voidDiscoveries}. They are claims about a board, and the board has
- * moved; keeping them would deny the next genuine discoverer their credit.
+ * moved. Voided, not discarded: the line stops counting as a line on this
+ * puzzle, and the player who found it keeps the credit for having found it.
  *
  * Metadata is not content and flows through freely, including on published
  * rows: a corrected title or a filled-in difficulty rating is the sheet being
