@@ -24,6 +24,12 @@ import {
 import { createPuzzleEngine, readBoard, toLetter } from "@shared/tetris/engine";
 import type { Handling } from "@shared/tetris/handling";
 import { RoutePlanner, releaseTicks, ticksForRoute, type TargetCells } from "@shared/tetris/pathfinder";
+import {
+  clearsOf,
+  creditPlacements,
+  type ScoredPlacement,
+  total,
+} from "@shared/tetris/credit";
 import { nameClear } from "@shared/tetris/replay";
 import type { GameKey, InputEvent } from "@shared/tetris/verify";
 import { MAX_EVENTS, MAX_FRAMES } from "@shared/tetris/verify";
@@ -128,6 +134,19 @@ export class PuzzleRun {
   private attack = 0;
   private piecesPlaced = 0;
   private clears: ClearName[] = [];
+  /**
+   * Every placement the puzzle's own pieces have made, with what the engine
+   * gave it at the time.
+   *
+   * The verdict is taken on these rather than on the running totals, because
+   * the same squares can score two ways depending on the kick that reached
+   * them and the puzzle's target was set by the better one. See `credit.ts`.
+   */
+  private placed: ScoredPlacement[] = [];
+  /** Squares the falling piece is about to lock on, read on the way in. */
+  private cellsBeforeLock: TargetCells = [];
+  /** Whether {@link solved} has already re-scored the list as it now stands. */
+  private credited = false;
   private resets = 0;
   private firstInputFrame: number | null = null;
   /**
@@ -210,6 +229,10 @@ export class PuzzleRun {
     this.engine.events.on("falling.lock.pre", () => {
       if (this.trialing) return;
       this.pendingFlash = this.rowsAboutToClear();
+      // The falling piece is replaced before `falling.lock` fires, so its
+      // squares are read on the way in. They are what the run is credited on —
+      // see `credit.ts`.
+      this.cellsBeforeLock = this.engine.falling.absoluteBlocks.map(([x, y]) => [x, y] as const);
     });
     this.engine.events.on("falling.lock", (lock) => {
       if (this.trialing) return;
@@ -220,13 +243,21 @@ export class PuzzleRun {
       // A piece the ledger cannot account for is the engine's padding, not the
       // puzzle's. It never counts and it always ends the run.
       if (piece === null || piece === "G" || !this.ledger.spend(piece)) {
-        this.finish(solvesPuzzle(this.attack, this.clears, this.puzzle) ? "solved" : "failed");
+        this.finish(this.solved() ? "solved" : "failed");
         return;
       }
       this.piecesPlaced++;
-      this.attack += lock.garbage.reduce((total, value) => total + value, 0);
+      const attack = lock.garbage.reduce((total, value) => total + value, 0);
+      this.attack += attack;
       const clear = nameClear(lock, this.engine.board.perfectClear);
       if (clear) this.clears.push(clear);
+      // Kept so the verdict can be taken on the placements rather than on the
+      // route that reached them. Appended here, inside the ledger's own guard,
+      // so the engine's padding never joins the list.
+      this.placed.push({ piece, cells: this.cellsBeforeLock, clear, attack });
+      // A re-score is only ever as good as the list it reads, and the list has
+      // just grown.
+      this.credited = false;
       // Only a live placement moves the boundary. During a replay the log is
       // already whole, so `events.length` is its total rather than the
       // position reached — recording it would collapse every checkpoint onto
@@ -281,6 +312,8 @@ export class PuzzleRun {
     this.attack = 0;
     this.piecesPlaced = 0;
     this.clears = [];
+    this.placed = [];
+    this.credited = false;
     this.checkpoints = [];
     this.undone = [];
     this.firstInputFrame = null;
@@ -363,6 +396,8 @@ export class PuzzleRun {
     this.attack = 0;
     this.piecesPlaced = 0;
     this.clears = [];
+    this.placed = [];
+    this.credited = false;
     this.pending = [];
     // Folded from the log rather than emptied: `input` treats `held` as the
     // truth about what is down, so a set that disagrees with the log turns the
@@ -462,7 +497,7 @@ export class PuzzleRun {
     // continuing to accept input would leave the player driving a board whose
     // moves the server will never see.
     if (this.events.length >= MAX_EVENTS) {
-      this.finish(solvesPuzzle(this.attack, this.clears, this.puzzle) ? "solved" : "failed");
+      this.finish(this.solved() ? "solved" : "failed");
       return;
     }
 
@@ -580,7 +615,7 @@ export class PuzzleRun {
     // One rule from `input`, kept: a full log ends the attempt rather than
     // letting the player drive moves the server will never see.
     if (this.events.length + additions > MAX_EVENTS) {
-      this.finish(solvesPuzzle(this.attack, this.clears, this.puzzle) ? "solved" : "failed");
+      this.finish(this.solved() ? "solved" : "failed");
       return true;
     }
     // A slow soft drop spends real frames: its descent is held across as many
@@ -591,7 +626,7 @@ export class PuzzleRun {
     const lastBatch = batches[batches.length - 1];
     const lastFrame = lastBatch && lastBatch.length > 0 ? lastBatch[lastBatch.length - 1]!.frame : this.engine.frame;
     if (lastFrame > MAX_FRAMES) {
-      this.finish(solvesPuzzle(this.attack, this.clears, this.puzzle) ? "solved" : "failed");
+      this.finish(this.solved() ? "solved" : "failed");
       return true;
     }
     // Playing on after an undo is the player choosing this line over the one
@@ -731,8 +766,39 @@ export class PuzzleRun {
    * still outstanding, and ends when the pieces run out.
    */
   private checkForEnd(): void {
-    if (solvesPuzzle(this.attack, this.clears, this.puzzle)) this.finish("solved");
+    if (this.solved()) this.finish("solved");
     else if (this.ledger.remaining === 0) this.finish("failed");
+  }
+
+  /**
+   * Whether the run has solved the puzzle — the only question five different
+   * exits ask, and now the only place that answers it.
+   *
+   * A run that already solves as played is taken at its word and costs nothing.
+   * One that does not is re-scored on its placements first, because the same
+   * squares can be worth two different amounts depending on the kick that
+   * reached them and the puzzle's target was derived from the better one. See
+   * `credit.ts` for why that asymmetry existed and whom it punished.
+   *
+   * The re-score runs at most once per placement, and only on a run carrying a
+   * T that cleared lines without being credited a T-spin — so an ordinary run
+   * never pays for it. The credited totals replace the played ones outright:
+   * the meter, the results card and the sheet the server is sent must all say
+   * the same thing, and `creditPlacements` can only ever raise a score.
+   *
+   * This has to happen on the client at all, rather than being left to the
+   * server, because a run the client calls failed is never submitted.
+   */
+  private solved(): boolean {
+    if (solvesPuzzle(this.attack, this.clears, this.puzzle)) return true;
+    if (this.credited) return false;
+    this.credited = true;
+    const credited = creditPlacements(this.setup, this.handling, this.placed);
+    if (!credited) return false;
+    this.placed = credited;
+    this.attack = total(credited);
+    this.clears = clearsOf(credited);
+    return solvesPuzzle(this.attack, this.clears, this.puzzle);
   }
 
   private finish(phase: "solved" | "failed"): void {
