@@ -169,6 +169,11 @@ describe("finding every way a puzzle can be solved", () => {
     // way, and this test's whole job is to fail when the search stops measuring
     // below the instant setting. Three pieces, so it exhausts in about two
     // seconds even with every seat measured.
+    // The search below is allowed 20 seconds and usually wants about two. Bun's
+    // per-test default is five, so this test's own budget was four times the
+    // limit it ran under, and a loaded box tipped it over — twice on one deploy,
+    // by 47ms and by 410ms, while an isolated run passed both times. The
+    // timeout argument below makes the harness limit agree with the budget.
     const slow = { ...DEFAULT_HANDLING, sdf: 5 };
     const puzzle = puzzleOf({
       board: ["G.....GGGG", "G......GGG", "G.J...GGGG", "JJJ......."],
@@ -199,7 +204,7 @@ describe("finding every way a puzzle can be solved", () => {
         ).toBe(seats(line.placements[index]!.cells));
       });
     }
-  });
+  }, 30_000);
 
   test("a search that ran out says so, and never claims to have exhausted", () => {
     const stopped = searchSolutions(QUAD_WELL, { ...GENEROUS, maxNodes: 1 });
