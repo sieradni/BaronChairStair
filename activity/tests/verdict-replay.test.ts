@@ -26,8 +26,11 @@ beforeAll(() => {
   globalThis.document = window.document as unknown as Document;
 });
 
-afterAll(() => {
+afterAll(async () => {
   globalThis.document = saved.document;
+  // happy-dom holds timers, observers and the whole tree until it is told to stop.
+  // Without this the window outlives the file and the process has no reason to exit.
+  await window.happyDOM.close();
 });
 
 function fields(solved: boolean): ShareFields {
@@ -46,6 +49,7 @@ function panelWith() {
     onReplay: () => void fired.push("replay"),
     onToggleLeaderboard: () => void fired.push("leaderboard"),
     onPractice: () => void fired.push("practice"),
+    onSolutions: () => void fired.push("solutions"),
     onBackToDaily: () => void fired.push("daily"),
   };
   return { panel: createVerdictPanel(handlers), fired };
@@ -60,7 +64,7 @@ const press = (el: HTMLElement, label: string) =>
 describe("a solved sheet", () => {
   test("offers to play it again, and not to try again", () => {
     const { panel } = panelWith();
-    panel.update(fields(true), null, { scored: true });
+    panel.update(fields(true), null, { scored: true, cleared: false });
     const labels = buttons(panel.element);
     expect(labels).toContain("Play again");
     expect(labels).not.toContain("Try again");
@@ -68,14 +72,14 @@ describe("a solved sheet", () => {
 
   test("pressing it replays this puzzle rather than a random one", () => {
     const { panel, fired } = panelWith();
-    panel.update(fields(true), null, { scored: true });
+    panel.update(fields(true), null, { scored: true, cleared: false });
     press(panel.element, "Play again");
     expect(fired).toEqual(["replay"]);
   });
 
   test("says the filed run stands, so nobody expects a better time from it", () => {
     const { panel } = panelWith();
-    panel.update(fields(true), null, { scored: true });
+    panel.update(fields(true), null, { scored: true, cleared: false });
     const replay = [...panel.element.querySelectorAll("button")]
       .find((b) => b.textContent?.trim() === "Play again");
     expect(replay?.getAttribute("title") ?? "").toContain("not recorded");
@@ -85,7 +89,7 @@ describe("a solved sheet", () => {
 describe("a sheet that is still the player's to file", () => {
   test("offers to try again, and not to play again", () => {
     const { panel } = panelWith();
-    panel.update(fields(false), null, { scored: true });
+    panel.update(fields(false), null, { scored: true, cleared: false });
     const labels = buttons(panel.element);
     expect(labels).toContain("Try again");
     expect(labels).not.toContain("Play again");
@@ -93,7 +97,7 @@ describe("a sheet that is still the player's to file", () => {
 
   test("and 'Try again' still restarts the attempt rather than replaying", () => {
     const { panel, fired } = panelWith();
-    panel.update(fields(false), null, { scored: true });
+    panel.update(fields(false), null, { scored: true, cleared: false });
     press(panel.element, "Try again");
     expect(fired).toEqual(["retry"]);
   });
@@ -106,7 +110,7 @@ describe("an unscored practice run", () => {
    */
   test("a solved practice sheet can be played again too", () => {
     const { panel, fired } = panelWith();
-    panel.update(fields(true), null, { scored: false });
+    panel.update(fields(true), null, { scored: false, cleared: false });
     press(panel.element, "Play again");
     expect(fired).toEqual(["replay"]);
   });

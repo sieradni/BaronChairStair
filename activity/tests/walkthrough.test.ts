@@ -16,7 +16,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { BOARD_HEIGHT, type RowCode, type SolutionStep } from "../shared/puzzle";
 import { SolutionPlayer } from "../client/src/game/solution-player";
-import { createVerdictBadge, createWalkthroughPanel } from "../client/src/ui/results";
+import { createVerdictBadge } from "../client/src/ui/results";
+import { createSolutionsPanel } from "../client/src/ui/solutions";
 
 let window: Window;
 const saved = { document: globalThis.document };
@@ -28,8 +29,11 @@ beforeAll(() => {
   globalThis.document = window.document as unknown as Document;
 });
 
-afterAll(() => {
+afterAll(async () => {
   globalThis.document = saved.document;
+  // happy-dom holds timers, observers and the whole tree until it is told to stop.
+  // Without this the window outlives the file and the process has no reason to exit.
+  await window.happyDOM.close();
 });
 
 const BOARD: readonly RowCode[] = ["GGG...GGGG"];
@@ -43,14 +47,31 @@ const STEPS: readonly SolutionStep[] = [
 function bound() {
   const player = new SolutionPlayer({ board: BOARD }, STEPS, BOARD_HEIGHT);
   const seen: boolean[] = [];
-  const panel = createWalkthroughPanel();
+  const panel = createSolutionsPanel();
   panel.bind(player, (stepped) => void seen.push(stepped));
   return { panel, player, seen };
 }
 
-/** The walkthrough's controls, in the order the panel builds them. */
-function buttons(panel: { element: HTMLElement }): HTMLButtonElement[] {
-  return [...panel.element.querySelectorAll("button")] as unknown as HTMLButtonElement[];
+/**
+ * The transport, in the order the panel builds it: start, back, next, end.
+ *
+ * Scoped to `.replay__transport` and not to the panel, which is the whole point
+ * of this comment. It used to be every `button` in the panel, and once the
+ * timeline arrived the first entries were *ticks* — so `[previous, next,
+ * restart]` was really `[tick 1, tick 2, ⏮]` and the tests below passed by
+ * coincidence: clicking tick 2 seeks to placement 2, which is also what ▶ does
+ * from the start. They would have gone on passing through a reordered
+ * transport, or a deleted one.
+ */
+function transport(panel: { element: HTMLElement }): HTMLButtonElement[] {
+  return [
+    ...panel.element.querySelectorAll(".replay__transport button"),
+  ] as unknown as HTMLButtonElement[];
+}
+
+/** The timeline's ticks, which are buttons too and are not the transport. */
+function ticks(panel: { element: HTMLElement }): HTMLButtonElement[] {
+  return [...panel.element.querySelectorAll(".replay__tick")] as unknown as HTMLButtonElement[];
 }
 
 describe("stepping the solution", () => {
@@ -61,11 +82,11 @@ describe("stepping the solution", () => {
 
   test("every control reports a step", () => {
     const { panel, seen } = bound();
-    const [previous, next, restart] = buttons(panel);
+    const [start, previous, next] = transport(panel);
 
     next?.click();
     previous?.click();
-    restart?.click();
+    start?.click();
 
     // The first is the bind; the three after it are the presses.
     expect(seen).toEqual([false, true, true, true]);
@@ -73,10 +94,18 @@ describe("stepping the solution", () => {
 
   test("the board really moves, so the flag is not all that changed", () => {
     const { panel, player } = bound();
-    const [, next] = buttons(panel);
+    const [, , next] = transport(panel);
 
     expect(player.position).toBe(0);
     next?.click();
+    expect(player.position).toBe(1);
+  });
+
+  test("and the timeline moves it too, straight to the placement clicked", () => {
+    const { panel, player } = bound();
+
+    ticks(panel)[1]?.click();
+
     expect(player.position).toBe(1);
   });
 });
@@ -94,7 +123,7 @@ describe("the badge the flag is for", () => {
   function wired() {
     const player = new SolutionPlayer({ board: BOARD }, STEPS, BOARD_HEIGHT);
     const badge = createVerdictBadge();
-    const panel = createWalkthroughPanel();
+    const panel = createSolutionsPanel();
     // The same expression app.ts uses, deliberately duplicated rather than
     // imported: `App` boots a whole page on construction and cannot be built
     // here, so this is the closest honest stand-in.
@@ -115,18 +144,29 @@ describe("the badge the flag is for", () => {
     badge.show(true, "12 / 12 attack");
     expect(badge.element.hidden).toBe(false);
 
-    const [, next] = buttons(panel);
+    const [, , next] = transport(panel);
     next?.click();
 
     expect(badge.element.hidden).toBe(true);
   });
 
   test("every control clears it, not only the next one", () => {
-    for (const index of [0, 1, 2]) {
+    // All four, by name rather than by index, so a reordered transport fails
+    // here instead of quietly testing a different button.
+    for (const index of [0, 1, 2, 3]) {
       const { panel, badge } = wired();
       badge.show(true, "12 / 12 attack");
-      buttons(panel)[index]?.click();
+      transport(panel)[index]?.click();
       expect(badge.element.hidden).toBe(true);
     }
+  });
+
+  test("and so does the timeline", () => {
+    const { panel, badge } = wired();
+    badge.show(true, "12 / 12 attack");
+
+    ticks(panel)[1]?.click();
+
+    expect(badge.element.hidden).toBe(true);
   });
 });

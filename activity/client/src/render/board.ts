@@ -19,6 +19,15 @@ export interface BoardView {
   readonly activeInk: string | null;
   /** Where the active piece would land. */
   readonly ghost: readonly (readonly [number, number])[];
+  /**
+   * Ink for the ghost, when it is not the active piece's.
+   *
+   * While a run is being played the ghost *is* the falling piece's landing spot
+   * and shares its colour, which is why this was not needed. A replay draws the
+   * *next* placement as the ghost — a different piece, and drawing it in the
+   * current one's colour would be a lie about which is which.
+   */
+  readonly ghostInk?: string | null;
   /** Rows clearing this instant, drawn as a flash. */
   readonly flashRows: readonly number[];
   readonly flashStrength: number;
@@ -170,7 +179,7 @@ export class BoardRenderer {
 
     this.drawCard(fieldWidth, fieldHeight);
     this.drawGrid(rows, fieldWidth, fieldHeight);
-    this.drawGhost(view.ghost, rows, view.activeInk);
+    this.drawGhost(view.ghost, rows, view.ghostInk ?? view.activeInk);
     this.drawAim(view.aim, rows, view.activeInk);
     this.drawBlocks(collectBlocks(view, rows), rows);
     this.drawFlash(view.flashRows, rows, fieldWidth, view.flashStrength);
