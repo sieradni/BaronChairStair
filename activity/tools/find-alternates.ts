@@ -196,6 +196,7 @@ function fileLines(store: Store, verdict: Verdict): number {
       events: null,
       handling: null,
       attack: line.attack,
+      targetAttack: verdict.puzzle.targetAttack,
       clears: line.clears,
       solvedStrict: solvesPuzzle(line.attack, line.clears, verdict.puzzle),
       source: "enumerated",

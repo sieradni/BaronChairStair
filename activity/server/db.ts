@@ -406,6 +406,36 @@ CREATE TABLE IF NOT EXISTS rush_runs (
   PRIMARY KEY (day, player_id)
 );
 
+/*
+ * Which puzzles a player has ever solved, however they solved them.
+ *
+ * \`runs\` cannot answer this and was never meant to. It is keyed
+ * \`(day, player_id, slot)\` — one row per tier per day — so it knows what
+ * happened on a *day*, and a player who solves the same puzzle again next month
+ * in practice overwrites nothing and adds nothing. Practice never reached the
+ * server at all.
+ *
+ * This is the other question: has this person, ever, solved this board. It is
+ * what unlocks a puzzle's solutions gallery and what the Explore list ticks.
+ *
+ * \`first_at\` rather than a single timestamp because "when did you first get
+ * this" is the interesting fact and re-solving must not overwrite it.
+ * \`best_ms\` is the fastest solve on record, which is the number a profile
+ * wants; it is not a leaderboard and never sorted across players.
+ */
+CREATE TABLE IF NOT EXISTS puzzle_clears (
+  player_id TEXT    NOT NULL REFERENCES players(id),
+  puzzle_id INTEGER NOT NULL,
+  first_at  INTEGER NOT NULL,
+  last_at   INTEGER NOT NULL,
+  times     INTEGER NOT NULL,
+  best_ms   INTEGER NOT NULL,
+  PRIMARY KEY (player_id, puzzle_id)
+);
+
+-- Every read is "everything this player has cleared", for the Explore ticks and
+-- the profile. The primary key already leads on player_id, so no second index.
+
 CREATE INDEX IF NOT EXISTS rush_by_day ON rush_runs (day, guild_id);
 -- The all-time board asks a different question to the daily one: every run a
 -- player has ever filed, best first, rather than one day across everybody.
@@ -548,6 +578,9 @@ CREATE TABLE IF NOT EXISTS puzzle_solutions (
   events        TEXT,               -- JSON InputEvent[]; NULL for enumerated lines
   handling      TEXT,               -- JSON Handling; NULL for enumerated lines
   attack        INTEGER NOT NULL,
+  -- What the puzzle asked for when this was filed. Nullable only because rows
+  -- written before the column exist; every new row carries it.
+  target_attack INTEGER,
   clears        TEXT    NOT NULL,   -- JSON ClearName[]
   solved_strict INTEGER NOT NULL,
   -- 'reference' (the archive's own answer), 'enumerated' (found by the batch
@@ -555,16 +588,21 @@ CREATE TABLE IF NOT EXISTS puzzle_solutions (
   source        TEXT    NOT NULL,
   found_by      TEXT,               -- players.id, NULL unless source = 'player'
   guild_id      TEXT,
-  found_at      INTEGER NOT NULL
+  found_at      INTEGER NOT NULL,
+  -- When the board this line was played on stopped being that board, or NULL
+  -- while it still is. A content edit *voids* a puzzle's lines rather than
+  -- deleting them: the claim "these placements solve this position" dies with
+  -- the position, but the fact that somebody once found it does not, and the
+  -- discovery board is paid on the finding. See \`voidDiscoveries\`.
+  voided_at     INTEGER
 );
 
--- The dedup itself. A second player finding the same line hits this and is told
--- it is already known rather than credited again.
-CREATE UNIQUE INDEX IF NOT EXISTS puzzle_solutions_key
-  ON puzzle_solutions (puzzle_id, canonical_key);
 -- The leaderboard reads by finder; the maker view reads by puzzle.
 CREATE INDEX IF NOT EXISTS puzzle_solutions_finder ON puzzle_solutions (found_by);
 CREATE INDEX IF NOT EXISTS puzzle_solutions_puzzle ON puzzle_solutions (puzzle_id);
+-- The dedup index is *not* here: it is partial over \`voided_at IS NULL\`, and
+-- this runs against databases that do not have that column yet. It is created
+-- in the constructor, straight after the column is added.
 
 -- No foreign key on puzzle_id, for the reason day_puzzles gives: club puzzles
 -- live in a JSON file the build rewrites wholesale, not in a table, so there is
@@ -641,6 +679,15 @@ export interface NewSolution {
   readonly events: readonly InputEvent[] | null;
   readonly handling: Handling | null;
   readonly attack: number;
+  /**
+   * The bar the puzzle set when this line was filed.
+   *
+   * Stored rather than looked up, for the reason `runs.target_attack` is: a
+   * puzzle's target moves when an officer edits it, and "did this line send
+   * more than was asked" is a question about what was asked *then*. It is the
+   * second half of {@link countsAsAlternate}, which is what the board pays on.
+   */
+  readonly targetAttack: number;
   readonly clears: readonly ClearName[];
   /** Whether it met the puzzle's required clears when it was filed. */
   readonly solvedStrict: boolean;
@@ -692,6 +739,28 @@ function toStoredSolution(row: StoredSolutionRow): StoredSolution {
     foundBy: row.found_by,
     foundAt: row.found_at,
   };
+}
+
+/**
+ * One line in a puzzle's solutions gallery: a way somebody solved it.
+ *
+ * Carries the placements, because the whole point is stepping it on the board.
+ * It does **not** carry the input log — that is 8 KB a row, it is only there so
+ * a discovery can be re-proved later, and nothing on the front end replays
+ * keystrokes.
+ */
+export interface GalleryLine {
+  readonly solutionId: number;
+  readonly placements: readonly SolutionStep[];
+  readonly attack: number;
+  readonly clears: readonly ClearName[];
+  /** 'reference' is the maker's own answer; 'player' is somebody's find. */
+  readonly source: SolutionSource;
+  /** Who found it. Null for the maker's answer, which belongs to nobody. */
+  readonly finder: PlayerProfile | null;
+  readonly foundAt: number;
+  /** Whether it met the clears the goal names, as judged when it was filed. */
+  readonly solvedStrict: boolean;
 }
 
 /** One line of the discovery board. */
@@ -757,6 +826,74 @@ const RUN_COLUMNS = `
   runs.pieces_placed, runs.clears, runs.created_at
 `;
 
+/**
+ * What a row has to be for its finder to be paid for it, as one clause.
+ *
+ * Written once because the board and a player's own standing must agree
+ * exactly: a rank counted under a different predicate from the board it is a
+ * rank *in* is not wrong in some rare case, it is wrong whenever they differ.
+ * Every query using it aliases `puzzle_solutions` as `s`.
+ *
+ * The last clause is `countsAsAlternate` in SQL — solved it, *or* sent more
+ * attack than it was asked for. `tests/alternate-solution.test.ts` runs the
+ * function and this string against one table of cases, because a board cannot
+ * call the function per row and two spellings of one rule drift.
+ *
+ * `attack > target_attack` is NULL, and so false, on a row filed before that
+ * column existed. Those fall back to the solve, which is what they were
+ * credited on when they were written — the honest answer rather than a
+ * backfilled guess at a target that may since have moved.
+ *
+ * Note what is absent: `voided_at`. Credit outlives the board it was earned on
+ * — see the column.
+ */
+const CREDITED =
+  "s.source = 'player' AND s.found_by IS NOT NULL " +
+  "AND (s.solved_strict = 1 OR s.attack > s.target_attack)";
+
+/** The live rows: the ones still describing a board that exists. */
+const LIVE = "voided_at IS NULL";
+
+/**
+ * The streak a player is on now, walking back from `today`.
+ *
+ * `days` arrives newest-first and already distinct. The rule is `Store.streak`'s
+ * and is copied rather than shared because that one answers for a single player
+ * over a `LIMIT 400` query and this one reduces every player at once — but the
+ * *rule* must not differ, so it is written out here in the same shape.
+ */
+function currentStreak(days: readonly number[], today: number): number {
+  let streak = 0;
+  let expected = today;
+  for (const day of days) {
+    if (day === expected) {
+      streak++;
+      expected--;
+    } else if (day === expected - 1 && streak === 0) {
+      // Today not yet played does not break a streak; a missed day does.
+      streak++;
+      expected = day - 1;
+    } else {
+      break;
+    }
+  }
+  return streak;
+}
+
+/** The longest run of consecutive days they ever put together. */
+function bestStreak(days: readonly number[]): number {
+  let best = 0;
+  let run = 0;
+  let previous: number | null = null;
+  // Newest-first, so consecutive means each day is one less than the last.
+  for (const day of days) {
+    run = previous !== null && day === previous - 1 ? run + 1 : 1;
+    previous = day;
+    if (run > best) best = run;
+  }
+  return best;
+}
+
 export class Store {
   private readonly db: Database;
 
@@ -793,8 +930,9 @@ export class Store {
     // against a database that may not have that column yet.
     //
     // A board is one day, one guild, one tier, ordered. Without the slot and
-    // the sort columns each of the three boards walks the whole day and
-    // rebuilds the same sort — measured at 281us for the three, 83us with it.
+    // the sort columns every per-tier board walks the whole day and rebuilds the
+    // same sort — measured at 281us for three of them, 83us with it, before a
+    // fourth tier existed to make the gap wider.
     this.db.run(
       "CREATE INDEX IF NOT EXISTS runs_board ON runs (day, guild_id, slot, solved DESC, total_ms ASC)",
     );
@@ -828,6 +966,44 @@ export class Store {
       // record. Null means "not recorded", and `rushPoolFor` reads that as the
       // instruction to fall back.
     );
+    this.addMissingColumn(
+      "puzzle_solutions",
+      "target_attack",
+      "INTEGER",
+      // Deliberately no backfill. The value wanted is the target the puzzle set
+      // on the day the line was filed, and this process cannot know it — the
+      // archive holds today's, which an officer may have moved since. NULL
+      // means "not recorded", and `CREDITED` reads that as the row standing on
+      // its solve alone, which is what it was credited on when it was written.
+    );
+    this.addMissingColumn(
+      "puzzle_solutions",
+      "voided_at",
+      "INTEGER",
+      // Deliberately no backfill. Every row that exists when this column
+      // arrives is a live claim about the board its puzzle currently has —
+      // `voidDiscoveries` used to delete the ones that were not, so there is no
+      // population of already-dead rows to find. NULL is the truth for all of
+      // them.
+    );
+    // After the column, and in this order. Both statements are no-ops on a
+    // database that has already run them.
+    //
+    // The old index covered every row, which is what made deletion the only
+    // possible way to void: a kept row went on holding its key, so the next
+    // player to genuinely find that line on the *new* board was refused as a
+    // duplicate. Partial over the live rows, a voided row keeps its credit and
+    // stops standing in anyone's way.
+    this.db.run("DROP INDEX IF EXISTS puzzle_solutions_key");
+    this.db.run(
+      `CREATE UNIQUE INDEX IF NOT EXISTS puzzle_solutions_live_key
+         ON puzzle_solutions (puzzle_id, canonical_key) WHERE voided_at IS NULL`,
+    );
+    // Every daily solve already on file becomes a clear. Practice cannot be
+    // recovered — it never reached the server — so a player's count starts at
+    // whatever their dailies earned them, which is the honest floor rather than
+    // a guess.
+    this.backfillClears();
     // Last, because it writes rows rather than shapes, and it must find every
     // table it touches already built.
     if (pastDays) this.pinPastDays(pastDays);
@@ -940,7 +1116,7 @@ export class Store {
    * a day would still be swallowed by the conflict clause.
    *
    * Existing rows become 'legacy' rather than being guessed into a tier. They
-   * were filed against a day's single puzzle, which is not one of the three
+   * were filed against a day's single puzzle, which is not one of the puzzles
    * that day now deals, and calling one of them "the easy one" would be a
    * fabrication that then shows up on a leaderboard. They still count for
    * streaks and totals, which ask only whether a day was solved.
@@ -1008,15 +1184,21 @@ export class Store {
    * `changes === 1`, and the loser is told it is already known rather than
    * credited for somebody else's discovery. Written as SELECT-then-INSERT it
    * would be a race, and the race would hand out the credit twice.
+   *
+   * The `WHERE voided_at IS NULL` repeats the index's own predicate, which is
+   * not decoration: SQLite matches an upsert to a *partial* index only when the
+   * conflict target carries the same predicate, and without it this statement
+   * fails at runtime with "ON CONFLICT clause does not match any PRIMARY KEY or
+   * UNIQUE constraint" rather than falling back to something weaker.
    */
   recordSolution(entry: NewSolution): { solutionId: number | null; discovered: boolean } {
     const written = this.db
       .query(
         `INSERT INTO puzzle_solutions
            (puzzle_id, canonical_key, key_version, placements, events, handling,
-            attack, clears, solved_strict, source, found_by, guild_id, found_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
-         ON CONFLICT (puzzle_id, canonical_key) DO NOTHING`,
+            attack, target_attack, clears, solved_strict, source, found_by, guild_id, found_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+         ON CONFLICT (puzzle_id, canonical_key) WHERE voided_at IS NULL DO NOTHING`,
       )
       .run(
         entry.puzzleId,
@@ -1026,6 +1208,7 @@ export class Store {
         entry.events === null ? null : JSON.stringify(entry.events),
         entry.handling === null ? null : JSON.stringify(entry.handling),
         entry.attack,
+        entry.targetAttack,
         JSON.stringify(entry.clears),
         entry.solvedStrict ? 1 : 0,
         entry.source,
@@ -1040,39 +1223,52 @@ export class Store {
   }
 
   /**
-   * Who has discovered the most, best first.
+   * Who has found the most alternate lines, best first. **One board, for
+   * everybody.**
    *
-   * The anti-farm rules live in this query rather than in a stored `credited`
-   * flag, so they can be retuned without a backfill and without re-crediting
-   * anybody. Three of them:
+   * The only board here that is not a guild's. Every other one answers "how did
+   * this club do today", which is a question about a club; this one answers
+   * "who has found lines nobody had", which is a question about the archive —
+   * and the archive is one archive however many servers play it. Scoped per
+   * guild it also read as a lie the moment somebody played the same puzzle in
+   * two servers: `guild_id` records where a line was *filed*, so the same
+   * player's own finds were split across boards that each showed a fraction of
+   * their total.
    *
-   * - only `source = 'player'` counts. The archive's own answers and everything
-   *   the batch enumerator turns up belong to nobody.
-   * - one credit per player per puzzle, ever. Without it a single player who
-   *   scripts variants takes every slot on a loose puzzle — and the archive has
-   *   loose puzzles: #123's enforceable condition is `attack >= 2`, and an
-   *   incomplete search of that four-piece puzzle already found 31 distinct
-   *   lines.
-   * - only lines that met the puzzle's required clears. A discovery that misses
-   *   the goal is evidence for a puzzle maker, not a point.
+   * What counts, and what does not:
+   *
+   * - only `source = 'player'`. The archive's own answers and everything the
+   *   batch enumerator turns up belong to nobody.
+   * - only lines that count as alternate solutions: they solved the puzzle, or
+   *   they sent more attack than it asked for. A line that merely *reaches* the
+   *   target while missing the clears the goal names is evidence for a puzzle
+   *   maker, not a point. See `countsAsAlternate`, which `CREDITED` mirrors.
+   * - **every distinct line**, including several on one puzzle. The unique
+   *   index is the only dedup: find the same line twice and it is one row.
+   * - voided rows still pay. A puzzle edited under a player does not take back
+   *   what they found — see the column, and {@link voidDiscoveries}.
+   *
+   * The cost of counting per line rather than per puzzle, stated plainly: a
+   * loose puzzle can carry somebody. #123's enforceable condition is
+   * `attack >= 2`, and an incomplete search of that four-piece puzzle already
+   * turned up 31 distinct lines, so a player who works one of those has a much
+   * cheaper route up this board than a player who finds one line each on 31
+   * puzzles. That is the trade the board was asked for; the rules above are
+   * still what stop it being a measure of who plays most.
    */
-  discoveryBoard(guildId: string | null, limit = 25): DiscoveryRow[] {
-    const scoped = guildId === null ? "" : "AND s.guild_id = ?2";
+  discoveryBoard(limit = 25): DiscoveryRow[] {
     return this.db
-      .query<{ id: string; username: string; avatar_url: string | null; found: number; latest: number }, never[]>(
+      .query<{ id: string; username: string; avatar_url: string | null; found: number; latest: number }, [number]>(
         `SELECT p.id, p.username, p.avatar_url,
                 COUNT(*) AS found, MAX(s.found_at) AS latest
-           FROM (SELECT puzzle_id, found_by, guild_id, MIN(found_at) AS found_at
-                   FROM puzzle_solutions
-                  WHERE source = 'player' AND found_by IS NOT NULL AND solved_strict = 1
-                  GROUP BY puzzle_id, found_by) AS s
+           FROM puzzle_solutions s
            JOIN players p ON p.id = s.found_by
-          WHERE 1 = 1 ${scoped}
+          WHERE ${CREDITED}
           GROUP BY p.id
           ORDER BY found DESC, latest ASC
           LIMIT ?1`,
       )
-      .all(...(guildId === null ? [limit] : [limit, guildId]) as never[])
+      .all(limit)
       .map((row) => ({
         player: { id: row.id, username: row.username, avatarUrl: row.avatar_url },
         found: row.found,
@@ -1080,13 +1276,104 @@ export class Store {
       }));
   }
 
-  /** Every distinct line on record for one puzzle. The maker's view. */
+  /**
+   * The lines one player has found, newest first.
+   *
+   * Counted under exactly {@link CREDITED} — the same clause the discovery
+   * board pays on — because this list sits under the number that board
+   * produced. A list that disagrees with the count above it is worse than no
+   * list, and this codebase has already been bitten once by a count and its
+   * contents drifting apart.
+   *
+   * `voided_at` comes back rather than being filtered: an edited puzzle does
+   * not take back what somebody found, so the row still belongs here — but the
+   * line describes a board that no longer exists and cannot be opened, which is
+   * a difference the reader has to be told about.
+   *
+   * The puzzle's title is not here because it is not in this database. The
+   * archive is a JSON file the build rewrites wholesale; the route joins them.
+   */
+  discoveriesBy(playerId: string, limit = 25): {
+    puzzleId: number;
+    attack: number;
+    clears: ClearName[];
+    foundAt: number;
+    voided: boolean;
+  }[] {
+    return this.db
+      .query<
+        { puzzle_id: number; attack: number; clears: string; found_at: number; voided: number },
+        [string, number]
+      >(
+        `SELECT s.puzzle_id, s.attack, s.clears, s.found_at,
+                CASE WHEN s.voided_at IS NULL THEN 0 ELSE 1 END AS voided
+           FROM puzzle_solutions s
+          WHERE ${CREDITED} AND s.found_by = ?1
+          ORDER BY s.found_at DESC, s.solution_id DESC
+          LIMIT ?2`,
+      )
+      .all(playerId, limit)
+      .map((row) => ({
+        puzzleId: row.puzzle_id,
+        attack: row.attack,
+        clears: JSON.parse(row.clears) as ClearName[],
+        foundAt: row.found_at,
+        voided: row.voided === 1,
+      }));
+  }
+
+  /**
+   * Where one player stands, whether or not they are on the board.
+   *
+   * A guild board could be read for your own name; a board of everybody who has
+   * ever played cannot, and twenty-five rows of strangers with no line for the
+   * person reading them is the shape that makes a leaderboard feel closed. The
+   * rank is "how many people are ahead of me" plus one, counted the same way
+   * the board orders — so somebody tied with the last visible row reads as tied
+   * rather than as one worse.
+   *
+   * Null when they have found nothing: there is no rank to be had, and a
+   * "#391 — 0 lines" is worse than the invitation the empty board already
+   * carries.
+   */
+  discoveryStanding(playerId: string): { rank: number; found: number } | null {
+    const mine = this.db
+      .query<{ found: number; latest: number }, [string]>(
+        `SELECT COUNT(*) AS found, MAX(found_at) AS latest
+           FROM puzzle_solutions s
+          WHERE ${CREDITED} AND s.found_by = ?1`,
+      )
+      .get(playerId);
+    if (!mine || mine.found === 0) return null;
+    // Strictly ahead: more lines, or the same number reached sooner — the
+    // board's own `found DESC, latest ASC`.
+    const ahead =
+      this.db
+        .query<{ n: number }, [number, number]>(
+          `SELECT COUNT(*) AS n FROM (
+             SELECT COUNT(*) AS found, MAX(found_at) AS latest
+               FROM puzzle_solutions s
+              WHERE ${CREDITED}
+              GROUP BY s.found_by
+             HAVING found > ?1 OR (found = ?1 AND latest < ?2))`,
+        )
+        .get(mine.found, mine.latest)?.n ?? 0;
+    return { rank: ahead + 1, found: mine.found };
+  }
+
+  /**
+   * Every distinct line on record for one puzzle. The maker's view.
+   *
+   * Live rows only. A maker reads these to answer "is my clear requirement too
+   * loose", and a line played on a board that has since been edited answers
+   * that question about a board they are no longer looking at.
+   */
   solutionsFor(puzzleId: number): StoredSolution[] {
     return this.db
       .query<StoredSolutionRow, [number]>(
         `SELECT solution_id, puzzle_id, canonical_key, key_version, placements, attack,
                 clears, solved_strict, source, found_by, found_at
-           FROM puzzle_solutions WHERE puzzle_id = ?1 ORDER BY found_at ASC`,
+           FROM puzzle_solutions WHERE puzzle_id = ?1 AND ${LIVE} ORDER BY found_at ASC`,
       )
       .all(puzzleId)
       .map(toStoredSolution);
@@ -1127,19 +1414,297 @@ export class Store {
     return (
       this.db
         .query<{ n: number }, [number]>(
-          `SELECT COUNT(*) AS n FROM puzzle_solutions WHERE puzzle_id = ?1`,
+          `SELECT COUNT(*) AS n FROM puzzle_solutions WHERE puzzle_id = ?1 AND ${LIVE}`,
         )
         .get(puzzleId)?.n ?? 0
     );
   }
 
-  /** How many distinct lines each puzzle has, and how many miss its goal. */
+  /**
+   * Turns the daily runs already on file into clears, once.
+   *
+   * `runs` is keyed by day, so a player who solved the same puzzle on two days
+   * has two rows and wants one clear — hence the `GROUP BY`. `total_ms` is zero
+   * on rows written before that column existed, and `NULLIF` keeps those out of
+   * the minimum rather than letting them win it; a puzzle whose every row is
+   * legacy comes through with `best_ms = 0`, which the profile already reads as
+   * "no time recorded".
+   *
+   * `INSERT OR IGNORE` and no update clause, so this is a no-op on every boot
+   * after the first and can never overwrite a `first_at` a real solve improved.
+   */
+  private backfillClears(): void {
+    this.db.run(
+      `INSERT OR IGNORE INTO puzzle_clears (player_id, puzzle_id, first_at, last_at, times, best_ms)
+       SELECT player_id, puzzle_id, MIN(created_at), MAX(created_at), COUNT(*),
+              COALESCE(MIN(NULLIF(total_ms, 0)), 0)
+         FROM runs
+        WHERE solved = 1
+        GROUP BY player_id, puzzle_id`,
+    );
+  }
+
+  /**
+   * Records that a player solved a puzzle. Idempotent by design, not by luck.
+   *
+   * Called from all three places a solve can happen — the daily submit, each
+   * puzzle a rush solved, and a practice run — so it is written far more often
+   * than it changes anything. `first_at` survives every re-solve, because "when
+   * did you first crack this" is the fact worth keeping and the upsert would
+   * otherwise quietly move it every time somebody replayed a favourite.
+   *
+   * `best_ms` takes the minimum, and a zero is treated as no time at all: a
+   * legacy row can carry `total_ms = 0`, and letting that win would put an
+   * unbeatable 0:00.0 on a profile forever.
+   */
+  recordClear(entry: { playerId: string; puzzleId: number; durationMs: number }): void {
+    const now = Date.now();
+    const ms = entry.durationMs > 0 ? entry.durationMs : 0;
+    this.db.run(
+      `INSERT INTO puzzle_clears (player_id, puzzle_id, first_at, last_at, times, best_ms)
+       VALUES (?1, ?2, ?3, ?3, 1, ?4)
+       ON CONFLICT (player_id, puzzle_id) DO UPDATE SET
+         last_at = excluded.last_at,
+         times   = puzzle_clears.times + 1,
+         best_ms = CASE
+           WHEN puzzle_clears.best_ms = 0 THEN excluded.best_ms
+           WHEN excluded.best_ms = 0      THEN puzzle_clears.best_ms
+           ELSE MIN(puzzle_clears.best_ms, excluded.best_ms)
+         END`,
+      [entry.playerId, entry.puzzleId, now, ms],
+    );
+  }
+
+  /**
+   * Who has solved the most of the archive, all time and every server.
+   *
+   * Global for the same reason the discovery board is: how much of the archive
+   * somebody has worked through is a fact about them and the archive, not about
+   * whichever server they happened to open it in — and `puzzle_clears` has no
+   * guild on it at all, because a solve counts wherever it happened.
+   *
+   * Ties broken by who got there first. Somebody who reached forty puzzles last
+   * month is ahead of somebody who reached forty this morning, which is the
+   * only ordering that does not shuffle under people as new players arrive.
+   */
+  clearsBoard(limit = 25): { player: PlayerProfile; cleared: number; latestAt: number }[] {
+    return this.db
+      .query<
+        { id: string; username: string; avatar_url: string | null; n: number; latest: number },
+        [number]
+      >(
+        `SELECT p.id, p.username, p.avatar_url,
+                COUNT(*) AS n, MAX(c.first_at) AS latest
+           FROM puzzle_clears c
+           JOIN players p ON p.id = c.player_id
+          GROUP BY p.id
+          ORDER BY n DESC, latest ASC
+          LIMIT ?1`,
+      )
+      .all(limit)
+      .map((row) => ({
+        player: { id: row.id, username: row.username, avatarUrl: row.avatar_url },
+        cleared: row.n,
+        latestAt: row.latest,
+      }));
+  }
+
+  /**
+   * One player by id, for a profile opened from somebody else's row.
+   *
+   * Null rather than a throw for a player this box has never seen: an id can
+   * reach here from a stale board on a client that has been open a while, and
+   * "no such player" is an answer rather than a fault.
+   */
+  playerNamed(id: string): PlayerProfile | null {
+    const row = this.db
+      .query<{ id: string; username: string; avatar_url: string | null }, [string]>(
+        "SELECT id, username, avatar_url FROM players WHERE id = ?1",
+      )
+      .get(id);
+    return row ? { id: row.id, username: row.username, avatarUrl: row.avatar_url } : null;
+  }
+
+  /** Whether this player has ever solved this puzzle. The gallery's gate. */
+  hasCleared(playerId: string, puzzleId: number): boolean {
+    return (
+      this.db
+        .query<{ n: number }, [string, number]>(
+          "SELECT COUNT(*) AS n FROM puzzle_clears WHERE player_id = ?1 AND puzzle_id = ?2",
+        )
+        .get(playerId, puzzleId)?.n === 1
+    );
+  }
+
+  /**
+   * Every puzzle this player has solved. The Explore list's ticks.
+   *
+   * The whole set in one query rather than a lookup per row: the explorer draws
+   * up to 200 rows and the set is at most 138 integers.
+   */
+  clearedPuzzleIds(playerId: string): Set<number> {
+    return new Set(
+      this.db
+        .query<{ puzzle_id: number }, [string]>(
+          "SELECT puzzle_id FROM puzzle_clears WHERE player_id = ?1",
+        )
+        .all(playerId)
+        .map((row) => row.puzzle_id),
+    );
+  }
+
+  /**
+   * What a player has done, for their profile.
+   *
+   * Deliberately several small aggregates rather than one join: they come from
+   * four unrelated tables, and a single query would be a four-way join whose
+   * shape nobody could read in order to check it.
+   *
+   * `secondsPlayed` counts *solved* time only, from `puzzle_clears.best_ms`.
+   * Summing every attempt would mean a profile ticked up while somebody left a
+   * tab open, which is a number that flatters rather than informs.
+   */
+  profile(playerId: string): {
+    puzzlesCleared: number;
+    clearsTotal: number;
+    bestMsTotal: number;
+    rushSolved: number;
+    rushRuns: number;
+    bestRush: number;
+    discoveries: number;
+  } {
+    const clears = this.db
+      .query<{ n: number; times: number; ms: number }, [string]>(
+        `SELECT COUNT(*) AS n, COALESCE(SUM(times), 0) AS times, COALESCE(SUM(best_ms), 0) AS ms
+           FROM puzzle_clears WHERE player_id = ?1`,
+      )
+      .get(playerId);
+    const rush = this.db
+      .query<{ solved: number; runs: number; best: number }, [string]>(
+        `SELECT COALESCE(SUM(solved), 0) AS solved, COUNT(*) AS runs,
+                COALESCE(MAX(solved), 0) AS best
+           FROM rush_runs WHERE player_id = ?1`,
+      )
+      .get(playerId);
+    const found = this.db
+      .query<{ n: number }, [string]>(
+        `SELECT COUNT(*) AS n FROM puzzle_solutions s WHERE ${CREDITED} AND s.found_by = ?1`,
+      )
+      .get(playerId);
+
+    return {
+      puzzlesCleared: clears?.n ?? 0,
+      clearsTotal: clears?.times ?? 0,
+      bestMsTotal: clears?.ms ?? 0,
+      rushSolved: rush?.solved ?? 0,
+      rushRuns: rush?.runs ?? 0,
+      bestRush: rush?.best ?? 0,
+      discoveries: found?.n ?? 0,
+    };
+  }
+
+  /**
+   * Every way this puzzle has been solved that a player could want to look at.
+   *
+   * The maker's own answer first, then everybody else's oldest-first — the
+   * order the gallery reads in, so the front end sorts nothing and cannot grow
+   * a second opinion about whose line comes first. Being first to find a line
+   * is the thing worth showing, and it never changes afterwards.
+   *
+   * Live rows only, for the reason {@link solutionsFor} gives: a line played on
+   * a board that has since been edited is not a line on the puzzle sitting
+   * there now. The finder keeps their credit on the discovery board either way.
+   *
+   * **Enumerated lines are left out.** They were found by `find-alternates`
+   * grinding through the search space, not by a person, and #123 alone has 31
+   * of them — a gallery of "what other people came up with" that is mostly a
+   * machine's output is not the thing anybody asked to see. They stay in the
+   * table, where the maker's tools read them.
+   *
+   * The input log is deliberately not selected: 8 KB a row, and nothing that
+   * draws a board needs it.
+   */
+  solutionGallery(puzzleId: number): GalleryLine[] {
+    return this.db
+      .query<
+        {
+          solution_id: number;
+          placements: string;
+          attack: number;
+          clears: string;
+          source: string;
+          found_at: number;
+          solved_strict: number;
+          finder_id: string | null;
+          username: string | null;
+          avatar_url: string | null;
+        },
+        [number]
+      >(
+        `SELECT s.solution_id, s.placements, s.attack, s.clears, s.source, s.found_at,
+                s.solved_strict, s.found_by AS finder_id, p.username, p.avatar_url
+           FROM puzzle_solutions s
+           LEFT JOIN players p ON p.id = s.found_by
+          WHERE s.puzzle_id = ?1 AND s.${LIVE} AND s.source IN ('reference', 'player')
+          ORDER BY s.source = 'reference' DESC, s.found_at ASC, s.solution_id ASC`,
+      )
+      .all(puzzleId)
+      .map((row) => ({
+        solutionId: row.solution_id,
+        placements: JSON.parse(row.placements) as SolutionStep[],
+        attack: row.attack,
+        clears: JSON.parse(row.clears) as ClearName[],
+        source: row.source as SolutionSource,
+        // A player row whose `players` entry is missing reads as unattributed
+        // rather than as a row with a blank name. It cannot happen — the
+        // foreign key is the session's own player — but a gallery that renders
+        // `undefined` where a name goes is worse than one that says nothing.
+        finder:
+          row.finder_id !== null && row.username !== null
+            ? { id: row.finder_id, username: row.username, avatarUrl: row.avatar_url }
+            : null,
+        foundAt: row.found_at,
+        solvedStrict: row.solved_strict === 1,
+      }));
+  }
+
+  /**
+   * How many lines each puzzle's gallery holds, for the whole archive at once.
+   *
+   * One query rather than one per row: the explorer draws up to 200 puzzles and
+   * asking per row would be 200 round trips through the same table.
+   *
+   * Counted under exactly {@link solutionGallery}'s predicate, because it is
+   * the number printed beside a row that opens that gallery — a count that
+   * disagrees with what the gallery then shows is worse than no count.
+   */
+  galleryCounts(): Map<number, number> {
+    return new Map(
+      this.db
+        .query<{ puzzle_id: number; n: number }, []>(
+          `SELECT puzzle_id, COUNT(*) AS n
+             FROM puzzle_solutions s
+            WHERE s.${LIVE} AND s.source IN ('reference', 'player')
+            GROUP BY puzzle_id`,
+        )
+        .all()
+        .map((row) => [row.puzzle_id, row.n] as const),
+    );
+  }
+
+  /**
+   * How many distinct lines each puzzle has, and how many miss its goal.
+   *
+   * Live rows only, for the reason {@link solutionsFor} gives: this is the
+   * count beside a puzzle in the review tool, and a voided line is not a line
+   * on the puzzle sitting there now.
+   */
   solutionCounts(): SolutionCount[] {
     return this.db
       .query<{ puzzle_id: number; total: number; missing_goal: number }, []>(
         `SELECT puzzle_id, COUNT(*) AS total,
                 SUM(CASE WHEN solved_strict = 0 THEN 1 ELSE 0 END) AS missing_goal
-           FROM puzzle_solutions GROUP BY puzzle_id ORDER BY total DESC`,
+           FROM puzzle_solutions WHERE ${LIVE} GROUP BY puzzle_id ORDER BY total DESC`,
       )
       .all()
       .map((row) => ({
@@ -1267,8 +1832,156 @@ export class Store {
    * matters because a miss can be upgraded by a later solve.
    *
    * 'legacy' rows are excluded. They were filed against a day's single puzzle,
-   * which is none of the three that day deals now.
+   * which is none of the ones that day deals now.
    */
+  /**
+   * Everybody's daily record: solves, days, and both streaks.
+   *
+   * One query and one pass, rather than three boards each walking `runs` and
+   * `streak()` being asked once per player. The table is one row per player per
+   * tier per day, so the whole history of a club is a few thousand rows —
+   * cheaper to reduce here than to make the database do it three times.
+   *
+   * **The streak rule is `streak()`'s, deliberately copied**: a missed day
+   * breaks it, and *today not yet played does not* — a player who solved
+   * yesterday and has not opened today still has their streak. If these two
+   * ever disagree, the number on a player's own profile and the number ranking
+   * them on a board would differ, which is the kind of thing nobody reports and
+   * everybody notices.
+   *
+   * Not guild-scoped, because neither `streak` nor `totalSolved` is: a daily is
+   * the same daily wherever it was played, and a streak that reset when
+   * somebody solved from another server would be a lie about their habit.
+   */
+  dailyRecords(today: number): {
+    player: PlayerProfile;
+    solves: number;
+    days: number;
+    current: number;
+    best: number;
+  }[] {
+    const rows = this.db
+      .query<
+        { id: string; username: string; avatar_url: string | null; day: number; n: number },
+        []
+      >(
+        `SELECT r.player_id AS id, p.username, p.avatar_url, r.day AS day, COUNT(*) AS n
+           FROM runs r JOIN players p ON p.id = r.player_id
+          WHERE r.solved = 1
+          GROUP BY r.player_id, r.day
+          ORDER BY r.player_id, r.day DESC`,
+      )
+      .all();
+
+    const byPlayer = new Map<
+      string,
+      { player: PlayerProfile; solves: number; days: number[] }
+    >();
+    for (const row of rows) {
+      const seen = byPlayer.get(row.id) ?? {
+        player: { id: row.id, username: row.username, avatarUrl: row.avatar_url },
+        solves: 0,
+        days: [],
+      };
+      seen.solves += row.n;
+      seen.days.push(row.day);
+      byPlayer.set(row.id, seen);
+    }
+
+    return [...byPlayer.values()].map((one) => ({
+      player: one.player,
+      solves: one.solves,
+      days: one.days.length,
+      current: currentStreak(one.days, today),
+      best: bestStreak(one.days),
+    }));
+  }
+
+  /**
+   * How each of today's tiers landed, as a field.
+   *
+   * The one question nothing else here can answer: "was I the only one who
+   * could not do the extreme?" Every existing board is a ranking, and a ranking
+   * has no denominator — the day board is `LIMIT 25` and drops the per-tier
+   * marks on the way through the leaderboards normaliser.
+   *
+   * **Counts, not a rate.** One solve out of one hand-in is a hundred per cent,
+   * and this board is a single Discord server most of the time.
+   *
+   * Hand-ins, not attempts: a `runs` row exists only once somebody files, so
+   * anybody who opened a tier and walked away is in none of these. The page
+   * says so, because a reader will otherwise take `filed` for "played".
+   */
+  dailyTierStats(day: number, guildId: string | null): Record<DailyTier, { filed: number; solved: number }> {
+    const rows = this.db
+      .query<{ slot: string; filed: number; solved: number }, [number, string | null]>(
+        `SELECT runs.slot AS slot, COUNT(*) AS filed, SUM(runs.solved) AS solved
+           FROM runs
+          WHERE runs.day = ?1 AND (?2 IS NULL OR runs.guild_id = ?2)
+            AND runs.slot IN ('easy', 'medium', 'hard', 'extreme')
+          GROUP BY runs.slot`,
+      )
+      .all(day, guildId);
+
+    const out = {} as Record<DailyTier, { filed: number; solved: number }>;
+    for (const tier of DAILY_TIERS) out[tier] = { filed: 0, solved: 0 };
+    for (const row of rows) {
+      const tier = row.slot as DailyTier;
+      if (out[tier]) out[tier] = { filed: row.filed, solved: row.solved };
+    }
+    return out;
+  }
+
+  /**
+   * Where one player stands on today's board, and how big the field is.
+   *
+   * `dayBoard` is `LIMIT 25`, so a player outside it sees a list with no line
+   * for themselves and no way to tell whether they are 26th or 200th. Ordered
+   * exactly as `dayBoard` orders — solved descending, then total time — because
+   * a rank counted under a different rule from the board it is a rank *in* is
+   * wrong whenever the two differ.
+   *
+   * Null when they have filed nothing today: there is no rank to have, and
+   * "0th of 52" is worse than the sentence the page prints instead.
+   */
+  dayStanding(
+    day: number,
+    guildId: string | null,
+    playerId: string,
+  ): { rank: number; of: number; solved: number; totalMs: number } | null {
+    const totals = `
+      SELECT runs.player_id AS id,
+             SUM(runs.solved) AS solved,
+             SUM(CASE WHEN runs.solved = 1 THEN runs.total_ms ELSE 0 END) AS totalMs
+        FROM runs
+       WHERE runs.day = ?1 AND (?2 IS NULL OR runs.guild_id = ?2)
+         AND runs.slot IN ('easy', 'medium', 'hard', 'extreme')
+       GROUP BY runs.player_id`;
+
+    const mine = this.db
+      .query<{ solved: number; totalMs: number }, [number, string | null, string]>(
+        `SELECT solved, totalMs FROM (${totals}) WHERE id = ?3`,
+      )
+      .get(day, guildId, playerId);
+    if (!mine) return null;
+
+    const field = this.db
+      .query<{ n: number }, [number, string | null]>(
+        `SELECT COUNT(*) AS n FROM (${totals})`,
+      )
+      .get(day, guildId)?.n ?? 0;
+
+    // Strictly ahead, so a tie reads as a tie rather than as one worse.
+    const ahead = this.db
+      .query<{ n: number }, [number, string | null, number, number]>(
+        `SELECT COUNT(*) AS n FROM (${totals})
+          WHERE solved > ?3 OR (solved = ?3 AND totalMs < ?4)`,
+      )
+      .get(day, guildId, mine.solved, mine.totalMs)?.n ?? 0;
+
+    return { rank: ahead + 1, of: field, solved: mine.solved, totalMs: mine.totalMs };
+  }
+
   dayBoard(day: number, guildId: string | null, limit = 25): DayBoardRow[] {
     const rows = this.db
       .query<DayBoardRaw, [number, string | null, number]>(

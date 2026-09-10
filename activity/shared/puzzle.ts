@@ -325,6 +325,34 @@ export function solvesPuzzle(
   );
 }
 
+/**
+ * Whether a line is worth crediting its finder with — an *alternate solution*.
+ *
+ * Two ways in, and the second is the point:
+ *
+ * - it **solves the puzzle**: the attack target and every clear the goal names.
+ * - or it **sends more attack than the puzzle asked for**, whatever it cleared
+ *   getting there. A line that reaches the target without the named clears is
+ *   not a solve and never will be; a line that goes *past* the target has done
+ *   something the reference answer did not, and is a find rather than a near
+ *   miss.
+ *
+ * Strictly more, not `>=`: at exactly the target a line that missed the clears
+ * has matched the reference on the only axis it beat it on, which is the
+ * near-miss case this deliberately still excludes.
+ *
+ * `server/db.ts` mirrors this in SQL, because a board cannot call a function
+ * per row — `CREDITED` there, and `tests/alternate-solution.test.ts` runs the
+ * two against one table of cases so they cannot drift.
+ */
+export function countsAsAlternate(
+  attack: number,
+  clears: readonly ClearName[],
+  puzzle: Pick<Puzzle, "targetAttack" | "requiredClears">,
+): boolean {
+  return solvesPuzzle(attack, clears, puzzle) || attack > puzzle.targetAttack;
+}
+
 /** Total pieces a player may place — the queue, plus anything pre-held. */
 export function pieceBudget(puzzle: Pick<Puzzle, "queue" | "hold">): number {
   return puzzle.queue.length + (puzzle.hold ? 1 : 0);
