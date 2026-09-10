@@ -30,7 +30,7 @@ Two things changed underneath that matter to a deployment:
 1. **The build now produces two pages**, `dist/index.html` and
    `dist/review/index.html`. A deploy script that checks only the first will
    pass while `/review` silently serves the game instead.
-2. **A day's three puzzles and its rush pool are now recorded in SQLite** the
+2. **A day's puzzles and its rush pool are now recorded in SQLite** the
    first time anyone asks for them, rather than derived from the archive on
    every request. That is what lets the archive grow without changing which
    puzzle was "day 200". It brings one ordering rule, below, and it is the only

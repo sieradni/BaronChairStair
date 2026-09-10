@@ -11,8 +11,13 @@ The rule under test, in one sentence: **a server hears about every version it
 has not heard about, exactly once.**
 """
 
+import contextlib
+import io
+import json
 import sqlite3
+import tempfile
 import unittest
+from pathlib import Path
 
 import changelog
 from changelog import Release
@@ -219,6 +224,96 @@ class ClaimingOnce(unittest.TestCase):
 
     def test_a_server_nobody_has_told_reads_as_none_not_as_an_error(self):
         self.assertIsNone(changelog.seen_version(self.db, 404))
+
+
+class LoadingTheNotes(unittest.TestCase):
+    """
+    The notes are one file, shared with the activity.
+
+    A copy in this module and a copy in the activity is the drift the whole
+    arrangement exists to prevent, so the file is the source and this is what
+    happens when it is not there or not readable. It must never raise:
+    `discord_bot.py` imports this module at top level, outside any `try`, so a
+    throw here is a bot that will not start over a changelog.
+    """
+
+    def write(self, body):
+        path = Path(self.dir.name) / "changelog.json"
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def load_quietly(self, path):
+        """Loads, swallowing the stderr note so the test output stays readable."""
+        with contextlib.redirect_stderr(io.StringIO()) as noise:
+            releases = changelog.load_releases(path)
+        return releases, noise.getvalue()
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_the_file_that_ships_is_the_one_this_build_announces(self):
+        # Not a fixture: the real file, read the real way. It is the only thing
+        # that proves the bot and the activity are reading the same notes.
+        self.assertTrue(changelog.CHANGELOG_PATH.is_file(), changelog.CHANGELOG_PATH)
+        self.assertTrue(changelog.RELEASES, "the shipped changelog.json parsed as empty")
+        self.assertEqual(changelog.VERSION, changelog.RELEASES[0].version)
+
+    def test_releases_come_back_in_file_order(self):
+        path = self.write(json.dumps({"releases": [
+            {"version": "beta 0.9", "changes": ["newest"]},
+            {"version": "beta 0.1", "changes": ["oldest"]},
+        ]}))
+        self.assertEqual([r.version for r in changelog.load_releases(path)],
+                         ["beta 0.9", "beta 0.1"])
+
+    def test_a_missing_file_is_no_announcements_rather_than_a_dead_bot(self):
+        releases, noise = self.load_quietly(Path(self.dir.name) / "nothing.json")
+        self.assertEqual(releases, ())
+        self.assertIn("announcements are off", noise)
+
+    def test_a_malformed_file_is_the_same(self):
+        releases, _ = self.load_quietly(self.write("{not json"))
+        self.assertEqual(releases, ())
+
+    def test_a_file_with_no_releases_key_is_the_same(self):
+        releases, _ = self.load_quietly(self.write(json.dumps({"version": "beta 0.2"})))
+        self.assertEqual(releases, ())
+
+    def test_one_bad_release_is_skipped_and_the_rest_are_kept(self):
+        # A hand-edited file with one line wrong should cost that line, not the
+        # whole announcement.
+        releases, noise = self.load_quietly(self.write(json.dumps({"releases": [
+            {"version": "beta 0.2"},
+            {"version": "beta 0.1", "changes": ["fine"]},
+        ]})))
+        self.assertEqual([r.version for r in releases], ["beta 0.1"])
+        self.assertIn("malformed", noise)
+
+
+class NothingToAnnounce(unittest.TestCase):
+    """What the bot does when the notes could not be read at all."""
+
+    def setUp(self):
+        self.db = sqlite3.connect(":memory:")
+        changelog.init_db(self.db)
+        self._real = changelog.RELEASES
+        changelog.RELEASES = ()
+
+    def tearDown(self):
+        changelog.RELEASES = self._real
+        self.db.close()
+
+    def test_it_says_nothing(self):
+        self.assertEqual(changelog.announcement_for(self.db, 1, "unknown"), "")
+
+    def test_and_claims_nothing(self):
+        # The row must be untouched. Recording "unknown" would make the next
+        # real release look like an upgrade from a version that never existed.
+        changelog.announcement_for(self.db, 1, "unknown")
+        self.assertIsNone(changelog.seen_version(self.db, 1))
 
 
 if __name__ == "__main__":

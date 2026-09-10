@@ -50,11 +50,17 @@ whether a *specific* change reached the bundle. Use them; a restart is not a dep
 
 ## A player-visible change needs a release note, and nothing will remind you
 
-`client/changelog.py` is both the version and the changelog: `RELEASES` is a
-newest-first tuple, `VERSION` is just `RELEASES[0].version`, and shipping a version
-means putting a new `Release` at the top. `/puzzle` announces to a server every
-version it has not been told about, so the note is how players find out anything
-changed.
+`changelog.json` at the repository root is both the version and the changelog:
+`releases` is a newest-first list, the version is just the first entry's, and shipping
+a version means putting a new entry at the top of that file.
+
+`/puzzle` announces to a server every version it has not been told about, so the note
+is how players find out anything changed.
+
+It is a JSON file rather than a Python literal because the activity briefly showed the
+same notes on its own front screen. That card is gone — eight release notes pushed the
+day itself off the bottom of the screen — but the file stays where it is: one list, in
+one place, read by the half that announces it.
 
 **Add one whenever a change is visible to a player.** The file's own rule for what
 counts: "Refactored the planner" is not a change to announce; "the drag lands where
@@ -65,17 +71,22 @@ This is the easiest rule in the repository to skip, because skipping it breaks
 nothing. No test fails, no deploy stops, the bot simply goes quiet and players are
 never told. It has already happened: **seven merged PRs — #58 through #64 — shipped
 four daily tiers, a restored answer walkthrough, a confirmation on "Hand it in" and
-three fixed player-facing bugs, and not one of them touched `changelog.py`.** The
-whole lot had to be written up afterwards as `beta 0.2`, from the git log, by
-somebody guessing what a player would have noticed.
+three fixed player-facing bugs, and not one of them wrote a note.** The whole lot had
+to be written up afterwards as `beta 0.2`, from the git log, by somebody guessing what
+a player would have noticed.
 
 Write the note in the same commit as the change, while you still know what a player
 would see.
 
-There is only one version, and it is that tuple. `activity/package.json` carries a
-`"version": "1.0.0"` that nothing reads — do not bump it and do not go looking for a
-second place. (`preferences.version` and `SETTINGS_VERSION` are schema versions for
-stored data, unrelated to what the bot announces.)
+There is only one version, and it is the top of that file. `activity/package.json`
+carries a `"version": "1.0.0"` that nothing reads — do not bump it and do not go
+looking for a second place. (`preferences.version` and `SETTINGS_VERSION` are schema
+versions for stored data, unrelated to what the bot announces.)
+
+Nothing will stop you shipping without a note: a missing or malformed
+`changelog.json` costs the announcement and the bot starts anyway. That is deliberate
+— a changelog must never be what keeps the bot from booting — and it is also why
+nothing will remind you.
 
 ## Decisions that are not yours to make
 

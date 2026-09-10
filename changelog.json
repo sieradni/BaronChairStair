@@ -1,0 +1,41 @@
+{
+  "$comment": "The project's version and its player-facing release notes. Newest first; order in this list IS the version order. Read by client/changelog.py (the bot's /puzzle announcement) and by activity/server/changelog.ts (the What's new card inside the activity). Adding a release means putting it at the top. Keep `changes` to things a player can see.",
+  "releases": [
+    {
+      "version": "beta 0.3",
+      "changes": [
+        "**A leaderboards page.** Seven boards — today, rush records, daily solves, current and longest-ever streaks, archive progress, and lines nobody had found. Every name on them opens that player's profile.",
+        "**A profile**, behind your own picture in the top right: what you have solved, how long it took, your rush totals, your streak, and every alternate line you have found.",
+        "**Explore ticks the puzzles you have solved**, and every solve counts — a daily, a rush puzzle, or one from Explore. Practice used to vanish the moment you closed it.",
+        "**A puzzle's solutions open from inside it, once you have solved it**: every recorded way through, who found each one, and what it sent. Puzzles you have not solved keep their answers to themselves.",
+        "**Reading a solution back is a timeline**, with a mark on every placement that clears lines, arrow keys to step, and the next piece shown as a ghost.",
+        "**Discoveries is one board**, every server, all time — and **every line you find counts** rather than one per puzzle. A line counts if it solves the puzzle or sends more attack than it asked for.",
+        "Editing a puzzle no longer takes back credit for a line somebody found on it.",
+        "**Four puzzles that could not be solved from the keyboard now can be.** On a polymer T-spin the same squares score two ways depending on the kick you rotated in on, and dragging quietly took the good one. #3, #6, #17 and #92.",
+        "**#115 “twirl” asks for the TST it always said it did**, rather than enforcing a TSD and refusing the one line its goal describes."
+      ]
+    },
+    {
+      "version": "beta 0.2",
+      "changes": [
+        "The day now holds **four** puzzles, not three: a new **extreme** tier above hard, for the ones rated five squares and up.",
+        "Solved a puzzle? The walkthrough of the answer is back. It had been coming up empty on the live server, which was a missing file rather than a missing feature.",
+        "**Hand it in** asks before it ends a rush. It files the run and discards the puzzles left in it, and there is no undo.",
+        "Finding a line nobody had found is credited properly. Playing the puzzle's own intended solution no longer reports a discovery.",
+        "Finishing a daily no longer says the sheet could not be filed when it was filed, scored, and already on the board.",
+        "Holding at the end of the queue no longer hands you a tetromino the puzzle never offered.",
+        "A puzzle's required clears now come from its own recorded answer, so the line its maker played is always one that counts."
+      ]
+    },
+    {
+      "version": "beta 0.1",
+      "changes": [
+        "Puzzles can now require the clears their goal names — a goal that says \"2 TSDs\" is no longer satisfied by any line that reaches the attack target.",
+        "Your progress toward those clears shows on the board while you play.",
+        "Solved a daily? **Play again** replays it unscored, so your filed run stands.",
+        "The **Solved!** stamp now clears itself once there is a solution to read.",
+        "`/report` now answers in the channel rather than only to whoever sent it, and allows 15 reports an hour instead of 3."
+      ]
+    }
+  ]
+}

@@ -11,13 +11,22 @@ The one rule everything here follows: **a server is told about every version it
 has not been told about**, not just the newest one. Production pulls whenever
 somebody deploys, which may be several versions after the last deploy, and a
 changelog that only ever described the tip would silently skip the middle.
+
+The notes themselves are **not** in this file. They live in `changelog.json` at
+the repository root, because the activity shows them too — on its own front
+screen, to the players who press Join and never type `/puzzle`. Two copies of a
+list somebody has to remember to update is the drift CLAUDE.md opens by warning
+about, and the copy nobody is looking at is the one that goes stale.
 """
 
 from __future__ import annotations
 
+import json
 import sqlite3
+import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -29,49 +38,59 @@ class Release:
     changes: tuple[str, ...]
 
 
-#: Newest first. Order in this tuple *is* the version order, deliberately:
-#: comparing "beta 0.10" against "beta 0.9" as text is wrong and as numbers is a
-#: parser nobody needs. Adding a release means putting it at the top.
-#:
-#: Keep `changes` to things a player can see. "Refactored the planner" is not a
-#: change to announce; "the drag lands where the preview showed" is.
-RELEASES: tuple[Release, ...] = (
-    Release(
-        version="beta 0.2",
-        changes=(
-            "The day now holds **four** puzzles, not three: a new **extreme** tier "
-            "above hard, for the ones rated five squares and up.",
-            "Solved a puzzle? The walkthrough of the answer is back. It had been "
-            "coming up empty on the live server, which was a missing file rather "
-            "than a missing feature.",
-            "**Hand it in** asks before it ends a rush. It files the run and "
-            "discards the puzzles left in it, and there is no undo.",
-            "Finding a line nobody had found is credited properly. Playing the "
-            "puzzle's own intended solution no longer reports a discovery.",
-            "Finishing a daily no longer says the sheet could not be filed when it "
-            "was filed, scored, and already on the board.",
-            "Holding at the end of the queue no longer hands you a tetromino the "
-            "puzzle never offered.",
-            "A puzzle's required clears now come from its own recorded answer, so "
-            "the line its maker played is always one that counts.",
-        ),
-    ),
-    Release(
-        version="beta 0.1",
-        changes=(
-            "Puzzles can now require the clears their goal names — a goal that says "
-            "\"2 TSDs\" is no longer satisfied by any line that reaches the attack target.",
-            "Your progress toward those clears shows on the board while you play.",
-            "Solved a daily? **Play again** replays it unscored, so your filed run stands.",
-            "The **Solved!** stamp now clears itself once there is a solution to read.",
-            "`/report` now answers in the channel rather than only to whoever sent it, "
-            "and allows 15 reports an hour instead of 3.",
-        ),
-    ),
-)
+#: Where the notes live. Beside this file's *project*, not beside this file:
+#: `client/` is half of a repository the activity shares.
+CHANGELOG_PATH = Path(__file__).resolve().parent.parent / "changelog.json"
+
+
+def load_releases(path: Path = CHANGELOG_PATH) -> tuple[Release, ...]:
+    """
+    Reads the notes off disk, newest first.
+
+    Order in the file *is* the version order, deliberately: comparing
+    "beta 0.10" against "beta 0.9" as text is wrong and as numbers is a parser
+    nobody needs. Adding a release means putting it at the top of the file.
+
+    Keep `changes` to things a player can see. "Refactored the planner" is not a
+    change to announce; "the drag lands where the preview showed" is.
+
+    **Never raises.** A missing or malformed file means no announcements, said
+    on stderr, and the bot starts anyway. `discord_bot.py` imports this module
+    at top level and not inside a `try`, so raising here would take the whole
+    bot down over a changelog — which is the one feature in the repository that
+    breaks nothing when it is absent.
+    """
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        entries = raw["releases"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(f"changelog: cannot read {path} ({exc}); announcements are off",
+              file=sys.stderr)
+        return ()
+
+    releases: list[Release] = []
+    for entry in entries:
+        try:
+            version = str(entry["version"])
+            changes = tuple(str(line) for line in entry["changes"])
+        except (KeyError, TypeError) as exc:
+            print(f"changelog: skipping a malformed release in {path} ({exc})",
+                  file=sys.stderr)
+            continue
+        releases.append(Release(version=version, changes=changes))
+    return tuple(releases)
+
+
+#: Newest first. Read once, at import, like the rest of this module's data.
+RELEASES: tuple[Release, ...] = load_releases()
 
 #: What this build is. Read by `/puzzle` and by whatever announces a deploy.
-VERSION: str = RELEASES[0].version
+#:
+#: `"unknown"` only when the notes could not be read at all, which
+#: `load_releases` has already said on stderr. Nothing announces under that name
+#: — `announcement_for` refuses before it claims — so it never reaches a channel
+#: and never lands in `bot_versions` to be compared against later.
+VERSION: str = RELEASES[0].version if RELEASES else "unknown"
 
 #: How many releases one message will spell out in full.
 #:
@@ -234,7 +253,14 @@ def announcement_for(
     The message this server should see now, or `""` if it should see nothing.
 
     Claims as it goes, so calling it twice announces once.
+
+    With no notes on disk there is nothing to announce and, more to the point,
+    nothing that may be *claimed*: recording `"unknown"` against a server would
+    make the next real release look like an upgrade from a version that never
+    existed. Returning early leaves the row exactly as it was.
     """
+    if not RELEASES:
+        return ""
     claimed, previously = claim_announcement(db, guild_id, version)
     if not claimed:
         return ""
