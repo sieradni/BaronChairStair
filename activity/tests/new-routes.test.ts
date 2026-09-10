@@ -16,7 +16,6 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { archive } from "./archive";
 import { DEFAULT_HANDLING } from "../shared/tetris/handling";
-import { GUEST_ID } from "../server/http";
 
 const DB = join(tmpdir(), `puzzle-routes-${process.pid}.sqlite`);
 let fetchApp: (request: Request) => Response | Promise<Response>;
