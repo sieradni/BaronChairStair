@@ -27,8 +27,11 @@ beforeAll(() => {
   globalThis.document = window.document as unknown as Document;
 });
 
-afterAll(() => {
+afterAll(async () => {
   globalThis.document = saved.document;
+  // happy-dom holds timers, observers and the whole tree until it is told to stop.
+  // Without this the window outlives the file and the process has no reason to exit.
+  await window.happyDOM.close();
 });
 
 /** The app's own rule, reproduced: show, then clear after the linger. */
