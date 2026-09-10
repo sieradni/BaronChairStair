@@ -164,8 +164,22 @@ describe("the day's three survive the archive growing", () => {
 
     const after = open(grownPath);
     try {
+      // The invariant: the pinned day still calls that puzzle its easy one.
       expect(after.schedule.tierOfDay(day, easy)).toBe("easy");
-      expect(after.archive.tierOfDay(day, easy)).toBeNull();
+
+      // The control, and the reason the assertion above is not vacuous: the
+      // untouched derivation really does move.
+      //
+      // Asked across the finished days rather than of *today* alone. Today is
+      // one draw from a rotation over a growing pool, and on some day numbers
+      // it lands on the same puzzle either way — which made this fail on those
+      // days for a reason that had nothing to do with what it tests. Its
+      // sibling above already counts across days for exactly this reason; this
+      // one did not, and paid for it.
+      const moved = finishedDays(after.archive).filter(
+        (each) => after.archive.tierOfDay(each, after.schedule.forTier(each, "easy").id) === null,
+      ).length;
+      expect(moved).toBeGreaterThan(0);
     } finally {
       after.store.close();
     }

@@ -114,6 +114,27 @@
 }
 
 /*
+ * The reader's own standing, when they are too far down to be on the board.
+ *
+ * A second one-row list under the first rather than a row appended to it: it is
+ * not the next place along, and inside `.board-list` it would read as one. The
+ * rule above it says so — a hairline and a gap are the whole separation, and
+ * are cheaper than a caption for one row.
+ *
+ * Never scrolls and never reserves height, so a board that does not need it
+ * gives up nothing: it is `hidden` when there is no standing to show, and
+ * tokens.css's `[hidden] { display: none !important }` is what makes that stick
+ * over the `display: grid` this inherits from `.board-list`.
+ */
+.board-list--self-only {
+  max-height: none;
+  overflow: visible;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--ink-line);
+}
+
+/*
  * The day's board carries a fourth column: the three marks, sitting with the
  * score at the end of the row. Without its own template those marks land in
  * the name's column and the score wraps onto a line of its own — the row stops
@@ -122,6 +143,49 @@
 .board-list__row--marks {
   grid-template-columns: 20px minmax(0, 1fr) auto auto;
 }
+
+/* ── Solutions gallery ────────────────────────────────────────────────────── */
+
+/*
+ * The list of ways a puzzle has been solved, above its stepper.
+ *
+ * Shorter than a leaderboard on purpose: it shares the rail with the goal and
+ * the meter, and the stepper under it is the part being used. Past four or five
+ * lines it scrolls, which is the point at which a puzzle has enough answers
+ * that reading them all at once was never the plan.
+ */
+.solutions__list { max-height: 132px; }
+
+/*
+ * Rows are buttons here, unlike every other `.board-list`. `.board-list__row`
+ * is drawn for a `div`, so the three properties a button brings of its own —
+ * its border, its font and its centred text — have to be put back.
+ */
+.solutions__row {
+  width: 100%;
+  border: var(--edge) solid transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.solutions__row:hover { background: var(--cream-shade); }
+
+/*
+ * The line currently on the board.
+ *
+ * An outline rather than a fill, because `--self` already fills with `--sun`
+ * and a player looking at their own line would otherwise have no way to tell
+ * "this is mine" from "this is the one showing". They are different facts and
+ * both are worth having at once.
+ */
+.solutions__row--on {
+  border-color: var(--ink);
+  background: var(--cream-shade);
+}
+
+.solutions__steps { display: grid; }
 
 /* ── Solution walkthrough ─────────────────────────────────────────────────── */
 
@@ -369,3 +433,126 @@
 }
 
 .fatal__detail { margin: 0; font-size: 13px; color: var(--ink-soft); max-width: 44ch; }
+
+/* ── Replay ───────────────────────────────────────────────────────────────── */
+
+/*
+ * Tighter than the panel default. This card carries five rows of controls in a
+ * 214px rail; at the usual spacing the transport and the hint drifted far
+ * enough apart to read as separate things.
+ */
+.replay { display: grid; gap: 5px; }
+
+/*
+ * The timeline: one tick per placement, in a row that wraps.
+ *
+ * `auto-fit` with a floor rather than a fixed width — a three-piece solution
+ * gets three fat ticks and a seventy-three piece one gets a dense bar, and both
+ * read as "this is the whole thing" without either being told how long it is.
+ */
+/*
+ * One row, always, however many placements there are.
+ *
+ * It was `repeat(auto-fit, minmax(6px, 1fr))`, which wraps — and the rail is
+ * `minmax(158px, 214px)` (sheet.css), not the ~300px an earlier comment here
+ * claimed. That capped the track at about twenty-three columns, so puzzle
+ * #112's seventy-three placements were not a dense bar but a four-row block of
+ * squares with four stranded on the last row, and a twenty-four placement
+ * solution wrapped a single tick onto a second line. A timeline that wraps is
+ * not a timeline.
+ *
+ * `grid-auto-flow: column` with equal auto columns never wraps: the ticks
+ * simply get thinner, which is what a timeline is supposed to do.
+ */
+.replay__track {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 1px;
+  align-items: end;
+  /* Room for the tallest tick, so the row does not resize as you step. */
+  min-height: 20px;
+}
+
+/*
+ * Colour says where you are; HEIGHT says what happened.
+ *
+ * That split is the whole trick, and it is why the marks survive. A tick on a
+ * seventy-three placement solve is about one pixel wide, and the clear marker
+ * used to be `border-width: 2px` — invisible at exactly the length where "three
+ * quads in a row look like three quads in a row" was the entire argument for
+ * ticks over a slider. Height is the one dimension a one-pixel-wide tick still
+ * has.
+ */
+.replay__tick {
+  height: 9px;
+  padding: 0;
+  border: 0;
+  border-radius: 1px;
+  background: var(--ink-line);
+  cursor: pointer;
+}
+
+/* Already watched. */
+.replay__tick--done { background: var(--ink-soft); }
+
+/* A placement that clears lines: twice the height, at any width. */
+.replay__tick--clears { height: 18px; }
+
+/* Where the reader is. Full height and full ink, so it is findable in a dense bar. */
+.replay__tick--on {
+  height: 20px;
+  background: var(--ink);
+}
+
+.replay__tick:hover { background: var(--ink); }
+
+.replay__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.replay__caption { display: flex; align-items: center; gap: 6px; min-height: 20px; }
+.replay__clear { font-family: var(--mono); font-size: 11px; }
+
+.replay__position {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+
+/*
+ * Four controls, one row, in a rail that is `minmax(158px, 214px)`.
+ *
+ * As a wrapping flex row they did not fit: the last control fell onto a second
+ * line on its own, which reads as a fifth button somebody forgot to align.
+ * Equal columns instead — the transport is four peers and should look like four
+ * peers — with the padding trimmed so the glyphs, not the buttons, set the width.
+ */
+.replay__transport {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  /*
+   * Room enough that five controls read as five controls. At 3px they sat
+   * shoulder to shoulder and the row looked like one segmented bar — which is
+   * what the timeline directly above it actually is, so the two read as the
+   * same object.
+   */
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.replay__transport .btn {
+  padding: 6px 0;
+  min-width: 0;
+  text-align: center;
+}
+
+/*
+ * The key hint. Balanced rather than left to wrap: at this width the old string
+ * broke after "home /" and left "jump" alone on a line, which reads as a
+ * truncation rather than as a hint.
+ */

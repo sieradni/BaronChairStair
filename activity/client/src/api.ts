@@ -6,7 +6,10 @@
  * Discord and running on localhost, so it is handled once, here.
  */
 
+import type { ProfileStats } from "./ui/profile";
 import type { DailyTier } from "@shared/daily";
+import type { Handling } from "@shared/tetris/handling";
+import type { InputEvent } from "@shared/tetris/verify";
 import type { ClearName, Mino, PuzzlePrompt, RowCode, SolutionStep } from "@shared/puzzle";
 
 export interface PlayerProfile {
@@ -64,6 +67,81 @@ export interface DiscoveryRow {
   readonly player: PlayerProfile;
   readonly found: number;
   readonly latestAt: number;
+}
+
+/**
+ * One line in a puzzle's solutions gallery — a way somebody solved it.
+ *
+ * `finder` is null for the maker's own recorded answer, which belongs to
+ * nobody and is always first.
+ */
+export interface GalleryLine {
+  readonly solutionId: number;
+  readonly placements: readonly SolutionStep[];
+  readonly attack: number;
+  readonly clears: readonly ClearName[];
+  readonly source: "reference" | "player" | "enumerated";
+  readonly finder: PlayerProfile | null;
+  readonly foundAt: number;
+  readonly solvedStrict: boolean;
+}
+
+/**
+ * Where the player reading the board stands on it, or null if they have found
+ * nothing yet.
+ *
+ * Sent apart from `board` because the board is the top twenty five of everybody
+ * who has ever played, and almost nobody is on it.
+ */
+/**
+ * One row of any leaderboard.
+ *
+ * The five boards are five unrelated queries on the server and one shape by the
+ * time they reach here, so the page draws one list rather than five.
+ * `detailMs` carries a duration for the boards that have one — raw, because
+ * `formatDuration` in `ui/dom.ts` is the one definition of what a time looks
+ * like in this app.
+ */
+export interface BoardEntry {
+  readonly player: PlayerProfile;
+  readonly value: number;
+  readonly detail?: string | null;
+  readonly detailMs?: number | null;
+}
+
+/** How one of today's tiers landed across everybody who filed it. */
+export interface DailyTierStat {
+  readonly tier: string;
+  /** Hand-ins. Somebody who opened it and walked away is in none of these. */
+  readonly filed: number;
+  readonly solved: number;
+  /** What the reader did on it. */
+  readonly you: "solved" | "missed" | "none";
+}
+
+export interface DailyStats {
+  readonly tiers: readonly DailyTierStat[];
+  readonly standing: {
+    readonly rank: number;
+    readonly of: number;
+    readonly solved: number;
+    readonly totalMs: number;
+  } | null;
+}
+
+export interface BoardCategory {
+  readonly key: string;
+  readonly label: string;
+  /** "server" or "everyone" — printed, because it is the first thing asked. */
+  readonly scope: string;
+  /** What `value` counts: "solved", "puzzles", "lines". */
+  readonly measure: string;
+  readonly entries: readonly BoardEntry[];
+}
+
+export interface DiscoveryStanding {
+  readonly rank: number;
+  readonly found: number;
 }
 
 /**
@@ -285,7 +363,10 @@ export class Api {
     return this.request("/api/daily/leaderboard");
   }
 
-  discoveries(): Promise<{ board: readonly DiscoveryRow[] }> {
+  discoveries(): Promise<{
+    readonly board: readonly DiscoveryRow[];
+    readonly self: DiscoveryStanding | null;
+  }> {
     return this.request("/api/discoveries");
   }
 
@@ -337,8 +418,55 @@ export class Api {
     return this.request("/api/rush/leaderboard");
   }
 
-  archive(): Promise<{ puzzles: readonly ArchiveEntry[]; today: number }> {
+  /** `cleared` is every puzzle this player has ever solved, however they solved it. */
+  archive(): Promise<{
+    puzzles: readonly ArchiveEntry[];
+    today: number;
+    cleared: readonly number[];
+  }> {
     return this.request("/api/archive");
+  }
+
+  /** Every board, in one shape. */
+  leaderboards(): Promise<{
+    day: number;
+    daily: DailyStats;
+    categories: readonly BoardCategory[];
+  }> {
+    return this.request("/api/leaderboards");
+  }
+
+  /**
+   * A lifetime record. Somebody else's when an id is given, otherwise the
+   * caller's — the boards link to these, so a name on one can be opened.
+   */
+  profile(id?: string): Promise<ProfileStats> {
+    return this.request(id ? `/api/profile/${id}` : "/api/profile");
+  }
+
+  /**
+   * Every way a puzzle has been solved. 403 until this player has solved it
+   * themselves, and 403 while it is one of today's unfiled tiers.
+   */
+  puzzleSolutions(id: number): Promise<{ solutions: readonly GalleryLine[] }> {
+    return this.request(`/api/puzzles/${id}/solutions`);
+  }
+
+  /**
+   * Files a practice solve so it counts towards what this player has cleared.
+   *
+   * Unscored, like the run it describes: nothing here reaches a leaderboard, a
+   * streak or the discovery board. The log is sent because the server replays
+   * it — a claim on its own would be an unlock button for the whole archive.
+   */
+  clearPuzzle(
+    id: number,
+    body: { handling: Handling; events: readonly InputEvent[] },
+  ): Promise<{ solved: boolean }> {
+    return this.request(`/api/puzzles/${id}/clear`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
   }
 
   archivePuzzle(id: number): Promise<{ puzzle: PuzzlePrompt; solution: readonly SolutionStep[] }> {

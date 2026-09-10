@@ -99,7 +99,13 @@
   gap: 12px;
   min-height: 0;
   overflow-y: auto;
-  overscroll-behavior: contain;
+  /*
+   * No `overscroll-behavior: contain`. It prevents scroll chaining even when
+   * this element cannot scroll at all — so a wheel over the leaderboard or the
+   * discoveries card, neither of which usually overflows, was swallowed rather
+   * than passed to `.screen`. Chaining to the page is not a risk here: `body`
+   * is `overflow: hidden`.
+   */
   padding: 0 var(--drop) var(--drop) 0;
   scrollbar-width: thin;
   scrollbar-color: var(--ink-line) transparent;

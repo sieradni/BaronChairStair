@@ -75,6 +75,21 @@ import {
 } from "./duel";
 
 const LEADERBOARD_SIZE = 25;
+
+/**
+ * The top of one measure, ties broken by the measure itself.
+ *
+ * Sorted here rather than in SQL because all three daily boards come from one
+ * pass over the same rows — see `Store.dailyRecords`. Zero is dropped: a board
+ * of players on a nought-day streak is every player who has ever opened the
+ * app, in no meaningful order.
+ */
+function topBy<T>(rows: readonly T[], of: (row: T) => number): T[] {
+  return rows
+    .filter((row) => of(row) > 0)
+    .sort((a, b) => of(b) - of(a))
+    .slice(0, LEADERBOARD_SIZE);
+}
 /**
  * How many players a recap will name.
  *
@@ -180,6 +195,11 @@ app.use("/api/*", limitBodySize);
 // the reads.
 app.use("/api/session", rateLimit({ max: 10, windowMs: MINUTE }, callerKey));
 app.use("/api/daily/run", rateLimit({ max: 20, windowMs: MINUTE }, callerKey));
+// Practice runs the engine exactly as the daily does, so it is limited the
+// same way. It is the one engine route a player can hit without a ticket or
+// a once-a-day slot, so leaving it open would make it the cheapest way to
+// spend the server's CPU.
+app.use("/api/puzzles/:id/clear", rateLimit({ max: 20, windowMs: MINUTE }, callerKey));
 // A rush is five minutes long, so nobody honest opens many of them a minute.
 app.use("/api/rush/start", rateLimit({ max: 6, windowMs: MINUTE }, callerKey));
 app.use("/api/rush/run", rateLimit({ max: 12, windowMs: MINUTE }, callerKey));
@@ -347,6 +367,14 @@ app.post("/api/daily/run", requireSession, async (c) => {
     clears: verified.clears,
   });
 
+  // A solve is a solve however it was reached, and this is one of three places
+  // one can happen. Recorded off `run.solved` rather than re-deciding: the row
+  // that was just filed is the fact, and a second judgement here could disagree
+  // with the leaderboard about the same run.
+  if (run.solved) {
+    store.recordClear({ playerId: session.player.id, puzzleId: puzzle.id, durationMs: run.totalMs });
+  }
+
   // Filed after the run is recorded, never before: a discovery is a fact about
   // a run that counted, and nothing in here may cost a player the run they
   // just earned.
@@ -386,17 +414,213 @@ function totalTimeOnPuzzle(claimed: unknown, verifiedMs: number): number {
 }
 
 /**
- * Who has found the most lines nobody had found before.
+ * Who has found the most lines nobody had found before — the ones that solved
+ * a puzzle, and the ones that beat its attack target by another route.
  *
- * Scoped to the guild the session belongs to, like every other board here: a
- * club's standings are the club's. The anti-farm rules live in the query rather
- * than in a stored flag — only lines a player actually played count, only ones
- * that met the goal, and only one credit per player per puzzle however many
- * ways they find to solve it.
+ * The one board here that is **not** scoped to a guild, and deliberately: every
+ * other one answers "how did this club do today", while this one is a standing
+ * about the archive, which is the same archive in every server that plays it.
+ * See {@link Store.discoveryBoard}.
+ *
+ * `self` rides along because a global board is one almost nobody is on. Twenty
+ * five strangers and no line for the person reading is what makes a leaderboard
+ * feel closed, and the rank is already a cheap query.
  */
+/**
+ * What one player has done, for their own profile.
+ *
+ * Their own only — there is no `?player=` and there will not be one from here.
+ * Every other board in this app is a ranking somebody opted into by playing;
+ * a lifetime record of how long somebody has spent and what they have not
+ * solved is not, and handing it out by id would make it one.
+ *
+ * `puzzlesCleared` is a count of distinct puzzles, which is not what the
+ * masthead's older "solved" tally means — `totalSolved` counts distinct *days*,
+ * so a player who solved all four tiers on ten days reads as 10 there and 40
+ * here. Both are right about different questions; the labels have to say which.
+ */
+app.get("/api/profile/:id?", requireSession, (c) => {
+  const session = c.get("session");
+  const asked = c.req.param("id");
+  // Their own unless another id is named. Every number this returns is one the
+  // leaderboards already show under a name — puzzles solved, rush bests, lines
+  // found — so opening a row to read the rest of them is not a new disclosure.
+  // A player nobody has a row for still resolves: `profile` answers zeros and
+  // `playerNamed` answers null, which the page renders as "no record yet"
+  // rather than a 404 somebody has to interpret.
+  const id = asked && asked !== session.player.id ? asked : session.player.id;
+  const day = archive.currentDay();
+  const player = id === session.player.id ? session.player : store.playerNamed(id);
+  if (!player) throw new HTTPException(404, { message: "No such player" });
+
+  // What they found, under the same name the count above it uses. `openable`
+  // is about the *reader*, not the finder: a line is somebody else's answer to
+  // a puzzle, so it stays shut until this reader has solved that puzzle
+  // themselves — the same gate `/api/puzzles/:id/solutions` enforces, asked
+  // here so the row can say so instead of failing when it is clicked.
+  const mine = store.clearedPuzzleIds(session.player.id);
+  const found = store.discoveriesBy(id).map((row) => {
+    const puzzle = archive.get(row.puzzleId);
+    return {
+      puzzleId: row.puzzleId,
+      title: puzzle?.title ?? "",
+      attack: row.attack,
+      clears: row.clears,
+      foundAt: row.foundAt,
+      // A line on a board that has since been edited: the credit stands, the
+      // claim does not, and there is nothing left to step through.
+      voided: row.voided,
+      openable: !row.voided && puzzle !== undefined && mine.has(row.puzzleId),
+    };
+  });
+
+  return c.json({
+    player,
+    isSelf: id === session.player.id,
+    ...store.profile(id),
+    archiveSize: archive.puzzles.length,
+    streak: store.streak(id, day),
+    daysSolved: store.totalSolved(id),
+    found,
+  });
+});
+
+/**
+ * Every board, in one shape, in one round trip.
+ *
+ * Five categories that already existed as five unrelated queries returning five
+ * unrelated row types. Normalised here rather than in the browser: a page whose
+ * job is "the same list, five ways" should be handed the same list five times,
+ * and the alternative is a client that knows how to unpack a rush row, a day
+ * row, a discovery row and two more besides.
+ *
+ * `scope` is on every category because it is the question a reader will ask
+ * first when they cannot find themselves. Two of these are this server's and
+ * three are everybody's — the archive is one archive however many servers play
+ * it, and how much of it somebody has solved is not a fact about a guild.
+ *
+ * All five are `LIMIT 25` and none of them joins the others, so this is cheap
+ * enough to answer whole rather than a category at a time.
+ */
+app.get("/api/leaderboards", requireSession, (c) => {
+  const session = c.get("session");
+  const day = archive.currentDay();
+  const guild = session.guildId;
+
+  // How today landed as a field, and where this player sits in it. Only the
+  // "Today" board has a today; the other four are all-time or a different mode,
+  // so this rides beside the categories rather than inside one.
+  const mine = store.runsFor(day, session.player.id);
+  const tiers = store.dailyTierStats(day, guild);
+  // One pass over the daily history, sliced three ways below. Zeroes are
+  // dropped rather than ranked: a board of people on a nought-day streak is a
+  // list of everybody who has ever played, ordered arbitrarily.
+  const records = store.dailyRecords(day);
+
+  return c.json({
+    day,
+    daily: {
+      tiers: DAILY_TIERS.map((tier) => ({
+        tier,
+        filed: tiers[tier].filed,
+        solved: tiers[tier].solved,
+        // What this player did on it: solved, filed and missed, or untouched.
+        // `runsFor` drops 'legacy' rows, which is right — they belong to no tier.
+        you: mine[tier] === undefined ? "none" : mine[tier]!.solved ? "solved" : "missed",
+      })),
+      standing: store.dayStanding(day, guild, session.player.id),
+    },
+    categories: [
+      {
+        key: "today",
+        label: "Today",
+        scope: guild ? "server" : "everyone",
+        measure: "solved",
+        entries: store.dayBoard(day, guild, LEADERBOARD_SIZE).map((row) => ({
+          player: row.player,
+          value: row.solved,
+          // Raw, not formatted. `formatDuration` lives in the client and is
+          // the one definition of what a time looks like here; a second one on
+          // the server would be a second thing to keep in step.
+          detailMs: row.solved > 0 ? row.totalMs : null,
+        })),
+      },
+      {
+        key: "rush-best",
+        label: "Rush records",
+        scope: guild ? "server" : "everyone",
+        measure: "solved",
+        entries: store.rushRecords(guild, LEADERBOARD_SIZE).map((row) => ({
+          player: row.player,
+          value: row.solved,
+          detail: `day ${row.day}`,
+        })),
+      },
+      {
+        key: "dailies",
+        label: "Dailies",
+        scope: "everyone",
+        measure: "solved",
+        entries: topBy(records, (r) => r.solves).map((row) => ({
+          player: row.player,
+          value: row.solves,
+          detail: `${row.days} ${row.days === 1 ? "day" : "days"}`,
+        })),
+      },
+      {
+        key: "streak",
+        label: "Streak",
+        scope: "everyone",
+        measure: "days",
+        entries: topBy(records, (r) => r.current).map((row) => ({
+          player: row.player,
+          value: row.current,
+          detail: `best ${row.best}`,
+        })),
+      },
+      {
+        key: "streak-best",
+        label: "Best streak",
+        scope: "everyone",
+        measure: "days",
+        entries: topBy(records, (r) => r.best).map((row) => ({
+          player: row.player,
+          value: row.best,
+          detail: `${row.days} ${row.days === 1 ? "day" : "days"} in all`,
+        })),
+      },
+      {
+        key: "solved",
+        label: "Archive",
+        scope: "everyone",
+        measure: "puzzles",
+        entries: store.clearsBoard(LEADERBOARD_SIZE).map((row) => ({
+          player: row.player,
+          value: row.cleared,
+          detail: `of ${archive.puzzles.length}`,
+        })),
+      },
+      {
+        key: "discoveries",
+        label: "Discoveries",
+        scope: "everyone",
+        measure: "lines",
+        entries: store.discoveryBoard(LEADERBOARD_SIZE).map((row) => ({
+          player: row.player,
+          value: row.found,
+          detail: "",
+        })),
+      },
+    ],
+  });
+});
+
 app.get("/api/discoveries", requireSession, (c) => {
   const session = c.get("session");
-  return c.json({ board: store.discoveryBoard(session.guildId, LEADERBOARD_SIZE) });
+  return c.json({
+    board: store.discoveryBoard(LEADERBOARD_SIZE),
+    self: store.discoveryStanding(session.player.id),
+  });
 });
 
 app.get("/api/daily/leaderboard", requireSession, (c) => {
@@ -594,7 +818,99 @@ function maySeeSolution(session: Session, puzzleId: number): boolean {
 
 app.get("/api/archive", requireSession, (c) => {
   const today = archive.currentDay();
-  return c.json({ puzzles: archive.puzzles.map(toListing), today });
+  const session = c.get("session");
+  // What this player has solved, so the list can tick them. It replaces a count
+  // of how many lines each puzzle has on file, which was a reveal in its own
+  // right — it told an unsolved player how many answers a puzzle has, which
+  // `app.ts` already refuses to do in a toast.
+  return c.json({
+    puzzles: archive.puzzles.map(toListing),
+    today,
+    cleared: [...store.clearedPuzzleIds(session.player.id)],
+  });
+});
+
+/**
+ * Every way a puzzle has been solved, for the gallery beside the board.
+ *
+ * Behind the same gate as the answer itself, and not a looser one: these *are*
+ * answers, several of them, and handing them out for a puzzle somebody has not
+ * solved would give away far more than the reveal ever did. `maySeeSolution`
+ * already carries that policy — always for the archive, and for today's only
+ * once this player has solved that tier — so this asks it rather than
+ * inventing a second rule that could drift from it.
+ *
+ * 403 rather than an empty list, because "you have not solved this yet" and
+ * "nobody has found anything" are different answers and the card says
+ * different things about them.
+ */
+/**
+ * Files a practice solve, so it counts towards what a player has cleared.
+ *
+ * Practice has always been unscored and stays unscored: nothing here touches a
+ * leaderboard, a streak, a rush board or a discovery. The single thing it
+ * records is "this person has solved this board", which is what ticks the
+ * Explore list and unlocks the puzzle's solutions.
+ *
+ * **The log is replayed, not believed.** The client could otherwise post an
+ * empty body naming a puzzle id and unlock every answer in the archive, which
+ * is precisely the thing the gallery is gated to prevent. `verifyRun` is the
+ * same path the daily and the rush already trust, and the verdict comes from
+ * `solvedUnderPolicy` so a practice solve is held to exactly the bar a daily is.
+ *
+ * Today's puzzles are refused outright. A player could otherwise practise the
+ * board they are about to be scored on and read its answers first — the exact
+ * rehearsal `lockedPuzzleIds` exists to stop, arriving through a different
+ * door. The client already refuses it; this is the half that cannot be edited
+ * out in a console.
+ */
+app.post("/api/puzzles/:id/clear", requireSession, async (c) => {
+  const session = c.get("session");
+  const puzzle = archive.get(Number.parseInt(c.req.param("id") ?? "", 10));
+  if (!puzzle) throw new HTTPException(404, { message: "No such puzzle" });
+  if (schedule.tierOfDay(archive.currentDay(), puzzle.id)) {
+    throw new HTTPException(403, { message: "That is one of today's — play it on the daily" });
+  }
+
+  const body = await readJsonBody(c);
+  const handling = sanitizeHandling(body.handling);
+  const verified = verifyRun(
+    { board: decodeBoard(puzzle.board, ENGINE_ROWS), queue: puzzle.queue, hold: puzzle.hold },
+    handling,
+    parseInputLog(body.events),
+  );
+  const solved = solvedUnderPolicy(verified.attack, verified.clears, puzzle, "daily");
+  if (solved) {
+    store.recordClear({
+      playerId: session.player.id,
+      puzzleId: puzzle.id,
+      durationMs: verified.durationMs,
+    });
+  }
+  // The verdict goes back so the client can stop asking. It is not a score.
+  return c.json({ solved, attack: verified.attack, clears: verified.clears });
+});
+
+app.get("/api/puzzles/:id/solutions", requireSession, (c) => {
+  const puzzleId = Number.parseInt(c.req.param("id") ?? "", 10);
+  const puzzle = archive.get(puzzleId);
+  if (!puzzle) throw new HTTPException(404, { message: "No such puzzle" });
+  const session = c.get("session");
+  // Both gates, and they answer different questions. `maySeeSolution` is about
+  // *today*: a puzzle currently being dealt as a daily tier stays shut until
+  // this player has filed it, so the gallery can never be a rehearsal.
+  // `hasCleared` is about ever: you may read how other people solved a board
+  // once you have solved it yourself.
+  //
+  // This is a tightening. Until now every archive puzzle's answer was readable
+  // by anyone signed in, solved or not.
+  if (!maySeeSolution(session, puzzleId)) {
+    throw new HTTPException(403, { message: "That is one of today's — play it on the daily first" });
+  }
+  if (!store.hasCleared(session.player.id, puzzleId)) {
+    throw new HTTPException(403, { message: "Solve it yourself first" });
+  }
+  return c.json({ solutions: store.solutionGallery(puzzleId) });
 });
 
 app.get("/api/archive/:id", requireSession, (c) => {
@@ -853,6 +1169,27 @@ app.post("/api/rush/run", requireSession, async (c) => {
     unsolved,
     RUSH_SKIPS,
   );
+
+  // Each puzzle the rush actually solved, individually, and **before** the
+  // unranked branch returns. A practice rush is still somebody solving a board:
+  // it does not touch the rush leaderboard, and it has no business being
+  // invisible to "have I solved #92". The same goes for a second ranked rush in
+  // a day, whose `recordRushRun` is a DO NOTHING.
+  //
+  // The rush row itself records only how many were solved, which is the right
+  // shape for its own board and no use at all for this question — and a rush is
+  // where most players meet most of the archive.
+  results.forEach((segment, index) => {
+    if (!segment.solved) return;
+    const puzzle = puzzles[index];
+    if (puzzle) {
+      store.recordClear({
+        playerId: session.player.id,
+        puzzleId: puzzle.id,
+        durationMs: segment.durationMs,
+      });
+    }
+  });
 
   const solved = results.filter((result) => result.solved).length;
   const lastSolvedIndex = results.findLastIndex((result) => result.solved);

@@ -200,6 +200,25 @@
   min-height: 0;
 }
 
+/*
+ * ...except the solutions card, which must never be shrunk.
+ *
+ * The rule above is for a leaderboard: a card that is mostly one list, where
+ * the list has its own `overflow-y` and scrolling inside itself is exactly
+ * right. The solutions card also contains a `.board-list`, so it was caught by
+ * the same selector — but most of its height is a timeline and a transport,
+ * fixed controls that cannot scroll and cannot shrink. In a short Discord frame
+ * the panel was squeezed below its content and, since `.panel` sets no
+ * `overflow`, the buttons drew *outside* the cream box on the yellow ground.
+ *
+ * `0 0 auto` so it takes the height it needs; the rail already scrolls when the
+ * sum of its cards does not fit, which is the correct place for that to happen.
+ */
+.rail > .panel.solutions {
+  min-height: auto;
+  flex: 0 0 auto;
+}
+
 .queue__row {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
@@ -419,14 +438,40 @@
   display: grid;
   gap: 14px;
   align-content: start;
-  justify-self: center;
-  width: min(var(--screen-width, 520px), 100%);
+  /*
+   * Full width, with the *content* capped rather than the box.
+   *
+   * It used to be `justify-self: center` at `min(--screen-width, 100%)`, which
+   * made the scroller a column down the middle: every pixel of ground either
+   * side of it had no scrollable ancestor, so a wheel over the yellow did
+   * nothing at all. The cap is what should be centred, not the thing that
+   * scrolls — see `.screen > *` below.
+   */
+  justify-self: stretch;
+  width: 100%;
   min-height: 0;
   overflow-y: auto;
-  overscroll-behavior: contain;
+  /*
+   * `contain` here would stop a wheel over a rail that has nothing to scroll
+   * from reaching this, which is the other half of the same complaint. Nothing
+   * is lost by allowing the chain: `body` is `overflow: hidden`, so there is no
+   * page behind this to scroll into.
+   */
   padding: 0 var(--drop) var(--drop) 0;
   scrollbar-width: thin;
   scrollbar-color: var(--ink-line) transparent;
+}
+
+/*
+ * The cap, moved off the scroller and onto what it holds. A screen is one or
+ * two cards; centring them inside a full-width scroll region reads identically
+ * and leaves no dead ground.
+ */
+.screen > * {
+  width: 100%;
+  max-width: var(--screen-width, 520px);
+  justify-self: center;
+  min-width: 0;
 }
 
 /* A list wants the room; a start card does not. */
@@ -606,7 +651,12 @@
 
 .explore__item {
   display: grid;
-  grid-template-columns: 46px minmax(0, 1fr) auto;
+  /* Four columns: number, title, rating, and the solved tick. The tick's column
+     is a fixed width rather than `auto` so an unsolved row reserves the same
+     space as a solved one and the ratings stay in a straight line down the
+     list — a column that collapsed on empty would make the whole list jitter as
+     somebody solved things. */
+  grid-template-columns: 46px minmax(0, 1fr) auto 14px;
   align-items: baseline;
   gap: 10px;
   padding: 6px 8px;
@@ -640,6 +690,18 @@
   letter-spacing: 0.04em;
   color: var(--ink-soft);
   white-space: nowrap;
+}
+
+/*
+ * The tick. Green would be a sixth colour on a screen that already carries the
+ * seven tetromino inks; the club's plum at full strength is enough, and the
+ * empty case is genuinely empty rather than a greyed placeholder.
+ */
+.explore__solved {
+  font-size: 12px;
+  line-height: 1;
+  text-align: center;
+  color: var(--ink);
 }
 
 .explore__id {
@@ -909,3 +971,320 @@
   cursor: pointer;
 }
 .masthead__home:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+
+/* ── Profile ──────────────────────────────────────────────────────────────── */
+
+.profile { display: grid; gap: 10px; align-content: start; }
+.profile__head { display: flex; align-items: center; gap: 10px; }
+.profile__portrait { display: flex; }
+.profile__name { margin: 0; }
+
+/*
+ * Three cards across, folding to one on a narrow panel. `auto-fit` rather than
+ * a fixed three: this screen shares the deck with nothing, so on a wide window
+ * the cards should spread and on Discord's narrow one they should stack.
+ */
+.profile__cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
+.profile__stats { display: grid; }
+.profile__note { margin: 0; }
+/* No sentence, no gap: `.profile` is a grid with a 10px gap, so an empty note
+   would still take one and leave the cards floating above nothing. */
+.profile__note:empty { display: none; }
+
+/* ── Solutions menu ───────────────────────────────────────────────────────── */
+
+.solutions-menu { display: grid; gap: 8px; align-content: start; min-height: 0; }
+.solutions-menu__head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.solutions-menu__title { margin: 0; }
+.solutions-menu__count { margin: 0; }
+
+/*
+ * Cards across, wrapping. `auto-fill` rather than `auto-fit`: with one solution
+ * on file — which is most puzzles — `auto-fit` would stretch that single card
+ * across the whole screen and draw its board a foot wide.
+ */
+.solutions-menu__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
+  overflow-y: auto;
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ink-line) transparent;
+}
+
+.solutions-menu__entry {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas: "rank board" "facts facts";
+  gap: 6px 8px;
+  padding: 8px;
+  border: var(--edge) solid var(--ink-line);
+  border-radius: var(--radius-sm);
+  background: var(--cream);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.solutions-menu__entry:hover { border-color: var(--ink); background: var(--sun); }
+.solutions-menu__entry:active { transform: translate(1px, 1px); }
+
+/* Yours, marked the way it is on every board in this app. */
+.solutions-menu__entry--self { box-shadow: inset 0 0 0 1px var(--ink-line); background: var(--sun); }
+
+.solutions-menu__rank {
+  grid-area: rank;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+
+/* The board keeps its own aspect ratio; the SVG carries the viewBox. */
+.solutions-menu__board { grid-area: board; width: 100%; height: auto; align-self: start; }
+
+.solutions-menu__facts { grid-area: facts; display: grid; gap: 1px; min-width: 0; }
+.solutions-menu__who { font-weight: 600; font-size: 12px; }
+.solutions-menu__when,
+.solutions-menu__score,
+.solutions-menu__clears,
+.solutions-menu__note { font-size: 11px; color: var(--ink-soft); }
+.solutions-menu__clears { font-family: var(--mono); }
+.solutions-menu__note { font-style: italic; }
+
+/* ── Avatar ───────────────────────────────────────────────────────────────── */
+
+/*
+ * The picture and the monogram occupy the same square, the picture on top. A
+ * picture that never arrives simply never covers the letter — see `avatar.ts`.
+ */
+.avatar {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: var(--edge) solid var(--ink);
+  border-radius: var(--radius-sm);
+  background: var(--cream-shade);
+}
+
+.avatar__monogram {
+  font-family: var(--display);
+  font-weight: 800;
+  /* Scales with the square rather than a fixed size, so one rule serves a
+     56px profile header and a 20px row in a future list of players. */
+  font-size: 55%;
+  color: var(--ink-soft);
+  line-height: 1;
+}
+
+.avatar__image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* ── Leaderboards ─────────────────────────────────────────────────────────── */
+
+.boards { display: grid; gap: 10px; align-content: start; min-height: 0; }
+.boards__title { margin: 0; }
+
+/* Categories as tabs, wrapping. They are peers, so they wrap rather than scroll. */
+.boards__tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.boards__card { min-height: 0; }
+.boards__scope { margin: 0; }
+
+/*
+ * The list owns the height and scrolls inside the card, rather than the card
+ * growing to twenty-five rows and pushing the tabs off the top — the tabs are
+ * how you leave this board, so they must stay reachable.
+ */
+.boards__list {
+  max-height: min(52vh, 520px);
+  align-content: start;
+}
+
+/*
+ * A row is a button here, so the three properties a button brings of its own —
+ * its border, its font, its centred text — have to be put back, the same way
+ * `.solutions__row` does.
+ */
+/*
+ * Specificity, not source order — (0,2,0) rather than (0,1,0).
+ *
+ * `.board-list__row` in overlays.css sets a three-column template, and
+ * overlays.css loads *after* panels.css (see main.ts), so a single-class
+ * selector here loses to it however it is written. Five children in three
+ * columns wrap onto an implicit second row, which is how the score ended up
+ * printed over the time. home.css documents the same trap thirty lines into its
+ * own rail rules; this is that trap, one file over.
+ */
+.boards__row.board-list__row {
+  width: 100%;
+  /* Rank, face, name, detail, score. The face is why this differs from the
+     plain `.board-list__row` template. */
+  grid-template-columns: 20px auto minmax(0, 1fr) auto auto;
+  gap: 10px;
+  padding: 6px 8px;
+  border: var(--edge) solid transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  /* Centre, not baseline: a row with a 20px face in it has nothing sensible to
+     sit its text on. */
+  align-items: center;
+}
+
+.boards__row.board-list__row:hover { background: var(--cream-shade); border-color: var(--ink); }
+.boards__row.board-list__row:active { transform: translate(1px, 1px); }
+
+.boards__detail {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  justify-self: end;
+}
+
+/* The score is the point of the row, so it never wraps or shrinks. */
+.boards__row .board-list__score { white-space: nowrap; justify-self: end; }
+
+/* The way back, when a profile is somebody else's. */
+.profile__back:empty { display: none; }
+
+/*
+ * The account control in the masthead: a face, not a word.
+ *
+ * Square, and padded only enough to keep the club's border off the picture. The
+ * other controls in that row are text buttons whose padding sets their height,
+ * so this matches their height explicitly rather than inheriting a text box it
+ * has no text for.
+ */
+.masthead__me {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  line-height: 0;
+}
+
+.masthead__me .avatar { border: 0; border-radius: 2px; }
+
+/*
+ * The lines a player found, listed under the number that counts them.
+ *
+ * Its own card below the three stat cards rather than a fourth column in them:
+ * the stats are single numbers and this is a list that scrolls, and putting a
+ * scroller in a row of three fixed cards makes the row as tall as the list.
+ */
+.profile__found-card { min-height: 0; }
+.profile__found { max-height: min(38vh, 340px); align-content: start; }
+
+.profile__found-row {
+  /* Puzzle, when, attack. */
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 5px 8px;
+  border: var(--edge) solid transparent;
+}
+
+/*
+ * Only a line the reader may actually read is a control. The rest are facts
+ * about somebody else's account, and a button that refuses when pressed is
+ * worse than a row that never offered.
+ */
+.profile__found-row--open {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.profile__found-row--open:hover { background: var(--cream-shade); border-color: var(--ink); }
+.profile__found-row--open:active { transform: translate(1px, 1px); }
+
+.profile__found-when {
+  font-size: 11px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+/* ── Today's four, on the boards page ─────────────────────────────────────── */
+
+.boards__day-card { min-height: 0; }
+.boards__day { display: grid; gap: 6px; }
+
+/*
+ * One row per tier: name, bar, count, and what you did on it. The count column
+ * is fixed so the four rows' numbers line up in a column rather than drifting
+ * with the width of "12 of 30".
+ */
+.boards__tier {
+  display: grid;
+  grid-template-columns: 76px minmax(60px, 1fr) 78px auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.boards__tier-name {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* The shape of the day at a glance. The numbers beside it are the truth. */
+.boards__bar {
+  display: block;
+  height: 10px;
+  border: 1px solid var(--ink-line);
+  border-radius: 2px;
+  background: var(--cream-shade);
+  overflow: hidden;
+}
+
+.boards__bar-fill { display: block; height: 100%; background: var(--ink); }
+
+.boards__tier-count {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+}
+
+.boards__tier-you {
+  font-size: 11px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+/* The tier you solved, picked out — this is the row you came to find. */
+.boards__tier--solved .boards__tier-name { color: var(--ink); font-weight: 700; }
+.boards__tier--solved .boards__tier-you { color: var(--ink); }
+
+.boards__day-note { margin: 4px 0 0; }
+
+/*
+ * A card that is a way through to somewhere, rather than a thing to read.
+ *
+ * The hover lifts the border the way every other control here does; the card
+ * keeps its own shadow, so it must not also translate on press — a 5px offset
+ * shadow moving with the card reads as the whole rail jumping.
+ */
+.panel--opens { cursor: pointer; }
+.panel--opens:hover { border-color: var(--ink); background: var(--cream-shade); }
+.panel--opens:focus-visible { outline: var(--edge) solid var(--ink); outline-offset: 2px; }

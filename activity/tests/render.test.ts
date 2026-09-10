@@ -13,13 +13,18 @@
  * cleared. Those are still read, not run.
  */
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
 import { activeRun } from "../client/src/game/active-run";
 import { createHome } from "../client/src/ui/home";
 import { createDailyBoard } from "../client/src/ui/daily-board";
 import { createDiscoveryBoard } from "../client/src/ui/discovery-board";
+import { createSolutionsPanel } from "../client/src/ui/solutions";
+import { createSolutionsMenu } from "../client/src/ui/solutions-menu";
+import { createProfile } from "../client/src/ui/profile";
+import { createLeaderboards } from "../client/src/ui/leaderboards";
+import { playerAvatar } from "../client/src/ui/avatar";
 import { boardGlyph } from "../client/src/render/piece-glyph";
 import { MINO_INK, PAPER } from "../client/src/render/skin";
 import { withRush } from "../client/src/ui/daily-board";
@@ -63,6 +68,9 @@ beforeAll(() => {
     // main.ts loads overlays.css *after* home.css, and `.note` lives there —
     // so without it the cascade these tests read is not the cascade that ships.
     "client/src/styles/overlays.css",
+    // `.rail` lives here, and whether it swallows a wheel is a scrolling rule
+    // the tests below read out of the cascade.
+    "client/src/styles/sheet.css",
   ]) {
     const style = window.document.createElement("style");
     style.textContent = readFileSync(sheet, "utf8");
@@ -70,10 +78,29 @@ beforeAll(() => {
   }
 });
 
-afterAll(() => {
+/**
+ * EMPTY THE BODY BETWEEN TESTS, or this file cannot finish.
+ *
+ * Every mount here appends to one `document.body` and nothing ever took anything out
+ * again, so across 88 tests the tree only grew. happy-dom resolves style by matching
+ * the loaded sheets against the live document, so each `getComputedStyle` had to walk
+ * a bigger tree than the last: the cost is quadratic in the number of tests, not linear.
+ *
+ * Measured: the file never reached its first reported test, oscillated between 0.13 GB
+ * and 3.95 GB of violent GC churn, and peaked at a 28 GB physical footprint — enough to
+ * push a 16 GB machine into 23 GB of swap. A single test in isolation passes in ~2s.
+ */
+afterEach(() => {
+  window.document.body.replaceChildren();
+});
+
+afterAll(async () => {
   globalThis.document = saved.document;
   globalThis.getComputedStyle = saved.getComputedStyle;
   globalThis.localStorage = saved.localStorage;
+  // happy-dom holds timers, observers and the whole tree until it is told to stop.
+  // Without this the process also has no reason to exit once the tests are done.
+  await window.happyDOM.close();
 });
 
 const played = (count: number): RushPlayed[] =>
@@ -591,6 +618,7 @@ describe("the front door", () => {
         { player: { id: "b", username: "bo" }, found: 1, latestAt: 2 },
       ] as never,
       "b",
+      { rank: 2, found: 1 },
     );
     const rows = [...found.element.querySelectorAll(".board-list__row")];
 
@@ -601,6 +629,46 @@ describe("the front door", () => {
     expect(rows[1]!.querySelector(".board-list__score")!.textContent).toBe("1 line");
     expect(rows[0]!.classList.contains("board-list__row--self")).toBe(false);
     expect(rows[1]!.classList.contains("board-list__row--self")).toBe(true);
+  });
+
+  test("a reader too far down to be on the board still gets their own line", () => {
+    // The board is now everybody who has ever played rather than one club, so
+    // almost nobody reading it is on it. Twenty five strangers and no line for
+    // the reader is what makes a leaderboard feel closed.
+    const found = createDiscoveryBoard();
+    found.update(
+      [{ player: { id: "a", username: "ada" }, found: 30, latestAt: 1 }] as never,
+      "me",
+      { rank: 391, found: 2 },
+    );
+    const own = found.element.querySelector(".board-list--self-only")!;
+
+    expect((own as HTMLElement).hidden).toBe(false);
+    expect(own.querySelector(".board-list__rank")!.textContent).toBe("391");
+    expect(own.querySelector(".board-list__name")!.textContent).toBe("You");
+    expect(own.querySelector(".board-list__score")!.textContent).toBe("2 lines");
+  });
+
+  test("and does not get it twice when they are already up there", () => {
+    // One person on a board twice, once labelled "you", is the reading a board
+    // gets exactly once before nobody trusts it.
+    const found = createDiscoveryBoard();
+    found.update(
+      [{ player: { id: "me", username: "Me" }, found: 4, latestAt: 1 }] as never,
+      "me",
+      { rank: 1, found: 4 },
+    );
+
+    expect((found.element.querySelector(".board-list--self-only") as HTMLElement).hidden).toBe(true);
+    expect(found.element.querySelectorAll(".board-list__row")).toHaveLength(1);
+  });
+
+  test("a reader who has found nothing is shown no rank at all", () => {
+    // "#0 — 0 lines" is worse than the invitation the empty board already has.
+    const found = createDiscoveryBoard();
+    found.update([] as never, "me", null);
+
+    expect((found.element.querySelector(".board-list--self-only") as HTMLElement).hidden).toBe(true);
   });
 
   test("the left column fills by arithmetic, and the hero is the only elastic", () => {
@@ -920,7 +988,7 @@ describe("a puzzle the explorer will not open", () => {
     community: false,
   });
 
-  const shown = (locked: readonly number[]) => {
+  const shown = (locked: readonly number[], cleared: readonly number[] = []) => {
     const made = createExplorer({
       onPlay: () => {},
       onRandom: () => {},
@@ -932,6 +1000,7 @@ describe("a puzzle the explorer will not open", () => {
       [listing(15, "protanopia"), listing(46, "stmb cave")] as never,
       DEFAULT_ARCHIVE_FILTER,
       new Set(locked),
+      new Set(cleared),
     );
     return [...made.element.querySelectorAll(".explore__item")].map((row) => ({
       text: (row.textContent ?? "").replace(/\s+/g, " "),
@@ -990,5 +1059,993 @@ describe("what practice may open of today's three", () => {
 
   test("a day that has not loaded locks nothing", () => {
     expect([...lockedPuzzleIds([])]).toEqual([]);
+  });
+});
+
+
+/** A `SolutionPlayer` stub: enough of one for the controls to draw. */
+function fakePlayer(steps = [{ piece: "T", cells: [], clear: "tsd", attack: 4 }]) {
+  let index = 0;
+  return {
+    get placements() { return steps; },
+    get position() { return index; },
+    get stepCount() { return steps.length; },
+    get current() { return steps[index] ?? null; },
+    get atEnd() { return index >= steps.length; },
+    next() { index = Math.min(steps.length, index + 1); },
+    previous() { index = Math.max(0, index - 1); },
+    seek(to: number) { index = Math.max(0, Math.min(steps.length, to)); },
+    reset() { index = 0; },
+    end() { index = steps.length; },
+  } as never;
+}
+
+describe("the solutions gallery", () => {
+  const line = (over: Record<string, unknown> = {}) => ({
+    solutionId: 1,
+    placements: [{ piece: "T", cells: [[0, 0]], clear: "tsd", attack: 4 }],
+    attack: 4,
+    clears: ["tsd"],
+    source: "player",
+    finder: { id: "ada", username: "Ada", avatarUrl: null },
+    foundAt: 1,
+    solvedStrict: true,
+    ...over,
+  });
+
+  const rowsOf = (panel: { element: HTMLElement }) =>
+    [...panel.element.querySelectorAll(".solutions__row")];
+
+  test("the maker's answer is named as nobody's", () => {
+    const made = createSolutionsPanel();
+    made.show([line({ source: "reference", finder: null })] as never, "me", () => {});
+
+    expect(rowsOf(made)[0]!.querySelector(".board-list__name")!.textContent).toBe(
+      "The maker's answer",
+    );
+  });
+
+  test("a finder is named, and you are named as you", () => {
+    const made = createSolutionsPanel();
+    made.show(
+      [line(), line({ solutionId: 2, finder: { id: "me", username: "Me", avatarUrl: null } })] as never,
+      "me",
+      () => {},
+    );
+    const rows = rowsOf(made);
+
+    expect(rows.map((r) => r.querySelector(".board-list__name")!.textContent)).toEqual(["Ada", "You"]);
+    // Yours is marked the way it is on every other board here.
+    expect(rows[1]!.className).toContain("board-list__row--self");
+  });
+
+  test("a row says what it sent, not what it cleared", () => {
+    // The clear names ARE the answer. A list that prints "tsd · tsd · tst"
+    // gives away every solution to anyone who opens the panel, which is the
+    // opposite of a gallery you step through.
+    const made = createSolutionsPanel();
+    made.show([line()] as never, "me", () => {});
+
+    const score = rowsOf(made)[0]!.querySelector(".board-list__score")!.textContent ?? "";
+    expect(score).toBe("4 atk · 1p");
+    expect(score).not.toContain("tsd");
+  });
+
+  test("the first line is loaded without the caller asking", () => {
+    // The board and the highlighted row cannot start out disagreeing, because
+    // the same call puts them both there.
+    const loaded: number[] = [];
+    const made = createSolutionsPanel();
+    made.show([line(), line({ solutionId: 2 })] as never, "me", (l) => loaded.push(l.solutionId));
+
+    expect(loaded).toEqual([1]);
+    expect(rowsOf(made)[0]!.className).toContain("solutions__row--on");
+  });
+
+  test("picking a line loads it and moves the marker", () => {
+    const loaded: number[] = [];
+    const made = createSolutionsPanel();
+    made.show([line(), line({ solutionId: 2 })] as never, "me", (l) => loaded.push(l.solutionId));
+
+    (rowsOf(made)[1] as HTMLButtonElement).click();
+
+    expect(loaded).toEqual([1, 2]);
+    const rows = rowsOf(made);
+    expect(rows[0]!.className).not.toContain("solutions__row--on");
+    expect(rows[1]!.className).toContain("solutions__row--on");
+  });
+
+  test("picking the line already showing does not reload the board", () => {
+    // Stepping through a solution and clicking its own row would otherwise
+    // throw the reader back to placement one.
+    const loaded: number[] = [];
+    const made = createSolutionsPanel();
+    made.show([line(), line({ solutionId: 2 })] as never, "me", (l) => loaded.push(l.solutionId));
+
+    (rowsOf(made)[0] as HTMLButtonElement).click();
+
+    expect(loaded).toEqual([1]);
+  });
+
+  test("the card is a list and controls, with no prose between them", () => {
+    // The rail is ~214px wide. Every sentence in here wrapped to two or three
+    // lines and pushed the transport past the bottom of its own card, so the
+    // card now carries only what it can show: the lines, and the controls.
+    const many = createSolutionsPanel();
+    many.show([line(), line({ solutionId: 2 })] as never, "me", () => {});
+
+    expect(many.element.querySelectorAll(".solutions__row")).toHaveLength(2);
+    expect(many.element.querySelector(".note")).toBeNull();
+    expect(many.element.querySelector(".solutions__about")).toBeNull();
+  });
+
+  test("a gallery with lines always has step controls under it", () => {
+    // The bug this pins: the panel was seeded with `show([])` and only filled
+    // by a fetch, so between the two there were no controls — and permanently
+    // none if the fetch failed. `show([])` legitimately clears the stepper,
+    // which is why nothing may use it as an initialisation step.
+    const made = createSolutionsPanel();
+    made.show([line()] as never, "me", () => {});
+    made.bind(fakePlayer(), () => {});
+
+    // Five now, not three: the stepper became a transport with a play control
+    // and jumps to either end. What this guards is unchanged — that binding a
+    // gallery leaves controls under it rather than an empty slot.
+    expect(made.element.querySelectorAll(".replay__transport button")).toHaveLength(4);
+  });
+
+  test("no lines at all leaves no rows and no controls", () => {
+    const made = createSolutionsPanel();
+    made.show([] as never, "me", () => {});
+
+    expect(rowsOf(made)).toHaveLength(0);
+    expect(made.element.querySelectorAll(".replay__transport button")).toHaveLength(0);
+  });
+});
+
+describe("the solutions menu", () => {
+  const PUZZLE = { id: 15, title: "protanopia", board: ["ggggggggg."], queue: ["T"], hold: null };
+
+  const line = (over: Record<string, unknown> = {}) => ({
+    solutionId: 1,
+    placements: [{ piece: "T", cells: [[9, 0], [9, 1], [8, 1], [9, 2]], clear: null, attack: 0 }],
+    attack: 4,
+    clears: ["tsd"],
+    source: "player",
+    finder: { id: "ada", username: "Ada", avatarUrl: null },
+    foundAt: 0,
+    solvedStrict: true,
+    ...over,
+  });
+
+  const menuWith = (lines: unknown[], opened: unknown[] = [], closed: string[] = []) => {
+    const made = createSolutionsMenu(
+      { onOpen: (l) => opened.push(l), onClose: () => closed.push("back") },
+      () => 0,
+    );
+    made.update(PUZZLE as never, lines as never, "me");
+    window.document.body.append(made.element as never);
+    return made;
+  };
+
+  test("there is a way back to the puzzle, and it is the first control", () => {
+    // Every other screen here puts its way out first, and a gallery you cannot
+    // leave is the complaint this was built from.
+    const closed: string[] = [];
+    const made = menuWith([line()], [], closed);
+    const first = made.element.querySelector(".solutions-menu__head button") as HTMLButtonElement;
+
+    expect(first.textContent).toContain("Back to the puzzle");
+    first.click();
+    expect(closed).toEqual(["back"]);
+  });
+
+  test("each entry draws the board its line leaves behind", () => {
+    // The preview is the point: two lines on one puzzle usually end
+    // differently, and where they end is the fastest way to see that.
+    const made = menuWith([line(), line({ solutionId: 2 })]);
+    const entries = [...made.element.querySelectorAll(".solutions-menu__entry")];
+
+    expect(entries).toHaveLength(2);
+    for (const entry of entries) {
+      const board = entry.querySelector(".solutions-menu__board");
+      expect(board).not.toBeNull();
+      expect(board!.querySelectorAll("rect").length).toBeGreaterThan(0);
+    }
+  });
+
+  test("an entry carries who, when, what it sent and what it cleared", () => {
+    const made = menuWith([line()]);
+    const facts = made.element.querySelector(".solutions-menu__facts")!.textContent ?? "";
+
+    expect(facts).toContain("Ada");
+    expect(facts).toContain("today");
+    expect(facts).toContain("4 attack");
+    expect(facts).toContain("1 pieces");
+    // Safe here and only here: this screen is reachable only by somebody who
+    // has already solved the puzzle.
+    expect(facts).toContain("tsd");
+  });
+
+  test("the maker's answer belongs to nobody and says so", () => {
+    const made = menuWith([line({ source: "reference", finder: null })]);
+    const facts = made.element.querySelector(".solutions-menu__facts")!.textContent ?? "";
+
+    expect(facts).toContain("The maker's answer");
+    expect(facts).toContain("shipped with the puzzle");
+  });
+
+  test("your own line is named as yours and marked", () => {
+    const made = menuWith([line({ finder: { id: "me", username: "Me", avatarUrl: null } })]);
+    const entry = made.element.querySelector(".solutions-menu__entry")!;
+
+    expect(entry.querySelector(".solutions-menu__who")!.textContent).toBe("You");
+    expect(entry.className).toContain("solutions-menu__entry--self");
+  });
+
+  test("a line that beat the target another way says which", () => {
+    const made = menuWith([line({ solvedStrict: false })]);
+    expect(made.element.querySelector(".solutions-menu__note")!.textContent).toBe(
+      "beat the target another way",
+    );
+  });
+
+  test("picking an entry hands that line back", () => {
+    const opened: unknown[] = [];
+    const made = menuWith([line(), line({ solutionId: 2 })], opened);
+
+    (made.element.querySelectorAll(".solutions-menu__entry")[1] as HTMLButtonElement).click();
+
+    expect((opened[0] as { solutionId: number }).solutionId).toBe(2);
+  });
+
+  test("no lines says so rather than drawing an empty grid", () => {
+    const made = menuWith([]);
+    expect(made.element.querySelectorAll(".solutions-menu__entry")).toHaveLength(0);
+    expect(made.element.querySelector(".solutions-menu__count")!.textContent).toBe(
+      "No solutions on file for this one.",
+    );
+  });
+});
+
+describe("a wheel anywhere on a screen scrolls it", () => {
+  /**
+   * The complaint: scrolling worked over the day's sheets and nowhere else —
+   * not over the yellow ground, not over the leaderboard, not over discoveries.
+   *
+   * Two separate causes, and both are cascade facts rather than layout, so
+   * happy-dom can hold them even though it does no layout of its own.
+   */
+  const styleOf = (className: string) => {
+    const node = window.document.createElement("div");
+    node.className = className;
+    window.document.body.append(node);
+    return window.getComputedStyle(node as never);
+  };
+
+  test("the scroll region spans the ground rather than a column down the middle", () => {
+    // It used to be `justify-self: center` at `min(--screen-width, 100%)`, so
+    // every pixel either side of it had no scrollable ancestor at all and a
+    // wheel over the yellow did nothing.
+    const screen = styleOf("screen");
+    expect(screen.width).toBe("100%");
+    expect(screen.overflowY).toBe("auto");
+  });
+
+  test("and the cap moved onto what the screen holds, so it still reads centred", () => {
+    const card = window.document.createElement("div");
+    const screen = window.document.createElement("div");
+    screen.className = "screen";
+    screen.append(card);
+    window.document.body.append(screen);
+
+    expect(window.getComputedStyle(card as never).justifySelf).toBe("center");
+    expect(window.getComputedStyle(card as never).maxWidth).not.toBe("none");
+  });
+
+  test("a rail that cannot scroll passes the wheel on instead of eating it", () => {
+    // `overscroll-behavior: contain` blocks scroll chaining even when the
+    // element has nothing to scroll — which is why the leaderboard and the
+    // discoveries card, neither of which usually overflows, swallowed it.
+    expect(styleOf("rail").overscrollBehavior).not.toBe("contain");
+  });
+
+  test("nor does the screen itself refuse what a rail passes up", () => {
+    expect(styleOf("screen").overscrollBehavior).not.toBe("contain");
+  });
+});
+
+describe("a player's picture", () => {
+  const STATS = {
+    player: { id: "ada", username: "Ada", avatarUrl: "https://local.test/avatar.png" },
+    puzzlesCleared: 3, clearsTotal: 5, bestMsTotal: 9_000,
+    rushSolved: 2, rushRuns: 1, bestRush: 2, discoveries: 0,
+    archiveSize: 138, streak: 1, daysSolved: 1,
+  };
+
+  test("the monogram is drawn whether or not there is a picture", () => {
+    // It is the floor, not a placeholder: avatars live on an external host and
+    // an activity only reaches what Discord's URL mapping allows.
+    const withPicture = playerAvatar(STATS.player as never);
+    const without = playerAvatar({ id: "b", username: "bo", avatarUrl: null } as never);
+
+    expect(withPicture.querySelector(".avatar__monogram")!.textContent).toBe("A");
+    expect(without.querySelector(".avatar__monogram")!.textContent).toBe("B");
+    expect(without.querySelector(".avatar__image") === null).toBe(true);
+  });
+
+  test("a picture that fails to load takes itself away", () => {
+    // Removed rather than hidden: a broken <img> keeps its broken state, and
+    // some browsers draw an icon in it regardless of opacity.
+    const made = playerAvatar(STATS.player as never);
+    const image = made.querySelector(".avatar__image") as HTMLElement;
+    expect(image === null).toBe(false);
+
+    image.dispatchEvent(new window.Event("error") as never);
+
+    expect(made.querySelector(".avatar__image") === null).toBe(true);
+    expect(made.querySelector(".avatar__monogram")!.textContent).toBe("A");
+  });
+
+  test("a name starting with an astral character keeps the whole character", () => {
+    // `name[0]` would take half a surrogate pair and draw a replacement box.
+    const made = playerAvatar({ id: "c", username: "😀nes", avatarUrl: null } as never);
+    expect(made.querySelector(".avatar__monogram")!.textContent).toBe("😀");
+  });
+
+  test("the profile shows the picture of whoever it is about", () => {
+    const made = createProfile();
+    made.update(STATS as never);
+
+    const portrait = made.element.querySelector(".profile__portrait .avatar");
+    expect(portrait === null).toBe(false);
+    expect(portrait!.querySelector(".avatar__monogram")!.textContent).toBe("A");
+    expect(made.element.querySelector(".profile__name")!.textContent).toBe("Ada");
+  });
+});
+
+describe("reading a solution back", () => {
+  const THREE = [
+    { piece: "T", cells: [], clear: null, attack: 0 },
+    { piece: "I", cells: [], clear: "quad", attack: 4 },
+    { piece: "O", cells: [], clear: null, attack: 0 },
+  ];
+
+  const bound = (steps = THREE) => {
+    const made = createSolutionsPanel();
+    const player = fakePlayer(steps as never);
+    window.document.body.append(made.element as never);
+    made.bind(player, () => {});
+    return { made, player };
+  };
+
+  test("the timeline has one tick per placement", () => {
+    // The whole point: a picture of the solution's length before you have
+    // watched any of it. "2 / 3" told you neither how long nor where.
+    const { made } = bound();
+    expect(made.element.querySelectorAll(".replay__tick")).toHaveLength(3);
+  });
+
+  test("a placement that clears lines is marked on its tick", () => {
+    // On a long solve the marks are the shape of the answer.
+    const { made } = bound();
+    const marked = [...made.element.querySelectorAll(".replay__tick--clears")];
+    expect(marked).toHaveLength(1);
+    expect([...made.element.querySelectorAll(".replay__tick")].indexOf(marked[0]!)).toBe(1);
+  });
+
+  test("clicking a tick seeks straight to it", () => {
+    const { made, player } = bound();
+    (made.element.querySelectorAll(".replay__tick")[2] as HTMLButtonElement).click();
+
+    expect((player as unknown as { position: number }).position).toBe(2);
+    expect(made.element.querySelector(".replay__position")!.textContent).toBe("3 / 3");
+  });
+
+  test("the transport steps, and jumps to either end", () => {
+    const { made, player } = bound();
+    const at = () => (player as unknown as { position: number }).position;
+    const press = (label: string) =>
+      ([...made.element.querySelectorAll(".replay__transport button")] as HTMLButtonElement[])
+        .find((b) => b.textContent === label)!
+        .click();
+
+    press("⏭");
+    expect(at()).toBe(3);
+    press("⏮");
+    expect(at()).toBe(0);
+    press("▶");
+    expect(at()).toBe(1);
+    press("◀");
+    expect(at()).toBe(0);
+  });
+
+  test("the arrow keys step it, because both hands are already there", () => {
+    const { made, player } = bound();
+    const at = () => (player as unknown as { position: number }).position;
+
+    window.document.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "ArrowRight" }) as never,
+    );
+    expect(at()).toBe(1);
+    window.document.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "ArrowLeft" }) as never,
+    );
+    expect(at()).toBe(0);
+    window.document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "End" }) as never);
+    expect(at()).toBe(3);
+    window.document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Home" }) as never);
+    expect(at()).toBe(0);
+
+    made.detach();
+  });
+
+  test("it does not steal a key from a field being typed in", () => {
+    const { made, player } = bound();
+    const field = window.document.createElement("input");
+    window.document.body.append(field);
+
+    field.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }) as never,
+    );
+
+    expect((player as unknown as { position: number }).position).toBe(0);
+    field.remove();
+    made.detach();
+  });
+
+  test("and gives the keyboard back once it is off screen", () => {
+    // The rail is replaced out from under this on every screen change and
+    // nothing calls detach on the way, so the listener has to notice itself.
+    const { made, player } = bound();
+    made.element.remove();
+
+    window.document.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "ArrowRight" }) as never,
+    );
+
+    expect((player as unknown as { position: number }).position).toBe(0);
+  });
+});
+
+describe("what the critique found", () => {
+  const THREE = [
+    { piece: "T", cells: [], clear: null, attack: 0 },
+    { piece: "I", cells: [], clear: "quad", attack: 4 },
+    { piece: "O", cells: [], clear: null, attack: 0 },
+  ];
+  const boundReplay = (steps = THREE) => {
+    const made = createSolutionsPanel();
+    const player = fakePlayer(steps as never);
+    window.document.body.append(made.element as never);
+    made.bind(player, () => {});
+    const at = () => (player as unknown as { position: number }).position;
+    return { made, player, at };
+  };
+
+  test("the last placement and the finished board read differently", () => {
+    // Pressing ▶ on the final piece is the most consequential step in a replay
+    // and it used to print "3 / 3" before and after, so it looked like a no-op.
+    const { made, player } = boundReplay();
+    (player as unknown as { seek: (n: number) => void }).seek(2);
+    made.bind(player as never, () => {});
+    expect(made.element.querySelector(".replay__position")!.textContent).toBe("3 / 3");
+
+    (player as unknown as { end: () => void }).end();
+    made.bind(player as never, () => {});
+    expect(made.element.querySelector(".replay__position")!.textContent).toContain("done");
+  });
+
+  test("the timeline is one row however long the solution is", () => {
+    // The rail is minmax(158px, 214px). The old `repeat(auto-fit, minmax(6px,
+    // 1fr))` capped it near 23 columns, so a 73-placement solve wrapped into a
+    // block of squares. A timeline that wraps is not a timeline.
+    const { made } = boundReplay(
+      Array.from({ length: 73 }, (_, i) => ({ piece: "T", cells: [], clear: null, attack: i })),
+    );
+    const track = made.element.querySelector(".replay__track")!;
+
+    expect(track.querySelectorAll(".replay__tick")).toHaveLength(73);
+    const style = window.getComputedStyle(track as never);
+    expect(style.gridAutoFlow).toContain("column");
+  });
+
+  test("a clearing placement is marked by height, which survives a thin tick", () => {
+    // The mark used to be a 2px border on a tick about 1px wide at that length
+    // — invisible at exactly the length it was the whole argument for.
+    const { made } = boundReplay();
+    const clearing = made.element.querySelectorAll(".replay__tick")[1]!;
+    expect(clearing.className).toContain("replay__tick--clears");
+    expect(window.getComputedStyle(clearing as never).height).toBe("18px");
+  });
+
+  test("keys stand down while a dialog is open over the board", () => {
+    // The settings sheet is a sibling of the deck, not a screen, so it leaves
+    // this mounted and these keys live underneath it.
+    const { made, at } = boundReplay();
+    const dialog = window.document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    window.document.body.append(dialog);
+
+    window.document.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "ArrowRight" }) as never,
+    );
+    expect(at()).toBe(0);
+
+    dialog.remove();
+    window.document.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "ArrowRight" }) as never,
+    );
+    expect(at()).toBe(1);
+    made.detach();
+  });
+});
+
+describe("the replay card fits the rail it lives in", () => {
+  const THREE = [
+    { piece: "T", cells: [], clear: null, attack: 0 },
+    { piece: "I", cells: [], clear: "quad", attack: 4 },
+    { piece: "O", cells: [], clear: null, attack: 0 },
+  ];
+
+  test("all four transport controls sit on one row", () => {
+    // The rail is minmax(158px, 214px). As a wrapping flex row the last control
+    // fell to a second line on its own, reading as a sixth button somebody
+    // forgot to align.
+    const made = createSolutionsPanel();
+    window.document.body.append(made.element as never);
+    made.bind(fakePlayer(THREE as never), () => {});
+
+    const transport = made.element.querySelector(".replay__transport")!;
+    expect(transport.querySelectorAll("button")).toHaveLength(4);
+    const style = window.getComputedStyle(transport as never);
+    expect(style.display).toBe("grid");
+    expect(style.gridTemplateColumns).toContain("repeat(4");
+  });
+
+  test("the end of a solution is said once, not twice", () => {
+    const made = createSolutionsPanel();
+    const player = fakePlayer(THREE as never);
+    window.document.body.append(made.element as never);
+    (player as unknown as { end: () => void }).end();
+    made.bind(player, () => {});
+
+    expect(made.element.querySelector(".replay__position")!.textContent).toBe("done");
+    // The caption used to print "done" as well, so the rail read "done" twice
+    // side by side.
+    expect(made.element.querySelector(".replay__caption")!.textContent).not.toContain("done");
+  });
+
+  test("the reading screen does not inherit the gallery's list", () => {
+    // One long-lived panel serves both paths. A reader who came through the
+    // post-run gallery used to see "One solution on file" one click after the
+    // menu told them there were four.
+    const made = createSolutionsPanel();
+    window.document.body.append(made.element as never);
+    made.show(
+      [
+        {
+          solutionId: 1, placements: [], attack: 4, clears: [],
+          source: "reference", finder: null, foundAt: 0, solvedStrict: true,
+        },
+      ] as never,
+      "me",
+      () => {},
+    );
+    expect(made.element.querySelectorAll(".solutions__row")).toHaveLength(1);
+
+    made.readingOnly();
+
+    expect(made.element.querySelectorAll(".solutions__row")).toHaveLength(0);
+  });
+});
+
+describe("the solutions card in a short frame", () => {
+  test("it is never shrunk past its own controls", () => {
+    // `.rail > .panel:has(.board-list) { min-height: 0 }` is written for a
+    // leaderboard, whose list scrolls inside itself. This card also holds a
+    // `.board-list`, so it was caught by the same selector — and most of its
+    // height is a timeline and a transport, which cannot scroll and cannot
+    // shrink. In a short Discord frame the buttons drew outside the cream box.
+    const rail = window.document.createElement("div");
+    rail.className = "rail";
+    const made = createSolutionsPanel();
+    rail.append(made.element as never);
+    window.document.body.append(rail);
+    made.bind(fakePlayer(), () => {});
+
+    const style = window.getComputedStyle(made.element as never);
+    expect(style.minHeight).toBe("auto");
+    expect(style.flexGrow).toBe("0");
+    expect(style.flexShrink).toBe("0");
+  });
+});
+
+describe("the leaderboards page", () => {
+  const P = (id: string, username: string) => ({ id, username, avatarUrl: null });
+  const CATEGORIES = [
+    {
+      key: "today", label: "Today", scope: "server", measure: "solved",
+      entries: [
+        { player: P("ada", "Ada"), value: 3, detailMs: 61_500 },
+        { player: P("me", "Me"), value: 1, detailMs: 9_000 },
+      ],
+    },
+    {
+      key: "solved", label: "Archive", scope: "everyone", measure: "puzzles",
+      entries: [{ player: P("bo", "Bo"), value: 41, detail: "of 138" }],
+    },
+    { key: "empty", label: "Discoveries", scope: "everyone", measure: "lines", entries: [] },
+  ];
+
+  const page = (opened: string[] = []) => {
+    const made = createLeaderboards({ onPlayer: (id) => opened.push(id) });
+    window.document.body.append(made.element as never);
+    made.update(CATEGORIES as never, "me");
+    return made;
+  };
+
+  test("every category is a tab, and the first is showing", () => {
+    const made = page();
+    const tabs = [...made.element.querySelectorAll(".boards__tabs button")];
+    expect(tabs.map((t) => t.textContent)).toEqual(["Today", "Archive", "Discoveries"]);
+    expect(tabs[0]!.className).toContain("btn--primary");
+  });
+
+  test("switching tab swaps the list without reloading the page", () => {
+    // The point of tabs over screens: what a reader does here is compare.
+    const made = page();
+    expect(made.element.querySelectorAll(".boards__row")).toHaveLength(2);
+
+    ([...made.element.querySelectorAll(".boards__tabs button")] as HTMLButtonElement[])[1]!.click();
+
+    const rows = [...made.element.querySelectorAll(".boards__row")];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.querySelector(".board-list__name")!.textContent).toBe("Bo");
+  });
+
+  test("a row says what its number counts, and pluralises", () => {
+    const made = page();
+    const scores = [...made.element.querySelectorAll(".board-list__score")].map((n) => n.textContent);
+    expect(scores).toEqual(["3 solved", "1 solved"]);
+
+    ([...made.element.querySelectorAll(".boards__tabs button")] as HTMLButtonElement[])[1]!.click();
+    expect(made.element.querySelector(".board-list__score")!.textContent).toBe("41 puzzles");
+  });
+
+  test("a duration is formatted by the client, not shipped as text", () => {
+    const made = page();
+    expect(made.element.querySelector(".boards__detail")!.textContent).toBe("1:01.5");
+  });
+
+  test("the scope is printed, because it is the first thing asked", () => {
+    // Two of these boards are this server's and three are everybody's. "Why am
+    // I not on this" is the question a reader has.
+    const made = page();
+    expect(made.element.querySelector(".boards__scope")!.textContent).toBe("This server");
+
+    ([...made.element.querySelectorAll(".boards__tabs button")] as HTMLButtonElement[])[1]!.click();
+    expect(made.element.querySelector(".boards__scope")!.textContent).toBe("Everyone, all time");
+  });
+
+  test("your own row is marked", () => {
+    const made = page();
+    const rows = [...made.element.querySelectorAll(".boards__row")];
+    expect(rows[0]!.className).not.toContain("board-list__row--self");
+    expect(rows[1]!.className).toContain("board-list__row--self");
+  });
+
+  test("clicking a name opens that player", () => {
+    // A leaderboard whose names cannot be opened is a list of strangers.
+    const opened: string[] = [];
+    const made = page(opened);
+    (made.element.querySelectorAll(".boards__row")[0] as HTMLButtonElement).click();
+    expect(opened).toEqual(["ada"]);
+  });
+
+  test("an empty board invites rather than showing nothing", () => {
+    const made = page();
+    ([...made.element.querySelectorAll(".boards__tabs button")] as HTMLButtonElement[])[2]!.click();
+    expect(made.element.querySelectorAll(".boards__row")).toHaveLength(0);
+    expect(made.element.querySelector(".boards__list .note")!.textContent).toBe(
+      "Nobody is on this one yet. Be first.",
+    );
+  });
+
+  test("a refresh keeps the reader on the board they were reading", () => {
+    const made = page();
+    ([...made.element.querySelectorAll(".boards__tabs button")] as HTMLButtonElement[])[1]!.click();
+    made.update(CATEGORIES as never, "me");
+    expect(made.element.querySelector(".boards__scope")!.textContent).toBe("Everyone, all time");
+  });
+});
+
+describe("somebody else's profile", () => {
+  const STATS = (isSelf: boolean) => ({
+    player: { id: isSelf ? "me" : "ada", username: isSelf ? "Me" : "Ada", avatarUrl: null },
+    isSelf,
+    puzzlesCleared: 0, clearsTotal: 0, bestMsTotal: 0,
+    rushSolved: 0, rushRuns: 0, bestRush: 0, discoveries: 0,
+    archiveSize: 138, streak: 0, daysSolved: 0,
+  });
+
+  test("gets a way back to the board it was opened from", () => {
+    const made = createProfile();
+    const back: string[] = [];
+    made.update(STATS(false) as never, () => back.push("back"));
+
+    const button = made.element.querySelector(".profile__back button") as HTMLButtonElement;
+    expect(button).not.toBeNull();
+    button.click();
+    expect(back).toEqual(["back"]);
+  });
+
+  test("your own does not, because you did not arrive from one", () => {
+    const made = createProfile();
+    made.update(STATS(true) as never, () => {});
+    expect(made.element.querySelector(".profile__back button") === null).toBe(true);
+  });
+
+  test("an empty record does not tell a stranger to go and solve something", () => {
+    const mine = createProfile();
+    mine.update(STATS(true) as never);
+    expect(mine.element.querySelector(".profile__note")!.textContent).toContain("Solve anything");
+
+    const theirs = createProfile();
+    theirs.update(STATS(false) as never, () => {});
+    expect(theirs.element.querySelector(".profile__note")!.textContent).toBe("No record yet.");
+  });
+});
+
+describe("a leaderboard row lays out as one row", () => {
+  test("its five columns beat the three-column base rule", () => {
+    // `.board-list__row` in overlays.css sets three columns and overlays.css
+    // loads after panels.css, so a single-class selector lost to it and the
+    // last two children wrapped onto an implicit second row — which is how the
+    // score came to be printed over the time.
+    const made = createLeaderboards({ onPlayer: () => {} });
+    window.document.body.append(made.element as never);
+    made.update(
+      [
+        {
+          key: "today", label: "Today", scope: "server", measure: "solved",
+          entries: [
+            {
+              player: { id: "ada", username: "Ada", avatarUrl: null },
+              value: 3,
+              detailMs: 61_500,
+            },
+          ],
+        },
+      ] as never,
+      "me",
+    );
+
+    const row = made.element.querySelector(".boards__row")!;
+    // Five children: rank, face, name, detail, score.
+    expect(row.children).toHaveLength(5);
+    // The declared template, not a split on spaces — `minmax(0, 1fr)` has a
+    // space in it and would inflate any naive count.
+    const columns = window.getComputedStyle(row as never).gridTemplateColumns;
+    expect(columns).toContain("minmax(0, 1fr)");
+    expect(columns.startsWith("20px auto")).toBe(true);
+    expect(columns.endsWith("auto auto")).toBe(true);
+  });
+});
+
+describe("the lines on a profile", () => {
+  const base = {
+    player: { id: "ada", username: "Ada", avatarUrl: null },
+    isSelf: false,
+    puzzlesCleared: 2, clearsTotal: 2, bestMsTotal: 9_000,
+    rushSolved: 0, rushRuns: 0, bestRush: 0, discoveries: 3,
+    archiveSize: 138, streak: 0, daysSolved: 1,
+  };
+  const found = (over: Record<string, unknown> = {}) => ({
+    puzzleId: 92, title: "nah sli'd win", attack: 18, clears: ["tsd"],
+    foundAt: Date.now(), voided: false, openable: true, ...over,
+  });
+  const page = (lines: unknown[], opened: number[] = []) => {
+    const made = createProfile();
+    window.document.body.append(made.element as never);
+    made.update({ ...base, found: lines } as never, () => {}, (id) => opened.push(id));
+    return made;
+  };
+
+  test("each line names the puzzle it was found on", () => {
+    const made = page([found()]);
+    const row = made.element.querySelector(".profile__found-row")!;
+    expect(row.querySelector(".board-list__name")!.textContent).toBe("#92 nah sli'd win");
+    expect(row.querySelector(".board-list__score")!.textContent).toBe("18 atk");
+    expect(row.querySelector(".profile__found-when")!.textContent).toBe("today");
+  });
+
+  test("a line the reader may read is a control; one they may not is not", () => {
+    // A button that refuses when pressed is worse than a row that never
+    // offered. The gate is the reader's own solve, not the finder's.
+    const open = page([found()]).element.querySelector(".profile__found-row")!;
+    expect(open.tagName).toBe("BUTTON");
+
+    const shut = page([found({ openable: false })]).element.querySelector(".profile__found-row")!;
+    expect(shut.tagName).toBe("DIV");
+    expect(shut.getAttribute("title")).toBe("solve it yourself to read it");
+  });
+
+  test("a line whose board was edited says why it cannot be opened", () => {
+    const row = page([found({ openable: false, voided: true })]).element.querySelector(
+      ".profile__found-row",
+    )!;
+    expect(row.getAttribute("title")).toBe("that board has been edited since");
+  });
+
+  test("opening a line asks for that puzzle's solutions", () => {
+    const opened: number[] = [];
+    const made = page([found()], opened);
+    (made.element.querySelector(".profile__found-row") as HTMLButtonElement).click();
+    expect(opened).toEqual([92]);
+  });
+
+  test("a player who has found nothing gets no card at all", () => {
+    // An empty box under a zero says the same nothing twice.
+    const made = page([]);
+    expect((made.element.querySelector(".profile__found-card") as HTMLElement).hidden).toBe(true);
+  });
+});
+
+describe("a screen that waits on the network", () => {
+  test("the boards page says something before any data arrives", () => {
+    // It is mounted on the click and filled on the response, so this is what
+    // stands in for the round trip.
+    const made = createLeaderboards({ onPlayer: () => {} });
+    window.document.body.append(made.element as never);
+
+    expect(made.hasData).toBe(false);
+    expect(made.element.querySelector(".boards__scope")!.textContent).toBe("Reading the boards…");
+  });
+
+  test("and keeps the boards it has while the next ones are fetched", () => {
+    // The same five boards either way: showing yesterday's number briefly beats
+    // showing nothing.
+    const made = createLeaderboards({ onPlayer: () => {} });
+    made.update(
+      [
+        {
+          key: "today", label: "Today", scope: "server", measure: "solved",
+          entries: [{ player: { id: "ada", username: "Ada", avatarUrl: null }, value: 1 }],
+        },
+      ] as never,
+      "me",
+    );
+    expect(made.hasData).toBe(true);
+    expect(made.element.querySelectorAll(".boards__row")).toHaveLength(1);
+  });
+
+  test("a profile blanks itself instead, because its subject changes", () => {
+    // Leaving somebody else's numbers under a new name would be a lie rather
+    // than merely stale.
+    const made = createProfile();
+    made.update(
+      {
+        player: { id: "ada", username: "Ada", avatarUrl: null }, isSelf: false,
+        puzzlesCleared: 9, clearsTotal: 9, bestMsTotal: 1, rushSolved: 0,
+        rushRuns: 0, bestRush: 0, discoveries: 0, archiveSize: 138,
+        streak: 0, daysSolved: 0,
+      } as never,
+      () => {},
+    );
+    expect(made.element.querySelector(".profile__name")!.textContent).toBe("Ada");
+
+    made.loading();
+
+    expect(made.element.querySelector(".profile__name")!.textContent).toBe("");
+    expect(made.element.querySelector(".profile__stats")!.textContent).toBe("");
+    expect(made.element.querySelector(".profile__note")!.textContent).toBe("Reading…");
+  });
+});
+
+describe("today's four, on the boards page", () => {
+  const DAILY = {
+    tiers: [
+      { tier: "easy", filed: 18, solved: 15, you: "solved" },
+      { tier: "medium", filed: 12, solved: 6, you: "missed" },
+      { tier: "hard", filed: 7, solved: 1, you: "none" },
+      { tier: "extreme", filed: 0, solved: 0, you: "none" },
+    ],
+    standing: { rank: 7, of: 52, solved: 1, totalMs: 61_500 },
+  };
+  const CATS = [
+    { key: "today", label: "Today", scope: "server", measure: "solved", entries: [] },
+    { key: "solved", label: "Archive", scope: "everyone", measure: "puzzles", entries: [] },
+  ];
+  const page = (daily: unknown = DAILY) => {
+    const made = createLeaderboards({ onPlayer: () => {} });
+    window.document.body.append(made.element as never);
+    made.update(CATS as never, "me", daily as never);
+    return made;
+  };
+
+  test("one row per tier, counted rather than rated", () => {
+    // One solve out of one hand-in is a hundred per cent, and this board is a
+    // single Discord server most of the time.
+    const made = page();
+    const counts = [...made.element.querySelectorAll(".boards__tier-count")].map((n) => n.textContent);
+    expect(counts).toEqual(["15 of 18", "6 of 12", "1 of 7", "nobody yet"]);
+  });
+
+  test("the bar is the solve rate, and an untouched tier draws none", () => {
+    const made = page();
+    const widths = [...made.element.querySelectorAll(".boards__bar-fill")].map(
+      (n) => (n as HTMLElement).style.width,
+    );
+    expect(widths[0]).toBe("83%");
+    expect(widths[3]).toBe("0%");
+  });
+
+  test("it says what you did on each tier", () => {
+    const made = page();
+    const yours = [...made.element.querySelectorAll(".boards__tier-you")].map((n) => n.textContent);
+    expect(yours).toEqual(["you solved it", "you missed it", "", ""]);
+  });
+
+  test("and where you stand, because the list below is only the top 25", () => {
+    const made = page();
+    const note = made.element.querySelector(".boards__day-note")!.textContent ?? "";
+    expect(note).toContain("You are 7th of 52 today");
+    // The caveat, because a reader will otherwise take "filed" for "played".
+    expect(note).toContain("hand-ins");
+  });
+
+  test("somebody who has filed nothing is told so, not ranked zeroth", () => {
+    const made = page({ ...DAILY, standing: null });
+    expect(made.element.querySelector(".boards__day-note")!.textContent).toContain(
+      "not filed anything today",
+    );
+  });
+
+  test("it is hidden on the boards that have no today", () => {
+    // Archive, Discoveries and the rush records are all-time or another mode.
+    const made = page();
+    expect((made.element.querySelector(".boards__day-card") as HTMLElement).hidden).toBe(false);
+
+    ([...made.element.querySelectorAll(".boards__tabs button")] as HTMLButtonElement[])[1]!.click();
+
+    expect((made.element.querySelector(".boards__day-card") as HTMLElement).hidden).toBe(true);
+  });
+});
+
+describe("the leaderboard on the front door", () => {
+  test("the whole card opens every board, by click and by key", () => {
+    // A card that lists the day's top few and cannot be opened is a dead end,
+    // and the page it leads to carries seven boards this one is a slice of.
+    const opened: string[] = [];
+    const made = createDailyBoard(() => opened.push("open"));
+    window.document.body.append(made.element as never);
+
+    expect(made.element.getAttribute("role")).toBe("button");
+    expect(made.element.getAttribute("tabindex")).toBe("0");
+
+    (made.element as HTMLElement).click();
+    expect(opened).toEqual(["open"]);
+
+    // The two keys a role="button" is required to answer to.
+    made.element.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }) as never);
+    made.element.dispatchEvent(new window.KeyboardEvent("keydown", { key: " " }) as never);
+    expect(opened).toHaveLength(3);
+  });
+
+  test("and ignores keys that are not those two", () => {
+    const opened: string[] = [];
+    const made = createDailyBoard(() => opened.push("open"));
+    window.document.body.append(made.element as never);
+
+    made.element.dispatchEvent(new window.KeyboardEvent("keydown", { key: "a" }) as never);
+    expect(opened).toEqual([]);
+  });
+
+  test("without a handler it is not a control at all", () => {
+    // The review tool builds this board too, where there is nowhere to go.
+    const made = createDailyBoard();
+    expect(made.element.getAttribute("role") === null).toBe(true);
+    expect(made.element.className).not.toContain("panel--opens");
   });
 });
