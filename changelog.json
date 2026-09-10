@@ -1,5 +1,5 @@
 {
-  "$comment": "The project's version and its player-facing release notes. Newest first; order in this list IS the version order. Read by client/changelog.py (the bot's /puzzle announcement) and by activity/server/changelog.ts (the What's new card inside the activity). Adding a release means putting it at the top. Keep `changes` to things a player can see.",
+  "$comment": "The project's version and its player-facing release notes. Newest first; order in this list IS the version order. Read by client/changelog.py — the bot's /puzzle announcement. Adding a release means putting it at the top. Keep `changes` to things a player can see.",
   "releases": [
     {
       "version": "beta 0.3",

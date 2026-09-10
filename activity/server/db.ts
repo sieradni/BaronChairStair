@@ -328,7 +328,34 @@ CREATE INDEX IF NOT EXISTS archive_content_log_puzzle
  *
  * Run this rather than {@link ARCHIVE_SCHEMA} directly.
  */
+/**
+ * Adds a column to a table that may already exist, from outside a `Store`.
+ *
+ * `Store.addMissingColumn` is a method and the archive tools have no Store —
+ * they open the database bare. Same rule, same reason: `CREATE TABLE IF NOT
+ * EXISTS` does nothing to a table that is already there.
+ */
+function addColumnIfMissing(db: Database, table: string, column: string, definition: string): void {
+  // The table itself may not be there. `migrateArchive` runs against databases
+  // that hold only the archive — `tools/sync-archive.ts` builds one from
+  // nothing — and `PRAGMA table_info` on a missing table answers with an empty
+  // list, which reads exactly like "the column is missing" and then throws on
+  // the ALTER. `countDiscoveries` already asks this same question before it
+  // counts, and for the same reason.
+  const columns = db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all();
+  if (columns.length === 0) return;
+  if (!columns.some((row) => row.name === column)) {
+    db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
 export function migrateArchive(db: Database): void {
+  // `countDiscoveries` and `voidDiscoveries` read and write `voided_at`, and
+  // the archive tools reach them through this function rather than through a
+  // `Store` — `tools/sync-archive.ts` opens the database bare. Without this the
+  // column exists only for a process that happened to construct a Store, and a
+  // sync against a deployed database throws "no such column".
+  addColumnIfMissing(db, "puzzle_solutions", "voided_at", "INTEGER");
   db.run(ARCHIVE_SCHEMA);
   const columns = db
     .query<{ name: string }, []>("PRAGMA table_info(archive_content_log)")
@@ -1457,7 +1484,18 @@ export class Store {
    * legacy row can carry `total_ms = 0`, and letting that win would put an
    * unbeatable 0:00.0 on a profile forever.
    */
-  recordClear(entry: { playerId: string; puzzleId: number; durationMs: number }): void {
+  recordClear(entry: {
+    playerId: string;
+    puzzleId: number;
+    durationMs: number;
+    player?: PlayerProfile;
+  }): void {
+    // `puzzle_clears.player_id` is `NOT NULL REFERENCES players(id)` and foreign
+    // keys are on, so a player this box has never written throws — which the
+    // rush and the practice route both can, since neither writes a `players`
+    // row of its own. Every other write path here upserts first;
+    // `recordSubmission` documents the same hazard three methods up.
+    if (entry.player) this.upsertPlayer(entry.player);
     const now = Date.now();
     const ms = entry.durationMs > 0 ? entry.durationMs : 0;
     this.db.run(

@@ -1110,7 +1110,7 @@
  * growing to twenty-five rows and pushing the tabs off the top — the tabs are
  * how you leave this board, so they must stay reachable.
  */
-.boards__list {
+.boards__list.board-list {
   max-height: min(52vh, 520px);
   align-content: start;
 }
@@ -1190,9 +1190,15 @@
  * scroller in a row of three fixed cards makes the row as tall as the list.
  */
 .profile__found-card { min-height: 0; }
-.profile__found { max-height: min(38vh, 340px); align-content: start; }
+.profile__found.board-list { max-height: min(38vh, 340px); align-content: start; }
 
-.profile__found-row {
+/*
+ * `.board-list__row` and `.board-list` live in overlays.css, which loads AFTER
+ * this file — so a single-class selector here loses to them whatever it says.
+ * The row's own template and the list's own height both need (0,2,0). Third
+ * instance of this trap; `.boards__row` above carries the long version.
+ */
+.profile__found-row.board-list__row {
   /* Puzzle, when, attack. */
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 10px;
@@ -1206,7 +1212,7 @@
  * about somebody else's account, and a button that refuses when pressed is
  * worse than a row that never offered.
  */
-.profile__found-row--open {
+.profile__found-row--open.board-list__row {
   width: 100%;
   font: inherit;
   color: inherit;
@@ -1214,8 +1220,8 @@
   cursor: pointer;
 }
 
-.profile__found-row--open:hover { background: var(--cream-shade); border-color: var(--ink); }
-.profile__found-row--open:active { transform: translate(1px, 1px); }
+.profile__found-row--open.board-list__row:hover { background: var(--cream-shade); border-color: var(--ink); }
+.profile__found-row--open.board-list__row:active { transform: translate(1px, 1px); }
 
 .profile__found-when {
   font-size: 11px;

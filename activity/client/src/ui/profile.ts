@@ -74,6 +74,8 @@ export interface Profile {
    * for the length of a round trip.
    */
   loading(): void;
+  /** Says the read failed, rather than leaving "Reading…" up for ever. */
+  failed(): void;
   update(
     stats: ProfileStats,
     onBack?: () => void,
@@ -147,6 +149,9 @@ export function createProfile(): Profile {
 
   return {
     element,
+    failed() {
+      note.textContent = "Could not read that profile.";
+    },
     loading() {
       name.textContent = "";
       replaceChildren(portrait);

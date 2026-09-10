@@ -17,6 +17,7 @@
 
 import type { Store } from "./db";
 import { SOLUTION_KEY_VERSION, solutionFingerprint } from "../shared/solution-key";
+import type { ClearName } from "../shared/puzzle";
 import {
   countsAsAlternate,
   meetsTarget,
@@ -224,4 +225,58 @@ export function recordDiscovery(
     console.error(`[discovery] could not count solutions for puzzle ${puzzle.id}: ${String(error)}`);
     return { isNew: discovered && credited, known: 0 };
   }
+}
+
+/** One line as a profile lists it. */
+export interface ProfileLine {
+  readonly puzzleId: number;
+  readonly title: string;
+  readonly attack: number | null;
+  readonly clears: readonly ClearName[];
+  readonly foundAt: number;
+  readonly voided: boolean;
+  readonly openable: boolean;
+}
+
+/**
+ * What a profile may say about the lines its subject found.
+ *
+ * Two different questions, and conflating them is how the first version of this
+ * leaked. `openable` is about the *click*: may this reader step this line on a
+ * board. `attack` and `clears` are the line's **content** — what it sent and
+ * what it made — and shipping those to somebody who has not solved the puzzle
+ * is precisely the disclosure the click is gated against. So a shut row carries
+ * neither.
+ *
+ * A pure function, and exported, because the rule was previously inline in the
+ * route: seeding a discovery for a route test means opening a second Store on
+ * the database the app already holds, so the invariant had nowhere it could be
+ * checked and was checked nowhere.
+ *
+ * @param cleared puzzles the *reader* has solved — not the finder.
+ */
+export function profileLines(
+  rows: readonly {
+    puzzleId: number;
+    attack: number;
+    clears: ClearName[];
+    foundAt: number;
+    voided: boolean;
+  }[],
+  titleOf: (puzzleId: number) => string | null,
+  cleared: ReadonlySet<number>,
+): ProfileLine[] {
+  return rows.map((row) => {
+    const title = titleOf(row.puzzleId);
+    const openable = !row.voided && title !== null && cleared.has(row.puzzleId);
+    return {
+      puzzleId: row.puzzleId,
+      title: title ?? "",
+      attack: openable ? row.attack : null,
+      clears: openable ? row.clears : [],
+      foundAt: row.foundAt,
+      voided: row.voided,
+      openable,
+    };
+  });
 }

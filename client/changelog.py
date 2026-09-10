@@ -13,10 +13,9 @@ somebody deploys, which may be several versions after the last deploy, and a
 changelog that only ever described the tip would silently skip the middle.
 
 The notes themselves are **not** in this file. They live in `changelog.json` at
-the repository root, because the activity shows them too — on its own front
-screen, to the players who press Join and never type `/puzzle`. Two copies of a
-list somebody has to remember to update is the drift CLAUDE.md opens by warning
-about, and the copy nobody is looking at is the one that goes stale.
+the repository root. That was so the activity could show them too; that card was
+removed, and the file stayed where it is — one list, in one place, and nothing
+to keep in step with a second copy.
 """
 
 from __future__ import annotations

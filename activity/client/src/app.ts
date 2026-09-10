@@ -397,6 +397,10 @@ export class App {
    * forgot, so the prologue is now one place instead of eight.
    */
   private leaveForScreen(): void {
+    // `relayout` draws the solution player in preference to the live board, so
+    // a reader who stepped a solution and then went anywhere else had that
+    // board painted over whatever they went to.
+    this.solutionPlayer = null;
     this.disposeActiveMode();
     this.mode = "daily";
     this.input.setGameInputEnabled(false);
@@ -605,6 +609,9 @@ export class App {
       );
     } catch (error) {
       this.toast(error instanceof ApiError ? error.message : "Could not read that profile");
+      // `loading()` blanked every card on the way in; without this the screen
+      // reads "Reading…" for the rest of the session.
+      this.profile.failed();
     }
   }
 
@@ -1369,6 +1376,10 @@ export class App {
         timeToLastSolveMs: summary.timeToLastSolveMs,
         skipsUsed: summary.skipsUsed,
       });
+      // A rush files a clear for every puzzle it solved, so the set the
+      // Solutions gate reads is stale the moment one ends. Re-read rather than
+      // reconstructed: the server decided which segments counted.
+      void this.refreshCleared();
       this.rushResult.update({
         run: response.run,
         played: response.played,
@@ -1569,8 +1580,18 @@ export class App {
       // server for one reason only — so it counts towards what this player has
       // cleared, which ticks the Explore list and opens this puzzle's
       // solutions. Nothing about it is scored.
-      if (snapshot.phase === "solved") void this.fileClear(sheet.puzzle.id, events);
       if (sheet.solution) this.attachWalkthrough(sheet.puzzle, sheet.solution);
+      // Filed after the verdict is on screen, but the card is re-rendered when
+      // it lands: `presentVerdict` reads `cleared` synchronously, so the first
+      // ever solve of a puzzle used to miss the Solutions button it had just
+      // earned by one round trip.
+      if (snapshot.phase === "solved") {
+        void this.fileClear(sheet.puzzle.id, events).then(() => {
+          if (this.sheet?.puzzle.id === sheet.puzzle.id) {
+            this.presentVerdict(this.toShareFields(snapshot), null);
+          }
+        });
+      }
       return;
     }
     if (snapshot.phase !== "solved") {
@@ -1636,6 +1657,11 @@ export class App {
         void this.loadDiscoveries();
       }
       if (!response.isFirst) this.toast("Today's sheet was already filed");
+      // The server has just recorded a clear for this puzzle if the run solved
+      // it. Without this the gate it opens stays shut on the client.
+      if (response.run.solved) {
+        this.cleared = new Set([...this.cleared, sheet.puzzle.id]);
+      }
     } catch (error) {
       this.presentVerdict(this.toShareFields(snapshot), null);
       this.toast(error instanceof ApiError ? error.message : "Could not file the sheet");
@@ -1831,6 +1857,27 @@ export class App {
    * reporting the failure of something they never asked for. The clear is
    * recoverable: solving it again files it again.
    */
+  /**
+   * Re-reads what this player has solved.
+   *
+   * `cleared` gates the Solutions control and the Explore ticks, and it used to
+   * be filled once by `loadArchive` — which only runs when somebody opens the
+   * explorer. So the server would record a daily or rush solve, open the gate,
+   * and the client would go on refusing: the button never appeared on the run
+   * that earned it, and a profile row saying "read it" answered with a toast
+   * saying the opposite.
+   *
+   * Quiet on failure: this is a refresh of something already on screen.
+   */
+  private async refreshCleared(): Promise<void> {
+    try {
+      const { cleared } = await this.connection.api.archive();
+      this.cleared = new Set(cleared);
+    } catch {
+      // Whatever is known stays known.
+    }
+  }
+
   private async fileClear(puzzleId: number, events: readonly InputEvent[]): Promise<void> {
     try {
       const { solved } = await this.connection.api.clearPuzzle(puzzleId, {

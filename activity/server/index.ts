@@ -43,7 +43,7 @@ import {
 import { config } from "./config";
 import { enforcingGoals, solvedUnderPolicy } from "./solve-verdict";
 import { trackedAnswers } from "./archive-solutions";
-import { recordDiscovery, seedReferenceSolutions } from "./discoveries";
+import { profileLines, recordDiscovery, seedReferenceSolutions } from "./discoveries";
 import { Store, type StoredRun } from "./db";
 import { DaySchedule, pastDaysOf } from "./schedule";
 import {
@@ -371,8 +371,17 @@ app.post("/api/daily/run", requireSession, async (c) => {
   // one can happen. Recorded off `run.solved` rather than re-deciding: the row
   // that was just filed is the fact, and a second judgement here could disagree
   // with the leaderboard about the same run.
-  if (run.solved) {
-    store.recordClear({ playerId: session.player.id, puzzleId: puzzle.id, durationMs: run.totalMs });
+  // `isFirst`, not `run.solved`: `recordRun`'s upsert is guarded by
+  // `WHERE runs.solved = 0 AND excluded.solved = 1`, so re-posting a tier that
+  // is already solved changes nothing and hands back the *existing* row — with
+  // `solved` true. Counting off that inflated `times` on every replay.
+  if (run.solved && isFirst) {
+    store.recordClear({
+      player: session.player,
+      playerId: session.player.id,
+      puzzleId: puzzle.id,
+      durationMs: run.totalMs,
+    });
   }
 
   // Filed after the run is recorded, never before: a discovery is a fact about
@@ -429,10 +438,16 @@ function totalTimeOnPuzzle(claimed: unknown, verifiedMs: number): number {
 /**
  * What one player has done, for their own profile.
  *
- * Their own only — there is no `?player=` and there will not be one from here.
- * Every other board in this app is a ranking somebody opted into by playing;
- * a lifetime record of how long somebody has spent and what they have not
- * solved is not, and handing it out by id would make it one.
+ * Theirs by default, anybody's by id — the leaderboards link to these, so a name
+ * on a board has to lead somewhere.
+ *
+ * This reverses what stood here. The earlier note said "there is no `?player=`
+ * and there will not be one from here", on the grounds that a lifetime record is
+ * not something a player opted into. What changed is that the boards now publish
+ * most of it under a name anyway: puzzles solved, rush bests, streaks and lines
+ * found are all on a board. What is *not* already public is withheld — see
+ * `profileLines`, which shuts a found line's content to a reader who has not
+ * solved that puzzle.
  *
  * `puzzlesCleared` is a count of distinct puzzles, which is not what the
  * masthead's older "solved" tally means — `totalSolved` counts distinct *days*,
@@ -459,20 +474,11 @@ app.get("/api/profile/:id?", requireSession, (c) => {
   // themselves — the same gate `/api/puzzles/:id/solutions` enforces, asked
   // here so the row can say so instead of failing when it is clicked.
   const mine = store.clearedPuzzleIds(session.player.id);
-  const found = store.discoveriesBy(id).map((row) => {
-    const puzzle = archive.get(row.puzzleId);
-    return {
-      puzzleId: row.puzzleId,
-      title: puzzle?.title ?? "",
-      attack: row.attack,
-      clears: row.clears,
-      foundAt: row.foundAt,
-      // A line on a board that has since been edited: the credit stands, the
-      // claim does not, and there is nothing left to step through.
-      voided: row.voided,
-      openable: !row.voided && puzzle !== undefined && mine.has(row.puzzleId),
-    };
-  });
+  const found = profileLines(
+    store.discoveriesBy(id),
+    (puzzleId) => archive.get(puzzleId)?.title ?? null,
+    mine,
+  );
 
   return c.json({
     player,
@@ -488,8 +494,7 @@ app.get("/api/profile/:id?", requireSession, (c) => {
 /**
  * Every board, in one shape, in one round trip.
  *
- * Five categories that already existed as five unrelated queries returning five
- * unrelated row types. Normalised here rather than in the browser: a page whose
+ * Several categories that were unrelated queries returning unrelated row types. Normalised here rather than in the browser: a page whose
  * job is "the same list, five ways" should be handed the same list five times,
  * and the alternative is a client that knows how to unpack a rush row, a day
  * row, a discovery row and two more besides.
@@ -499,7 +504,7 @@ app.get("/api/profile/:id?", requireSession, (c) => {
  * three are everybody's — the archive is one archive however many servers play
  * it, and how much of it somebody has solved is not a fact about a guild.
  *
- * All five are `LIMIT 25` and none of them joins the others, so this is cheap
+ * None of them joins the others, so this is cheap
  * enough to answer whole rather than a category at a time.
  */
 app.get("/api/leaderboards", requireSession, (c) => {
@@ -1184,6 +1189,7 @@ app.post("/api/rush/run", requireSession, async (c) => {
     const puzzle = puzzles[index];
     if (puzzle) {
       store.recordClear({
+        player: session.player,
         playerId: session.player.id,
         puzzleId: puzzle.id,
         durationMs: segment.durationMs,

@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store, type NewSolution } from "../server/db";
 import { voidDiscoveries } from "../server/archive-rows";
+import { profileLines } from "../server/discoveries";
 import type { SolutionStep } from "../shared/puzzle";
 
 const DB = join(tmpdir(), `solutions-gallery-${process.pid}.sqlite`);
@@ -152,5 +153,44 @@ describe("what one player found", () => {
   test("somebody else's lines are not theirs", () => {
     store.recordSolution(line({ canonicalKey: "a", foundBy: "bo" }));
     expect(store.discoveriesBy("ada")).toEqual([]);
+  });
+});
+
+describe("what a profile may say about a line", () => {
+  const row = (over: Record<string, unknown> = {}) => ({
+    puzzleId: 92, attack: 18, clears: ["tsd"] as never, foundAt: 1, voided: false, ...over,
+  });
+  const titles = (id: number) => (id === 92 ? "nah sli'd win" : null);
+
+  test("a line on a puzzle the reader has not solved ships no content", () => {
+    // `openable` gates the click; attack and clears are the line's content, and
+    // sending those to somebody who has not solved the puzzle is the very
+    // disclosure the click is gated against.
+    const [line] = profileLines([row()], titles, new Set());
+    expect(line!.openable).toBe(false);
+    expect(line!.attack).toBeNull();
+    expect(line!.clears).toEqual([]);
+    // The puzzle is still named: that much is on the front page already.
+    expect(line!.title).toBe("nah sli'd win");
+  });
+
+  test("a line on one they have solved ships all of it", () => {
+    const [line] = profileLines([row()], titles, new Set([92]));
+    expect(line!.openable).toBe(true);
+    expect(line!.attack).toBe(18);
+    expect(line!.clears).toEqual(["tsd"]);
+  });
+
+  test("a voided line is shut even to somebody who solved that puzzle", () => {
+    // The board it describes no longer exists, so there is nothing to step.
+    const [line] = profileLines([row({ voided: true })], titles, new Set([92]));
+    expect(line!.openable).toBe(false);
+    expect(line!.attack).toBeNull();
+  });
+
+  test("and so is one on a puzzle this box does not have", () => {
+    const [line] = profileLines([row({ puzzleId: 999 })], titles, new Set([999]));
+    expect(line!.openable).toBe(false);
+    expect(line!.title).toBe("");
   });
 });

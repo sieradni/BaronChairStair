@@ -102,8 +102,7 @@ first place, because the reply needs something to reply to.
 
 The project carries a version — `beta 0.3` at the time of writing — in
 `changelog.json` at the repository root, next to the list of what each one changed.
-One file, because two things read it: the bot's `/puzzle` announcement below, and the
-**What's new** card the activity shows on its own front screen.
+Read by the bot's `/puzzle` announcement, below.
 
 **A server is told the first time somebody runs `/puzzle` on a build it has not
 heard about**, as a plain message behind the puzzle embed. Not on a timer and
