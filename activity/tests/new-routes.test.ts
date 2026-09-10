@@ -14,9 +14,8 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { archive, hasSolutions, solutionOf } from "./archive";
+import { archive } from "./archive";
 import { DEFAULT_HANDLING } from "../shared/tetris/handling";
-import { GUEST_ID } from "../server/http";
 
 const DB = join(tmpdir(), `puzzle-routes-${process.pid}.sqlite`);
 let fetchApp: (request: Request) => Response | Promise<Response>;
@@ -57,13 +56,27 @@ beforeAll(async () => {
   token = (await (await post("/api/session", {})).json()).token;
 });
 
-/** A puzzle that is not one of today's, so only the solve gate is in play. */
+/**
+ * A puzzle that is not one of today's, so only the solve gate is in play.
+ *
+ * Asked of the server, and with no requirement that the puzzle have a reference
+ * answer — because neither caller needs one. One reads a gallery it has not
+ * earned; the other files an empty log. Both are refused before anything looks
+ * at an answer.
+ *
+ * It used to demand `solution.length > 0`, which made both tests throw on every
+ * box without `data/solutions.json`. That file is gitignored and built, so it
+ * is absent on exactly the machines the activity is deployed to, and present on
+ * the machines the tests are written on. It cost a deploy: the suite went red on
+ * the VPS, over two tests that had never needed the file.
+ */
 async function anArchivePuzzle(): Promise<number> {
   const today: number[] = (await (await get("/api/today")).json()).puzzles.map(
     (p: { id: number }) => p.id,
   );
-  const pick = archive.find((p) => !today.includes(p.id) && (p.solution?.length ?? 0) > 0);
-  if (!pick) throw new Error("no archive puzzle with an answer");
+  const puzzles: { id: number }[] = (await (await get("/api/archive")).json()).puzzles;
+  const pick = puzzles.find((p) => !today.includes(p.id));
+  if (!pick) throw new Error("the archive holds nothing that is not one of today's");
   return pick.id;
 }
 
@@ -88,7 +101,8 @@ describe("the solutions gallery is gated", () => {
 describe("filing a practice clear", () => {
   test("an empty log solves nothing and unlocks nothing", async () => {
     // The whole reason the route replays rather than believes: a client that
-    // could name a puzzle id would be an unlock button for the archive.
+    // could name a puzzle id would fill its own record with puzzles it never
+    // played, and the Explore ticks and the Archive board both read that record.
     const id = await anArchivePuzzle();
     const filed = await post(`/api/puzzles/${id}/clear`, {
       handling: DEFAULT_HANDLING,
