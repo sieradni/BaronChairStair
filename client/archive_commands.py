@@ -139,10 +139,22 @@ async def run_sync(dry_run: bool, by: str, cwd: Path | None = None) -> tuple[int
             "Point PUZZLE_ACTIVITY_DIR at the activity checkout."
         )
 
+    # pm2 fork mode runs this bot as a Node child and leaves NODE_CHANNEL_FD
+    # (and its serialization-mode sibling) in the environment even though the
+    # fd it names does not survive into a grandchild. Bun's own Node
+    # compatibility layer honours that variable on trust: `bun run <alias>`
+    # does a nested posix_spawn to run the resolved script line, and that
+    # spawn fails outright with `EBADF: Bad file descriptor (posix_spawn())`
+    # when it tries to wire up an IPC channel on a fd that was never actually
+    # open here. Confirmed by reproducing under a throwaway pm2 fork-mode
+    # process and clearing these two — nothing else needed changing.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("NODE_CHANNEL_")}
+
     try:
         process = await asyncio.create_subprocess_exec(
             *argv,
             cwd=str(directory),
+            env=env,
             stdout=asyncio.subprocess.PIPE,
             # Merged rather than kept apart: the tool interleaves its warnings
             # with its report, and two streams shown separately in a Discord
