@@ -13,13 +13,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import {
-  bandRow,
   HOLD_MS,
-  liftSpot,
   MultiTapTracker,
   PointerGestureTracker,
   TAP_CHORD_MS,
-  TOUCH_LIFT_ROWS,
+  TOUCH_CARRY,
   type Gesture,
   type Spot,
 } from "../client/src/game/pointer";
@@ -295,66 +293,97 @@ describe("multi-finger chords", () => {
   });
 });
 
-describe("the touch lift", () => {
-  test("the aim rides above the finger by the lift constant", () => {
-    expect(TOUCH_LIFT_ROWS).toBe(3);
-    expect(liftSpot(at(4, 5), TOUCH_LIFT_ROWS, 20)).toEqual(at(4, 8));
-  });
-
-  test("a lift past the sky saturates at the top row rather than refusing", () => {
-    expect(liftSpot(at(4, 17), TOUCH_LIFT_ROWS, 20)).toEqual(at(4, 19));
-    expect(liftSpot(at(4, 19), TOUCH_LIFT_ROWS, 20)).toEqual(at(4, 19));
-    // The column is never touched: the lift answers the one axis a pad bites.
-    expect(liftSpot(at(0, 0), TOUCH_LIFT_ROWS, 20)).toEqual(at(0, 3));
-  });
-
-  test("a zero lift is the identity, which is what a mouse gets", () => {
-    expect(liftSpot(at(3, 7), 0, 20)).toEqual(at(3, 7));
-  });
-});
-
-describe("the band below the card", () => {
+describe("the touch carry", () => {
   /*
-   * The floor band is the board's negative extension, graded by depth so the
-   * lift can land it on the bottom rows — a review of the flat band found it
-   * named row 3 forever and left rows 0–2 untouchable by any gesture. The
-   * floor sits nearest the card: a finger presses it comfortably, and the
-   * strip's far edge — the screen's bottom on a phone — never holds a seat
-   * hostage.
+   * The carry model, Block Blast style: the first move of a drag grabs the
+   * piece at the finger, and every row the finger travels moves the piece
+   * TOUCH_CARRY rows — amplified in whole rows with the remainder banked, so
+   * the journey is exactly the amplified one and no row is ever skipped. The
+   * lift this replaces moved the piece *away* from the finger, which bought
+   * visibility by spending reach: rows 0–2 became unreachable by any gesture.
    */
-  test("the band grades in thirds, nearest the card naming the floor", () => {
-    expect(bandRow(-1, 30)).toBeNull(); // not in the band at all
-    expect(bandRow(0, 30)).toBe(-3); // nearest the card: the floor itself
-    expect(bandRow(9, 30)).toBe(-3);
-    expect(bandRow(10, 30)).toBe(-2); // middle third: one row up
-    expect(bandRow(19, 30)).toBe(-2);
-    expect(bandRow(20, 30)).toBe(-1); // deepest third: two rows up
-    expect(bandRow(29, 30)).toBe(-1);
-    expect(bandRow(30, 30)).toBe(-1); // past the band's bottom saturates
-    expect(bandRow(400, 30)).toBe(-1);
+  /** A tracker over a 20-row board, carrying at the touch factor by default. */
+  const carried = () => new PointerGestureTracker(undefined, 20, { schedule: () => 0, cancel: () => {} }, 20);
+
+  test("the carry constant is the amplified feel, not a parity trap", () => {
+    expect(TOUCH_CARRY).toBe(1.5);
   });
 
-  test("a shallow band still grades into three strips", () => {
-    // The band is stage padding, on a phone often shorter than three cell
-    // heights — depth is measured in pixels so thirds never collapse.
-    expect(bandRow(0, 9)).toBe(-3);
-    expect(bandRow(4, 9)).toBe(-2);
-    expect(bandRow(8, 9)).toBe(-1);
+  test("a press aims at nothing; the first move out of its square grabs", () => {
+    const t = carried();
+    expect(t.press(at(4, 10), 0, TOUCH_CARRY)).toBeNull();
+    expect(t.move(at(4, 10))).toBeNull(); // still on the press square
+    expect(t.move(at(5, 11))).toEqual({ type: "aim", spot: at(5, 11) });
   });
 
-  test("composed with the lift, the thirds land on rows 0, 1 and 2", () => {
-    // The chain the adapter builds: the band's raw rows through the same
-    // uniform lift every touch aim takes — the floor is raw −3 lifted three,
-    // pressed just under the card.
-    const cases = [
-      [5, 0],
-      [15, 1],
-      [25, 2],
-    ] as const;
-    for (const [depth, row] of cases) {
-      const raw = bandRow(depth, 30)!;
-      expect(liftSpot({ column: 4, row: raw }, TOUCH_LIFT_ROWS, 20)).toEqual(at(4, row));
-    }
+  test("every row the finger travels moves the piece 1.5 rows, banked", () => {
+    const t = carried();
+    t.press(at(4, 10), 0, TOUCH_CARRY);
+    // The grab snaps the piece to the finger's current square, not the
+    // press's — the finger owns the piece from the first move (Block Blast's
+    // own behaviour: what you touch is what you hold).
+    expect(t.move(at(4, 11))).toEqual({ type: "aim", spot: at(4, 11) });
+    // Two finger rows → +3 piece rows: the amplification, exactly.
+    expect(t.move(at(4, 13))).toEqual({ type: "aim", spot: at(4, 14) });
+    // One finger row → +1.5, banked: +1 now, 0.5 carried.
+    expect(t.move(at(4, 14))).toEqual({ type: "aim", spot: at(4, 15) });
+    // The banked 0.5 plus the next row's 1.5: two more rows down.
+    expect(t.move(at(4, 15))).toEqual({ type: "aim", spot: at(4, 17) });
+  });
+
+  test("the carry clamps at the floor but keeps tracking", () => {
+    const t = carried();
+    t.press(at(4, 12), 0, TOUCH_CARRY);
+    t.move(at(4, 13)); // grab; piece at 13
+    // 4 finger rows → +6 → exactly the floor, unclamped.
+    expect(t.move(at(4, 17))).toEqual({ type: "aim", spot: at(4, 19) });
+    // More downward travel: the seat is already the floor, so nothing emits —
+    // the piece waits at the edge for the finger to come back.
+    expect(t.move(at(4, 19))).toBeNull();
+    t.move(at(4, 21));
+    // Reversing three finger rows from the floor: −4 amplified rows, and the
+    // clamp restarted the bank so no refused overshoot replays first.
+    expect(t.move(at(4, 18))).toEqual({ type: "aim", spot: at(4, 15) });
+  });
+
+  test("the carried seat follows the finger's column", () => {
+    const t = carried();
+    t.press(at(4, 10), 0, TOUCH_CARRY);
+    t.move(at(4, 11)); // grab at 11
+    expect(t.move(at(6, 12))).toEqual({ type: "aim", spot: at(6, 12) });
+  });
+
+  test("a release commits the carried seat; a never-grabbed release rotates", () => {
+    const t = carried();
+    t.press(at(4, 10), 0, TOUCH_CARRY);
+    t.move(at(4, 11)); // grab at 11
+    t.move(at(4, 13)); // +3 → 14
+    expect(t.release(5)).toEqual({ type: "commit", spot: at(4, 14) });
+
+    const tap = carried();
+    tap.press(at(4, 10), 0, TOUCH_CARRY);
+    expect(tap.release(5)).toEqual({ type: "rotate" });
+  });
+
+  test("a mouse carries at 1:1 — the strict drag is the carry factor of one", () => {
+    const t = new PointerGestureTracker(undefined, 20, { schedule: () => 0, cancel: () => {} }, 20);
+    t.press(at(4, 10), 0);
+    t.move(at(4, 12)); // grab at 12
+    expect(t.move(at(4, 13))).toEqual({ type: "aim", spot: at(4, 13) });
+    expect(t.move(at(4, 14))).toEqual({ type: "aim", spot: at(4, 14) });
+    expect(t.release(5)).toEqual({ type: "commit", spot: at(4, 14) });
+  });
+
+  test("a drag still voids the hold, and the carried seat survives a re-grab", () => {
+    const t = carried();
+    t.press(at(4, 10), 0, TOUCH_CARRY);
+    t.move(at(4, 11)); // grabbed: the hold clock was cleared
+    t.cancel(); // the browser took the contact
+    // A fresh press grabs wherever the finger lands — resume by re-grab —
+    // and the clamp still bounds the carried seat.
+    t.press(at(4, 17), 0, TOUCH_CARRY);
+    t.move(at(4, 18)); // grab at 18
+    expect(t.move(at(4, 20))).toEqual({ type: "aim", spot: at(4, 19) });
   });
 });
 
@@ -447,57 +476,57 @@ describe("the pointer adapter", () => {
     detach();
   });
 
-  test("a touch aims and commits above its finger; a mouse aims where it is", async () => {
+  test("a touch carries the piece farther than the finger; a mouse tracks 1:1", async () => {
     const { attachPointerPlay } = await import("../client/src/game/pointer");
     const node = element();
     node.getBoundingClientRect = () => ({ left: 0, top: 0 }) as DOMRect;
     const calls: string[] = [];
-    // The loose touch map, graded the way the app's band below the card is:
-    // on the card the strict row, in the band a raw negative row per third
-    // (−3 nearest the card, −1 deepest), as `bandRow` produces. The strict
-    // map would put the same pixels on row 8.
-    const detach = attachPointerPlay(
-      node,
-      {
-        spotAt: (x, y) => ({ column: Math.floor(x / 20), row: 9 - Math.floor(y / 20) }),
-        touchSpotAt: (x, y) => ({
-          column: Math.min(9, Math.floor(x / 20)),
-          row: y < 20 ? 9 - Math.floor(y / 20) : -3 + Math.min(Math.floor((y - 20) / 10), 2),
-        }),
-        aim: (spot) => calls.push(`aim:${spot.column},${spot.row}`),
-        commit: (spot) => calls.push(`commit:${spot.column},${spot.row}`),
-        unaim: () => calls.push("unaim"),
-        rotate: () => calls.push("rotate"),
-        hold: () => calls.push("hold"),
-        undo: () => calls.push("undo"),
-        redo: () => calls.push("redo"),
-      },
-      // The app's own lift: three rows up, saturating at the sky.
-      (spot) => liftSpot(spot, TOUCH_LIFT_ROWS, 20),
-    );
+    // The touch map is the app's: on the card the strict square, beside or
+    // below it the nearest square — every sample clamped into the board, so
+    // a drag may leave the card without the piece losing its seat. Cell is
+    // 20px; the board is 10 by 10.
+    const detach = attachPointerPlay(node, {
+      spotAt: (x, y) => ({ column: Math.floor(x / 20), row: 9 - Math.floor(y / 20) }),
+      touchSpotAt: (x, y) => ({
+        column: Math.max(0, Math.min(9, Math.floor(x / 20))),
+        row: Math.max(0, Math.min(9, 9 - Math.floor(y / 20))),
+      }),
+      aim: (spot) => calls.push(`aim:${spot.column},${spot.row}`),
+      commit: (spot) => calls.push(`commit:${spot.column},${spot.row}`),
+      unaim: () => calls.push("unaim"),
+      rotate: () => calls.push("rotate"),
+      hold: () => calls.push("hold"),
+      undo: () => calls.push("undo"),
+      redo: () => calls.push("redo"),
+    });
 
-    // A drag through the band just under the card — the floor's press —
-    // aims and commits on the floor row: the lift lands raw −3 on row 0.
+    // The same two-row finger drag, both pointers: the touch's piece lands
+    // one and a half times farther than the mouse's — the amplification,
+    // visible through the adapter. Both grab at (2,8); the touch carries
+    // −3 rows to row 5, the mouse −2 to row 6.
     node.dispatchEvent(pointer("pointerdown", 25, 25, { pointerType: "touch" }));
     node.dispatchEvent(pointer("pointermove", 45, 25, { pointerType: "touch" }));
-    expect(calls).toEqual(["aim:2,0"]);
-    node.dispatchEvent(pointer("pointerup", 45, 25, { pointerType: "touch" }));
-    expect(calls).toEqual(["aim:2,0", "commit:2,0"]);
+    node.dispatchEvent(pointer("pointermove", 45, 65, { pointerType: "touch" }));
+    expect(calls).toEqual(["aim:2,8", "aim:2,5"]);
+    node.dispatchEvent(pointer("pointerup", 45, 65, { pointerType: "touch" }));
+    expect(calls).toEqual(["aim:2,8", "aim:2,5", "commit:2,5"]);
 
-    // The band's deep third names raw −1 and lands two rows up: graded,
-    // and the far edge never holds a seat hostage.
-    calls.length = 0;
-    node.dispatchEvent(pointer("pointerdown", 25, 45, { pointerType: "touch" }));
-    node.dispatchEvent(pointer("pointermove", 45, 45, { pointerType: "touch" }));
-    node.dispatchEvent(pointer("pointerup", 45, 45, { pointerType: "touch" }));
-    expect(calls).toEqual(["aim:2,2", "commit:2,2"]);
-
-    // The mouse reads the identical pixels strictly, on the board.
     calls.length = 0;
     node.dispatchEvent(pointer("pointerdown", 25, 25, { pointerType: "mouse" }));
     node.dispatchEvent(pointer("pointermove", 45, 25, { pointerType: "mouse" }));
-    node.dispatchEvent(pointer("pointerup", 45, 25, { pointerType: "mouse" }));
-    expect(calls).toEqual(["aim:2,8", "commit:2,8"]);
+    node.dispatchEvent(pointer("pointermove", 45, 65, { pointerType: "mouse" }));
+    node.dispatchEvent(pointer("pointerup", 45, 65, { pointerType: "mouse" }));
+    expect(calls).toEqual(["aim:2,8", "aim:2,6", "commit:2,6"]);
+
+    // A finger that drags far past the board's bottom edge: every sample
+    // clamps to the floor, the carried seat waits there, and the release
+    // commits the floor seat it showed.
+    calls.length = 0;
+    node.dispatchEvent(pointer("pointerdown", 25, 45, { pointerType: "touch" }));
+    node.dispatchEvent(pointer("pointermove", 45, 45, { pointerType: "touch" }));
+    node.dispatchEvent(pointer("pointermove", 45, 400, { pointerType: "touch" }));
+    node.dispatchEvent(pointer("pointerup", 45, 400, { pointerType: "touch" }));
+    expect(calls).toEqual(["aim:2,7", "aim:2,0", "commit:2,0"]);
 
     detach();
   });
@@ -507,21 +536,17 @@ describe("the pointer adapter", () => {
     const node = element();
     node.getBoundingClientRect = () => ({ left: 0, top: 0 }) as DOMRect;
     const calls: string[] = [];
-    const detach = attachPointerPlay(
-      node,
-      {
-        spotAt: () => at(3, 4),
-        touchSpotAt: () => at(3, 0),
-        aim: () => calls.push("aim"),
-        commit: () => calls.push("commit"),
-        unaim: () => calls.push("unaim"),
-        rotate: () => calls.push("rotate"),
-        hold: () => calls.push("hold"),
-        undo: () => calls.push("undo"),
-        redo: () => calls.push("redo"),
-      },
-      (spot) => liftSpot(spot, TOUCH_LIFT_ROWS, 20),
-    );
+    const detach = attachPointerPlay(node, {
+      spotAt: () => at(3, 4),
+      touchSpotAt: () => at(3, 0),
+      aim: () => calls.push("aim"),
+      commit: () => calls.push("commit"),
+      unaim: () => calls.push("unaim"),
+      rotate: () => calls.push("rotate"),
+      hold: () => calls.push("hold"),
+      undo: () => calls.push("undo"),
+      redo: () => calls.push("redo"),
+    });
     node.dispatchEvent(pointer("pointerdown", 10, 10));
     node.dispatchEvent(pointer("pointerup", 10, 10));
     expect(calls).toEqual(["rotate"]);
@@ -674,7 +699,6 @@ describe("the pointer adapter", () => {
         undo: () => calls.push("undo"),
         redo: () => calls.push("redo"),
       },
-      undefined,
       HOLD_MS,
       fake.clock,
     );

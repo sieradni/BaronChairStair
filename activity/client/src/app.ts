@@ -10,9 +10,7 @@
 import { BOARD_HEIGHT, type PuzzlePrompt, type SolutionStep } from "@shared/puzzle";
 import {
   attachPointerPlay,
-  bandRow,
-  liftSpot,
-  TOUCH_LIFT_ROWS,
+  TOUCH_CARRY,
   type Spot,
 } from "./game/pointer";
 import type { Handling } from "@shared/tetris/handling";
@@ -117,25 +115,17 @@ export class App {
   private readonly stage = el("div", { class: "stage" }, this.canvas, this.badge.element);
 
   /**
-   * The stage as a touch surface: the square the finger names, lifted.
+   * The stage as a touch surface: the nearest square, clamped.
    *
-   * Two regions, both deliberate:
-   *
-   * - Inside the board card, the square under the contact — the same mapping a
-   *   cursor gets, so a drag tracks the finger 1:1 across the board.
-   * - Below the board, the band is the board's negative extension, graded by
-   *   depth (see {@link bandRow}): raw −3 nearest the card through raw −1 at
-   *   the stage's bottom edge, which the uniform lift lands on rows 0, 1 and
-   *   2 — the floor sits just under the card where a finger reaches
-   *   comfortably, and the strip's far edge, near the screen's bottom, never
-   *   holds a seat hostage. A drag through the strip repaints the aim
-   *   continuously; the preview is the precision, not the strip's thinness.
-   *
-   * Columns stay strict — a square names its own column, and the margins
-   * beside the card name nothing — because the lift already answers the
-   * "the finger is wider than a square" problem in the axis it bites.
-   * Everything above the board names nothing: above is not where Tetris seats
-   * are chosen.
+   * The carry model needs the finger's position, not a verdict about it — the
+   * tracker amplifies movement and clamps the carried seat itself. So this map
+   * is total over the stage: on the card, the square under the contact; beside
+   * or below it, the nearest square of the nearest column (a finger hanging
+   * off the card's edge is still asking for that edge); only above the card's
+   * top edge returns null, because nothing is ever placed by reaching up.
+   * Because every sample is clamped into the board, a drag that leaves the
+   * card holds its seat at the edge instead of vanishing — the piece waits
+   * for the finger to come back or the release to say done.
    */
   /** The canvas-local point for a stage-local one; the canvas centres in the stage. */
   private onCanvas(localX: number, localY: number): { x: number; y: number } {
@@ -154,15 +144,12 @@ export class App {
       // On the card: the strict square under the contact, margins and all.
       return this.renderer.spotAt(onCard.x, onCard.y);
     }
-    // Below it: the graded band, in raw negative rows — the lift in the
-    // adapter lands them on the board's bottom rows. Columns stay the card's:
-    // probed mid-board, because a square's column never depends on its row.
-    const stageBox = this.stage.getBoundingClientRect();
-    const cardBottom = canvasBox.bottom - stageBox.top;
-    const row = bandRow(localY - cardBottom, stageBox.bottom - canvasBox.bottom);
-    if (row === null) return null;
-    const column = this.renderer.spotAt(onCard.x, canvasBox.height / 2);
-    return column ? { column: column.column, row } : null;
+    // Beside or below the card: the nearest square of the nearest column.
+    // Probing mid-edge of the card's own box clamps each axis independently —
+    // a press under column 3 names column 3, at whatever row is nearest.
+    const probeX = Math.max(0, Math.min(onCard.x, canvasBox.width - 1));
+    const probeY = Math.max(0, Math.min(onCard.y, canvasBox.height - 1));
+    return this.renderer.spotAt(probeX, probeY);
   }
   /**
    * The play area. Rush borrows it whole for its intro and its sign-off, where
@@ -403,14 +390,13 @@ export class App {
     // Tap to rotate, drag to place, long-press to hold — on a finger or a
     // mouse, through the one run the player is looking at.
     //
-    // The listener lives on the stage, not the canvas, and the stage is a
-    // contact surface only for a touch: the lift aims the piece above the
-    // finger, so a floor seat is pressed for *below* the board and the contact
-    // has to be able to begin there. The stage is mapped loosely — anything
-    // below the board names the floor, anything inside the card names the
-    // square under the finger — while a mouse keeps the strict canvas mapping,
-    // and the strict map's column clamp keeps a press in the stage's side
-    // margins from naming a board column.
+    // The listener lives on the stage, not the canvas, and the whole stage is
+    // a touch surface: the carry model grabs the piece at the finger wherever
+    // the finger lands and amplifies its travel, so a drag may begin on the
+    // card, leave it, and come back without ending. A touch carries at
+    // {@link TOUCH_CARRY} — the piece moves farther than the finger, which is
+    // how the floor seats come to a finger parked near the middle — while a
+    // mouse keeps the strict 1:1 mapping (carry factor 1, strict map).
     this.detachPointerPlay = attachPointerPlay(
       this.stage,
       {
@@ -421,6 +407,7 @@ export class App {
           return this.renderer.spotAt(onCard.x, onCard.y);
         },
         touchSpotAt: (x, y) => this.stageSpotAt(x, y),
+        boardRows: BOARD_HEIGHT,
         aim: (spot) => this.activeRun?.aimAt(spot),
         commit: (spot) => {
           const run = this.activeRun;
@@ -436,10 +423,6 @@ export class App {
         undo: () => this.stepHistory("undo"),
         redo: () => this.stepHistory("redo"),
       },
-      // The lift is the adapter's, aim and commit alike, so the preview a
-      // drag shows is exactly the placement a release makes. Rotate and hold
-      // stay finger-space.
-      (spot) => liftSpot(spot, TOUCH_LIFT_ROWS, BOARD_HEIGHT),
     );
 
     // The hold bay is a label, not a control; hold lives on the long-press

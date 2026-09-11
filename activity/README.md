@@ -801,19 +801,21 @@ then drag to the slot, and the engine credits what the route earned. While a
 drag is under way the piece shows where it would land: a solid outline on a
 square it can reach, dashed where nothing lands.
 
-A finger is wider than a square, so a touch screen aims **above the finger**:
-the piece rides three rows up from the contact, where the pad cannot hide the
-preview. The lift answers aim and commit alike — the placement a release makes
-is the one the preview showed — while tap-to-rotate and press-and-hold keep
-their meaning under the finger. The strip below the board extends it downward:
-pressing just under the card names the floor of its column, and pressing
-deeper aims higher, up to two rows above the floor at the strip's far edge —
-so the rule a finger learns is one, the piece always rides three rows above
-the row the finger names, on the card and in the strip below it alike.
-Everything above the board names nothing. A mouse keeps the
-1:1 mapping everywhere; a touch-capable laptop is a mouse for these purposes,
-and a phone raises the finger band only when it is tall enough to spare the
-rows for it.
+A finger is wider than a square, so a touch **carries the piece**: the first
+movement of a drag grabs the piece at the finger, and after that the piece
+travels farther than the finger — about one and a half rows per finger row —
+so the floor seats come to a finger parked near the board's edge and the pad
+hides nothing the aim needs. The travel is amplified in whole rows, so no row
+is ever skipped: half-steps alternate the pace between one and two rows, and
+the preview always shows the exact seat a release will buy. A drag may leave
+the card freely — the piece waits at the board's edge until the finger comes
+back — and letting go commits the seat exactly as shown: if it is not a
+placeable one the engine refuses, nothing is spent, and the piece stays put
+under the next press. A placement can be finished a stroke at a time — move
+part way, lift, press again wherever the finger lands, and carry on. Tap to
+rotate and press-and-hold keep their meaning: only a drag carries, and a
+mouse keeps the 1:1 mapping everywhere; a touch-capable laptop is a mouse for
+these purposes.
 
 Fingers also come in chords: a quick **tap of two fingers undoes the last
 placement** and a **tap of three redoes it**. The chord counts simultaneous

@@ -117,6 +117,16 @@ export class BoardRenderer {
     this.ctx = ctx;
   }
 
+  /** The width of one board square in CSS pixels — gesture math's unit. */
+  get cellSize(): number {
+    return this.cell;
+  }
+
+  /** The card's border inset in CSS pixels — the field's offset inside the canvas. */
+  get edgeInset(): number {
+    return EDGE;
+  }
+
   /** Fits the field to the available box. Returns the pixel size it now takes. */
   layout(maxWidth: number, maxHeight: number, visibleRows: number): { width: number; height: number } {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);

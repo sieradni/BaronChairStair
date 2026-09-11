@@ -14,11 +14,17 @@
  *
  * On a finger the answer is not the square under the contact. A pad covers
  * three or four squares, so aiming there would hide the target the aim exists
- * to show — the piece is aimed {@link TOUCH_LIFT_ROWS} rows above the finger
- * instead, where the player can see it. The lift is the adapter's, applied to
- * aim and commit alike and nothing else, so the preview a drag shows is
- * exactly the placement a release makes and every other gesture keeps its
- * finger-space meaning.
+ * to show. Touch therefore *carries* the piece, Block Blast style: the first
+ * move of a drag grabs the piece at the finger, and every following move moves
+ * it farther than the finger moved — {@link TOUCH_CARRY} rows per finger row.
+ * Amplification is how the floor seats come to a finger parked at the board's
+ * edge, where the pad can hide nothing that matters, and the carried seat is
+ * clamped into the board at both ends, so a drag may leave the card freely and
+ * the piece simply waits at the edge until the finger comes back or the
+ * release says done. A release commits the carried seat as shown — the engine
+ * refuses an invalid one and the piece stays, which is the whole reset: lift,
+ * press again, and the next drag grabs wherever the finger lands, so a
+ * placement can be finished a stroke at a time.
  *
  * Fingers also come in chords: a tap of two is an undo and a tap of three a
  * redo ({@link MultiTapTracker}). The chord counts every contact the stage
@@ -47,14 +53,22 @@ export type Gesture =
 export const HOLD_MS = 550;
 
 /**
- * How far above the finger a touch aims, in rows.
+ * How far a carried piece travels per row the finger travels, in rows.
  *
- * Three keeps the whole hollow — up to two rows of piece plus its outline —
- * clear of the pad that covers the contact. Tuned against a phone at the
- * smallest cell the narrow layout draws: three rows there is roughly the pad's
- * own height, which is what "above the finger" has to mean to be of use.
+ * The pad hides the square under the contact, and near the floor it hides the
+ * rows the placement is chosen between; amplification is the answer — the
+ * piece moves faster than the finger, so the floor seats come to a finger
+ * parked near the board's vertical middle. One and a half is the feel of the
+ * games that do this: every row is still reachable (the half-steps alternate
+ * the piece's pace between one and two rows per finger row, so no row is
+ * skipped) while a short stroke crosses half the board. An integer factor
+ * would strand half the rows behind a parity wall — from a grab on an even
+ * row, only even rows would ever be visited. (The lift this replaces moved
+ * the piece *away* from the finger, which bought visibility by spending
+ * reach: the floor could only be pressed for below the board, and the strip
+ * there was a few pixels tall.)
  */
-export const TOUCH_LIFT_ROWS = 3;
+export const TOUCH_CARRY = 1.5;
 
 /**
  * How long the whole of a multi-finger chord may take, first finger down to
@@ -153,52 +167,6 @@ export class MultiTapTracker {
   }
 }
 
-/**
- * Lifts a touch's board square so the aim shows above the finger.
- *
- * Pure arithmetic so the clamp is testable: the lifted row saturates at the
- * top of the board rather than wrapping or refusing, because a finger on the
- * sky is still pointing at the topmost seat — clamping is what a player
- * expects of an edge, and refusing would make the top three rows of the board
- * unreachable through the gesture the lift serves.
- */
-export function liftSpot(spot: Spot, lift: number, rows: number): Spot {
-  return { column: spot.column, row: Math.min(spot.row + lift, rows - 1) };
-}
-
-/**
- * The below-card band, graded by depth so touch can reach the floor rows.
- *
- * The lift aims above the finger, so a seat on the floor can only be pressed
- * for *below* the board — the strip between the card's bottom edge and the
- * stage's is that press's home, and it reads as the board's negative
- * extension: raw −3 in the third nearest the card, raw −1 in the deepest.
- * The adapter's uniform lift lands those on rows 0, 1 and 2, so the floor —
- * the seat players want most and the reason the strip exists — sits just
- * under the card where a finger reaches comfortably, and the strip's far
- * edge never holds a seat hostage: pressing down there, at the screen's
- * bottom edge, still names row 2 rather than nothing. One invariant covers
- * the whole stage: the lift is three rows, wherever the finger names.
- *
- * Depth is measured in pixels, not cells, deliberately: the band is stage
- * padding — on a phone often shorter than three cell heights — so grading it
- * in cell-sized strips would collapse thirds and silently re-lose rows 0 and
- * 1. Three equal strips of whatever height the band actually has is the
- * contract.
- *
- * Returns null when the press was not in the band at all (a negative depth,
- * say from rounding at the card's edge): the caller's map decides what the
- * other regions mean, and inventing a row here would paper over a wiring
- * mistake. A depth beyond the band's bottom saturates rather than refusing —
- * clamping is what a player expects of an edge, the same answer the lift
- * gives at the sky.
- */
-export function bandRow(depth: number, bandHeight: number): number | null {
-  if (depth < 0) return null;
-  if (depth >= bandHeight) return -1;
-  return -3 + Math.floor((depth / bandHeight) * 3);
-}
-
 function sameSpot(a: Spot, b: Spot): boolean {
   return a.column === b.column && a.row === b.row;
 }
@@ -227,70 +195,116 @@ const timeoutClock: HoldClock = {
  *
  * A press commits to nothing: the piece must not jump to the finger, or a tap
  * would teleport the piece before rotating it. Aiming begins when the contact
- * crosses into another square, which is also the tap/drag verdict — a tap
- * never leaves its square, a drag always does. A press that stays put becomes
- * a hold after {@link HOLD_MS}, emitted asynchronously; everything else is
- * decided when the contact ends.
+ * crosses into another square — the *grab* — and from there the piece is
+ * carried: every row the finger travels moves it {@link TOUCH_CARRY} rows for
+ * a touch, 1 for a mouse. The travel is amplified in whole rows with the
+ * remainder banked between moves, so the piece's journey is exactly the
+ * amplified one — no row skipped, none double-counted — and a move that lands
+ * on the square already aimed at emits nothing: the aim is a state, not a
+ * stream. A press that stays put becomes a hold after {@link HOLD_MS},
+ * emitted asynchronously; everything else is decided when the contact ends.
+ *
+ * Samples arrive already clamped into the board (the touch map's job), so a
+ * drag that leaves the card holds its seat at the edge instead of vanishing,
+ * and the release commits the carried seat exactly as shown — the engine
+ * refuses an invalid one, and the piece staying is the reset.
  */
 export class PointerGestureTracker {
   private origin: Spot | null = null;
-  private last: Spot | null = null;
   private pressAt = 0;
   private holdTimer: unknown = null;
   /** The hold fired; the contact's eventual release is inert. */
   private holding = false;
-  /** The contact left its first square; the piece is being dragged. */
+  /** The contact left its first square; the piece is being carried. */
   private dragging = false;
+  /** The piece's current seat under the carry, clamped; null until the grab. */
+  private target: Spot | null = null;
+  /** The finger's last sampled row — amplification measures per move. */
+  private lastRow = 0;
+  /** Amplification remainder banked between moves, so no row is skipped. */
+  private frac = 0;
+  /** This contact's amplification: {@link TOUCH_CARRY} for a touch, 1 otherwise. */
+  private carry = 1;
 
   constructor(
     private readonly emit: (gesture: Gesture) => void = () => {},
     /** Injectable so tests do not wait out a real hold. */
     private readonly holdDelay: number = HOLD_MS,
     private readonly clock: HoldClock = timeoutClock,
+    /** Board height, to clamp carried rows at the floor and the sky. */
+    private readonly rows: number = 20,
   ) {}
 
-  /** A contact began at `spot` at time `now`. Nothing is decided yet. */
-  press(spot: Spot, now: number): Gesture | null {
+  /**
+   * A contact began at `spot` (already clamped into the board) at time `now`;
+   * `carry` is its amplification. Nothing is decided yet.
+   */
+  press(spot: Spot, now: number, carry: number = 1): Gesture | null {
     this.origin = spot;
-    this.last = spot;
     this.pressAt = now;
     this.holding = false;
     this.dragging = false;
+    this.target = null;
+    this.lastRow = spot.row;
+    this.frac = 0;
+    this.carry = Math.max(1, carry);
     this.armHold();
     return null;
   }
 
   /**
-   * The contact moved to `spot`. Aims from the moment it enters a new square —
-   * including the press square again after leaving it.
+   * The contact moved to `spot` (already clamped into the board).
+   *
+   * The first move out of the press square grabs — the piece snaps to the
+   * finger — and every move after carries the piece the amplified distance,
+   * whole rows at a time with the remainder banked.
    */
   move(spot: Spot): Gesture | null {
     if (!this.origin || this.holding) return null;
-    this.last = spot;
     if (!this.dragging) {
       if (sameSpot(this.origin, spot)) return null;
       this.dragging = true;
       this.clearHoldTimer();
+      // The grab: the piece snaps to the finger's own square.
+      this.target = spot;
+      this.lastRow = spot.row;
+      this.frac = 0;
+      return { type: "aim", spot };
     }
-    return { type: "aim", spot };
+    const raw = (spot.row - this.lastRow) * this.carry + this.frac;
+    const step = Math.trunc(raw);
+    this.frac = raw - step;
+    this.lastRow = spot.row;
+    const seated = this.target!.row + step;
+    const clamped = Math.max(0, Math.min(this.rows - 1, seated));
+    // A clamp eats the overshoot rows outright and zeroes the bank: the
+    // amplified path was cut at the edge, so the accounting restarts from the
+    // seat the piece actually holds — reversing direction must not first
+    // replay rows the edge refused.
+    if (clamped !== seated) this.frac = 0;
+    const candidate: Spot = { column: spot.column, row: clamped };
+    if (sameSpot(candidate, this.target!)) return null;
+    this.target = candidate;
+    return { type: "aim", spot: candidate };
   }
 
   /**
-   * The contact ended. A drag commits to its last square; a tap rotates; a
-   * held contact has already had its say.
+   * The contact ended. A drag commits the carried seat — exactly as shown,
+   * valid or not (the engine refuses an invalid seat and the piece stays);
+   * a tap rotates; a held contact has already had its say.
    */
   release(now: number): Gesture | null {
     this.clearHoldTimer();
-    const { origin, last, dragging } = this;
+    const { origin, target, dragging } = this;
     this.origin = null;
-    this.last = null;
+    this.target = null;
     this.dragging = false;
     if (this.holding) {
       this.holding = false;
       return null;
     }
-    if (!origin || !last) return null;
-    if (dragging) return { type: "commit", spot: last };
+    if (!origin) return null;
+    if (dragging) return { type: "commit", spot: target ?? origin };
     // One threshold everywhere: a press held shorter than the hold window is
     // a rotate — the same window the timer fires the hold at, so a release
     // can never race it on one side in production and the other in a test.
@@ -315,7 +329,7 @@ export class PointerGestureTracker {
     this.clearHoldTimer();
     const wasHolding = this.holding;
     this.origin = null;
-    this.last = null;
+    this.target = null;
     this.dragging = false;
     this.holding = false;
     // A held contact aimed at nothing, so there is nothing to unaim.
@@ -337,7 +351,7 @@ export class PointerGestureTracker {
       if (this.origin && !this.dragging) {
         this.holding = true;
         this.origin = null;
-        this.last = null;
+        this.target = null;
         this.emit({ type: "hold" });
       }
     }, this.holdDelay);
@@ -348,15 +362,23 @@ export interface PointerBoard {
   /** Board square under a point in the element's local CSS pixels, or null. */
   spotAt(localX: number, localY: number): Spot | null;
   /**
-   * The same square for a touch contact, or null.
+   * The same square for a touch contact.
    *
-   * A finger is granted slack a cursor is not — a pad overhangs the card's
-   * edge, and the strip under the board is where its floor seats are pressed
-   * for when the target rides above the finger. Absent, every contact is read
-   * through {@link spotAt}; present, it is read through this one when the
-   * contact is a touch and through the other otherwise.
+   * A finger is granted slack a cursor is not: the pad overhangs the card and
+   * the drag is allowed to leave it. This map therefore *clamps* — a contact
+   * anywhere beside or past the card names the nearest board square, and only
+   * a contact above the card's top edge (where nothing is being placed)
+   * returns null. Absent, every contact is read through {@link spotAt};
+   * present, it is read through this one when the contact is a touch and
+   * through the other otherwise.
    */
   touchSpotAt?(localX: number, localY: number): Spot | null;
+  /**
+   * How many rows the board has, to clamp the carried seat at both ends.
+   * Optional because the engine's own twenty rows is the right answer almost
+   * everywhere; the app passes {@link BOARD_HEIGHT} explicitly.
+   */
+  boardRows?: number;
   /** The piece was aimed at a square. */
   aim(spot: Spot): void;
   /** The aim was let go of: place the piece if it can go there. */
@@ -377,24 +399,17 @@ export interface PointerBoard {
  * Wires the tracker to the play surface.
  *
  * The element is the stage around the board rather than the board itself: a
- * touch aims above the finger, so a floor seat is pressed for *below* the
- * board, and the contact has to begin there. The element claims its contacts
- * — `touch-action: none` in CSS keeps the browser from scrolling a drag into
- * a page pan, and the context menu is suppressed because a long-press opening
- * it mid-gesture would steal the hold. Contacts are captured by pointer id,
- * so a second finger resting on the board cannot yank the first finger's drag
- * away.
+ * touch grabs the piece at the finger wherever the finger lands, so the whole
+ * stage is a touch surface and a drag may leave the card without ending. The
+ * element claims its contacts — `touch-action: none` in CSS keeps the browser
+ * from scrolling a drag into a page pan, and the context menu is suppressed
+ * because a long-press opening it mid-gesture would steal the hold. Contacts
+ * are captured by pointer id, so a second finger resting on the board cannot
+ * yank the first finger's drag away.
  */
 export function attachPointerPlay(
   element: HTMLElement,
   board: PointerBoard,
-  /**
-   * Where a touch actually aims, given the square it touched. Absent, a touch
-   * aims where it touched, like a mouse. Given, it applies to aim and commit —
-   * the two gestures that name a place — and to nothing else, so rotate and
-   * hold stay finger-space.
-   */
-  lift: (spot: Spot) => Spot = (spot) => spot,
   /** Injectable so tests do not wait out a real hold. */
   holdDelay: number = HOLD_MS,
   /** The hold clock, for tests that fire it by hand. */
@@ -423,15 +438,13 @@ export function attachPointerPlay(
     if (gesture && (gesture.type === "aim" || gesture.type === "hold")) chord.poison();
     apply(gesture);
   };
-  const tracker = new PointerGestureTracker(play, holdDelay, clock);
+  const tracker = new PointerGestureTracker(play, holdDelay, clock, board.boardRows ?? 20);
   const local = (event: PointerEvent): Spot | null => {
     const box = element.getBoundingClientRect();
     const x = event.clientX - box.left;
     const y = event.clientY - box.top;
     const touch = event.pointerType === "touch";
-    const raw = touch && board.touchSpotAt ? board.touchSpotAt(x, y) : board.spotAt(x, y);
-    if (!raw) return null;
-    return touch ? lift(raw) : raw;
+    return touch && board.touchSpotAt ? board.touchSpotAt(x, y) : board.spotAt(x, y);
   };
   let activeId: number | null = null;
 
@@ -462,7 +475,8 @@ export function attachPointerPlay(
     } catch {
       // Play on without capture.
     }
-    apply(tracker.press(spot, event.timeStamp));
+    const touch = event.pointerType === "touch";
+    apply(tracker.press(spot, event.timeStamp, touch ? TOUCH_CARRY : 1));
   };
 
   const onMove = (event: PointerEvent): void => {
@@ -484,7 +498,7 @@ export function attachPointerPlay(
     const verdict = tracker.release(event.timeStamp);
     // A tap that was one of several fingers is not a solo tap: the chord is
     // what those fingers meant, and the rotation they would also trigger is
-    // dropped. A drag still commits — the piece is where it was dragged.
+    // dropped. A drag still commits — the piece is where it was carried.
     if (verdict && !(verdict.type === "rotate" && chord.wasMulti())) play(verdict);
     if (chordGesture) apply(chordGesture);
   };
