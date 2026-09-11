@@ -10,6 +10,7 @@
 import { BOARD_HEIGHT, type PuzzlePrompt, type SolutionStep } from "@shared/puzzle";
 import {
   attachPointerPlay,
+  bandRow,
   liftSpot,
   TOUCH_LIFT_ROWS,
   type Spot,
@@ -118,15 +119,18 @@ export class App {
   /**
    * The stage as a touch surface: the square the finger names, lifted.
    *
-   * Two bands, both deliberate:
+   * Two regions, both deliberate:
    *
    * - Inside the board card, the square under the contact — the same mapping a
    *   cursor gets, so a drag tracks the finger 1:1 across the board.
-   * - Below the board, the floor: with the lift aiming three rows above the
-   *   contact, a floor seat can only be pressed for under the card, and the
-   *   strip between card and stage edge is where that press lands. Saturating
-   *   at the floor rather than mapping the strip's depth to rows keeps the
-   *   floor band a wide, honest target.
+   * - Below the board, the band is the board's negative extension, graded by
+   *   depth (see {@link bandRow}): raw −1 nearest the card through raw −3 at
+   *   the stage's bottom edge, which the uniform lift lands on rows 2, 1 and
+   *   0 — the bottom rows are reached by pressing below the card, exactly
+   *   because the lift aims three rows above the finger, and the aim keeps
+   *   descending as the finger does. A drag through the strip repaints the
+   *   aim continuously; the preview is the precision, not the strip's
+   *   thinness.
    *
    * Columns stay strict — a square names its own column, and the margins
    * beside the card name nothing — because the lift already answers the
@@ -151,10 +155,15 @@ export class App {
       // On the card: the strict square under the contact, margins and all.
       return this.renderer.spotAt(onCard.x, onCard.y);
     }
-    // Below it: the floor band. Only columns the card actually covers —
+    // Below it: the graded band, in raw negative rows — the lift in the
+    // adapter lands them on the board's bottom rows. Columns stay the card's:
     // probed mid-board, because a square's column never depends on its row.
+    const stageBox = this.stage.getBoundingClientRect();
+    const cardBottom = canvasBox.bottom - stageBox.top;
+    const row = bandRow(localY - cardBottom, stageBox.bottom - canvasBox.bottom);
+    if (row === null) return null;
     const column = this.renderer.spotAt(onCard.x, canvasBox.height / 2);
-    return column ? { column: column.column, row: 0 } : null;
+    return column ? { column: column.column, row } : null;
   }
   /**
    * The play area. Rush borrows it whole for its intro and its sign-off, where

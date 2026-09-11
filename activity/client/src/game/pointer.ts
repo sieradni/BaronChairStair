@@ -166,6 +166,38 @@ export function liftSpot(spot: Spot, lift: number, rows: number): Spot {
   return { column: spot.column, row: Math.min(spot.row + lift, rows - 1) };
 }
 
+/**
+ * The below-card band, graded by depth so touch can reach the floor rows.
+ *
+ * The lift aims above the finger, so a seat on the floor can only be pressed
+ * for *below* the board — the strip between the card's bottom edge and the
+ * stage's is that press's home, and it reads as the board's negative
+ * extension: raw row −1 in the third nearest the card, raw −3 in the deepest,
+ * against the screen's bottom edge. The adapter's uniform lift lands those on
+ * rows 2, 1 and 0 — so the aim keeps descending as the finger does, the same
+ * direction the card maps, and the floor keeps the strip's deepest third as
+ * its wide target at the screen's bottom edge. One invariant covers the whole
+ * stage: an aim is always three rows above the row the finger names.
+ *
+ * Depth is measured in pixels, not cells, deliberately: the band is stage
+ * padding — on a phone often shorter than three cell heights — so grading it
+ * in cell-sized strips would collapse thirds and silently re-lose rows 0 and
+ * 1. Three equal strips of whatever height the band actually has is the
+ * contract.
+ *
+ * Returns null when the press was not in the band at all (a negative depth,
+ * say from rounding at the card's edge): the caller's map decides what the
+ * other regions mean, and inventing a row here would paper over a wiring
+ * mistake. A depth beyond the band's bottom saturates rather than refusing —
+ * clamping is what a player expects of an edge, the same answer the lift
+ * gives at the sky.
+ */
+export function bandRow(depth: number, bandHeight: number): number | null {
+  if (depth < 0) return null;
+  if (depth >= bandHeight) return -3;
+  return -1 - Math.floor((depth / bandHeight) * 3);
+}
+
 function sameSpot(a: Spot, b: Spot): boolean {
   return a.column === b.column && a.row === b.row;
 }
