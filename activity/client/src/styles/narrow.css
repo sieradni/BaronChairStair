@@ -213,9 +213,23 @@
    */
   .deck.deck--play:not(:has(.build__board)) > .rail > .panel:has(.queue) {
     flex: 0 1 auto;
-    min-height: 96px;
+    /* No floor: content sizing already gives a short queue the panel its
+       rows need, and under pressure any floor above zero spills the panel
+       past the rail's bottom edge, where the credits strip paints over it —
+       the "queue cut off on a square window" bug. Yielding is the queue's
+       job; the queue inside scrolls once the panel is squeezed. */
+    min-height: 0;
     overflow: hidden;
   }
+  /*
+   * The history buttons leave with the column, not only with the phone:
+   * the actions live on the keyboard (desktop-square windows) and the
+   * two- and three-finger chords (touch), on the same `stepHistory` path
+   * the buttons drive — and in a 132px column one btnrow is height the
+   * board and the queue are bought with. Scoped to `btnrow--history`:
+   * the rush's Hand-it-in `.btnrow` shares the class and must survive.
+   */
+  .deck.deck--play:not(:has(.build__board)) .btnrow--history { display: none; }
   .deck.deck--play:not(:has(.build__board)) .rail .queue {
     /* Three things the column must override — the ≤880 strip rules above
        are written for a horizontal strip and all three are wrong here:
