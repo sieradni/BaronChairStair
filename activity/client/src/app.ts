@@ -8,6 +8,12 @@
  */
 
 import { BOARD_HEIGHT, type PuzzlePrompt, type SolutionStep } from "@shared/puzzle";
+import {
+  attachPointerPlay,
+  liftSpot,
+  TOUCH_LIFT_ROWS,
+  type Spot,
+} from "./game/pointer";
 import type { Handling } from "@shared/tetris/handling";
 import type { InputEvent } from "@shared/tetris/verify";
 import type { Connection } from "./discord";
@@ -16,7 +22,7 @@ import type { ArchiveListing } from "@shared/puzzle";
 import { filterArchive } from "@shared/archive-filter";
 import { ApiError } from "./api";
 import { InputRouter } from "./game/input";
-import { attachPointerPlay } from "./game/pointer";
+
 import { type LocalAction, keyName } from "@shared/keybinds";
 import { RushSession, type RushSummary } from "./game/rush";
 import { PuzzleRun, type RunSnapshot } from "./game/runner";
@@ -108,6 +114,48 @@ export class App {
   });
   private readonly renderer = new BoardRenderer(this.canvas);
   private readonly stage = el("div", { class: "stage" }, this.canvas, this.badge.element);
+
+  /**
+   * The stage as a touch surface: the square the finger names, lifted.
+   *
+   * Two bands, both deliberate:
+   *
+   * - Inside the board card, the square under the contact — the same mapping a
+   *   cursor gets, so a drag tracks the finger 1:1 across the board.
+   * - Below the board, the floor: with the lift aiming three rows above the
+   *   contact, a floor seat can only be pressed for under the card, and the
+   *   strip between card and stage edge is where that press lands. Saturating
+   *   at the floor rather than mapping the strip's depth to rows keeps the
+   *   floor band a wide, honest target.
+   *
+   * Columns stay strict — a square names its own column, and the margins
+   * beside the card name nothing — because the lift already answers the
+   * "the finger is wider than a square" problem in the axis it bites.
+   * Everything above the board names nothing: above is not where Tetris seats
+   * are chosen.
+   */
+  /** The canvas-local point for a stage-local one; the canvas centres in the stage. */
+  private onCanvas(localX: number, localY: number): { x: number; y: number } {
+    const canvasBox = this.canvas.getBoundingClientRect();
+    const stageBox = this.stage.getBoundingClientRect();
+    return {
+      x: localX - (canvasBox.left - stageBox.left),
+      y: localY - (canvasBox.top - stageBox.top),
+    };
+  }
+
+  private stageSpotAt(localX: number, localY: number): Spot | null {
+    const onCard = this.onCanvas(localX, localY);
+    const canvasBox = this.canvas.getBoundingClientRect();
+    if (onCard.y < canvasBox.height) {
+      // On the card: the strict square under the contact, margins and all.
+      return this.renderer.spotAt(onCard.x, onCard.y);
+    }
+    // Below it: the floor band. Only columns the card actually covers —
+    // probed mid-board, because a square's column never depends on its row.
+    const column = this.renderer.spotAt(onCard.x, canvasBox.height / 2);
+    return column ? { column: column.column, row: 0 } : null;
+  }
   /**
    * The play area. Rush borrows it whole for its intro and its sign-off, where
    * there is no board to look at and a card marooned in one rail beside an
@@ -346,19 +394,45 @@ export class App {
 
     // Tap to rotate, drag to place, long-press to hold — on a finger or a
     // mouse, through the one run the player is looking at.
-    this.detachPointerPlay = attachPointerPlay(this.canvas, {
-      spotAt: (x, y) => this.renderer.spotAt(x, y),
-      aim: (spot) => this.activeRun?.aimAt(spot),
-      commit: (spot) => {
-        const run = this.activeRun;
-        if (!run) return;
-        run.aimAt(spot);
-        if (!run.placeAt()) this.toast(this.refusalFor());
+    //
+    // The listener lives on the stage, not the canvas, and the stage is a
+    // contact surface only for a touch: the lift aims the piece above the
+    // finger, so a floor seat is pressed for *below* the board and the contact
+    // has to be able to begin there. The stage is mapped loosely — anything
+    // below the board names the floor, anything inside the card names the
+    // square under the finger — while a mouse keeps the strict canvas mapping,
+    // and the strict map's column clamp keeps a press in the stage's side
+    // margins from naming a board column.
+    this.detachPointerPlay = attachPointerPlay(
+      this.stage,
+      {
+        // The listener is on the stage, so both maps receive stage-local
+        // coordinates and translate into the canvas's own frame first.
+        spotAt: (x, y) => {
+          const onCard = this.onCanvas(x, y);
+          return this.renderer.spotAt(onCard.x, onCard.y);
+        },
+        touchSpotAt: (x, y) => this.stageSpotAt(x, y),
+        aim: (spot) => this.activeRun?.aimAt(spot),
+        commit: (spot) => {
+          const run = this.activeRun;
+          if (!run) return;
+          run.aimAt(spot);
+          if (!run.placeAt()) this.toast(this.refusalFor());
+        },
+        unaim: () => this.activeRun?.clearAim(),
+        rotate: () => this.activeRun?.tap("rotateCW"),
+        hold: () => this.runHold(),
+        // The chord gestures share the buttons' path exactly — undo/redo
+        // gating, HUD refresh, toasts — so a finger and a click cannot drift.
+        undo: () => this.stepHistory("undo"),
+        redo: () => this.stepHistory("redo"),
       },
-      unaim: () => this.activeRun?.clearAim(),
-      rotate: () => this.activeRun?.tap("rotateCW"),
-      hold: () => this.runHold(),
-    });
+      // The lift is the adapter's, aim and commit alike, so the preview a
+      // drag shows is exactly the placement a release makes. Rotate and hold
+      // stay finger-space.
+      (spot) => liftSpot(spot, TOUCH_LIFT_ROWS, BOARD_HEIGHT),
+    );
 
     // The hold bay is a label, not a control; hold lives on the long-press
     // gesture and, on a keyboard, wherever the player has bound it.
@@ -461,7 +535,6 @@ export class App {
     replaceChildren(
       this.hud.right,
       this.hud.panels.goal,
-      this.hud.panels.meter,
       this.hud.panels.queue,
     );
     // The board itself. The chooser is a screen and holds the whole deck, so
@@ -875,12 +948,24 @@ export class App {
    */
   private showColumns(left: HTMLElement, centre: HTMLElement, right: HTMLElement): void {
     this.deck.classList.remove("deck--screen");
+    // The builder mounts through here too; its rails are content, not the
+    // game's chrome, and narrow.css keys the phone's board-plus-column shape
+    // off this class. Each mount states its own shape.
+    this.deck.classList.remove("deck--play");
     replaceChildren(this.deck, left, centre, right);
   }
 
-  /** The play layout: the HUD rails either side of the game's canvas. */
+  /**
+   * The play layout: the HUD rails either side of the game's canvas.
+   *
+   * `deck--play` is on for exactly as long as the rails hold the game's HUD —
+   * narrow.css collapses the phone's three bands to board-plus-info-column
+   * under it — and comes off the moment the rails change jobs, which is why
+   * it lives here and not only beside `deck--screen`.
+   */
   private showPlayfield(): void {
     this.showColumns(this.hud.left, this.stage, this.hud.right);
+    this.deck.classList.add("deck--play");
     this.relayout();
   }
 
@@ -916,6 +1001,7 @@ export class App {
   ): void {
     this.clearCredits();
     this.deck.classList.add("deck--screen");
+    this.deck.classList.remove("deck--play");
     const modifiers = [
       options.wide && "screen--wide",
       options.full && "screen--full",
@@ -1158,7 +1244,7 @@ export class App {
     this.hud.setPuzzle(puzzle);
     this.credits.update(puzzle);
     replaceChildren(this.hud.left, this.duelPanel.element, this.hud.panels.hold);
-    replaceChildren(this.hud.right, this.hud.panels.goal, this.hud.panels.meter, this.hud.panels.queue);
+    replaceChildren(this.hud.right, this.hud.panels.goal, this.hud.panels.queue);
     this.showPlayfield();
     this.input.setGameInputEnabled(true);
     this.startDuelClock();
@@ -1348,7 +1434,7 @@ export class App {
       // are unfamiliar and there is a clock. `hud.update` has been keeping the
       // bay painted all along; it was simply never put on the rail.
       replaceChildren(this.hud.left, this.rushPanel.element, this.hud.panels.hold);
-      replaceChildren(this.hud.right, this.hud.panels.goal, this.hud.panels.meter, this.hud.panels.queue);
+      replaceChildren(this.hud.right, this.hud.panels.goal, this.hud.panels.queue);
       this.showPlayfield();
       this.input.setGameInputEnabled(true);
       this.toast(practice ? "Practice rush — go" : "Today's rush — go");
@@ -1543,9 +1629,9 @@ export class App {
     this.sheetOpenedAt);
 
     this.hud.setHistory(false, false);
-    const { hold, progress, goal, meter, queue } = this.hud.panels;
+    const { hold, progress, goal, queue } = this.hud.panels;
     replaceChildren(this.hud.left, hold, progress);
-    replaceChildren(this.hud.right, goal, meter, queue);
+    replaceChildren(this.hud.right, goal, queue);
     this.input.setGameInputEnabled(true);
     this.startClock();
     this.relayout();
@@ -1735,6 +1821,10 @@ export class App {
     });
     replaceChildren(this.hud.left, this.verdict.element, this.leaderboard.element);
     this.hud.showFinal(fields.attack, fields.targetAttack, fields.clears);
+    // The left rail has just become verdict-plus-leaderboard: content, not
+    // the game's chrome. The phone's board-plus-column shape keys off the
+    // class this drops, so the settled run falls back to the banded layout.
+    this.deck.classList.remove("deck--play");
     this.relayout();
   }
 
@@ -1794,7 +1884,6 @@ export class App {
     replaceChildren(
       this.hud.right,
       this.hud.panels.goal,
-      this.hud.panels.meter,
       this.walkthrough.element,
     );
     this.relayout();
