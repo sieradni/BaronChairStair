@@ -79,6 +79,22 @@ def _activity_dir() -> Path:
     return Path(override) if override else DEFAULT_ACTIVITY_DIR
 
 
+#: Enough to stop a fence closing, invisible to a reader.
+#:
+#: Discord looks for the next ``` anywhere in the message, not only at the
+#: start of a line, so three backticks inside the tool's output would close the
+#: block the reply opened and render everything after it as markdown. The
+#: output carries puzzle titles straight from the club's spreadsheet
+#: (`sync-archive.ts` prints `#42 "the title"`), which is text this bot does
+#: not control.
+FENCE = "```"
+DEFANGED_FENCE = "`\u200b`\u200b`"
+
+
+def _fence_safe(text: str) -> str:
+    return text.replace(FENCE, DEFANGED_FENCE)
+
+
 def _clip(text: str, limit: int = MAX_OUTPUT_CHARS) -> str:
     """
     The tail of the tool's output, which is where its summary lives.
@@ -158,18 +174,40 @@ async def run_sync(dry_run: bool, by: str, cwd: Path | None = None) -> tuple[int
 
 
 def verdict(code: int, dry_run: bool) -> str:
-    """The sentence under the output. Public, so it says what to do next."""
+    """
+    The sentence under the output. Public, so it says what to do next.
+
+    Every branch checks `dry_run`, because a dry run that says "Synced" is a
+    lie about the one thing the option exists to promise. Only the clean branch
+    used to, which made `verdict(2, dry_run=True)` claim puzzles had changed
+    content when nothing had been written at all.
+
+    Exit 1 does **not** say the sheet was read. `sync-archive.ts` invokes
+    `main()` as a bare top-level await with no catch, so an uncaught throw —
+    the sheet answering an HTML sign-in page because it stopped being shared, a
+    renamed tab, a network failure — exits 1 exactly like the rows-would-not-
+    write case it documents. The two are indistinguishable from out here, so
+    the wording covers both and sends somebody to the output above it rather
+    than asserting a successful read. The narrower sentence belongs in the tool,
+    behind a distinct exit code.
+    """
     if code == EXIT_OK:
         return "Sheet read, nothing left over." if dry_run else "Synced."
     if code == EXIT_EDITED:
+        if dry_run:
+            return (
+                "Nothing was written. Some puzzles would change content — the lines "
+                "above are worth reading before anybody syncs for real."
+            )
         return (
             "Synced, and some puzzles changed content — the lines above are worth "
             "reading before anybody publishes."
         )
     if code == EXIT_UNWRITTEN:
         return (
-            "Synced what it could, but some rows would not write. Those puzzles are "
-            "unchanged, and this needs a look at a terminal."
+            "It stopped short — either some rows would not write, or the sync failed "
+            "outright. The output above says which, and this needs a look at a "
+            "terminal."
         )
     return "The sync failed."
 
@@ -207,6 +245,7 @@ async def archive_sync(
             f"`{puzzle_admins.EXAMPLE_PATH.name}` in the repository shows the shape, "
             "and it takes effect on the next command with no restart.",
             ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
         return
 
@@ -214,7 +253,8 @@ async def archive_sync(
         # Public: a sync already running is a fact about the world, and the
         # officer watching their own reply should see this one too.
         await interaction.response.send_message(
-            "A sync is already running. Give it a moment and try again."
+            "A sync is already running. Give it a moment and try again.",
+            allowed_mentions=discord.AllowedMentions.none(),
         )
         return
 
@@ -230,10 +270,14 @@ async def archive_sync(
         code, output = await run_sync(dry_run=dry_run, by=f"discord:{label}")
 
     heading = "**Dry run** — nothing was written.\n" if dry_run else ""
-    body = _clip(output)
+    body = _fence_safe(_clip(output))
     try:
         await interaction.followup.send(
-            f"{heading}```\n{body}\n```\n{verdict(code, dry_run)}"
+            f"{heading}```\n{body}\n```\n{verdict(code, dry_run)}",
+            # The two sibling command modules both pass this on every send, and
+            # this one carries text from the spreadsheet, so it needs it most:
+            # an @everyone in a puzzle title would otherwise ping the server.
+            allowed_mentions=discord.AllowedMentions.none(),
         )
     except Exception as exc:  # noqa: BLE001 — the reply is best-effort
         # The sync itself already happened. Losing the message must not look

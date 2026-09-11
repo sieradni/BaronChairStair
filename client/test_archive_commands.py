@@ -181,6 +181,23 @@ class TheGate(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.calls[0]["dry_run"])
         self.assertIn("Dry run", interaction.followup.sent[0]["content"])
 
+    async def test_a_poisoned_title_cannot_escape_the_reply_fence(self):
+        # Driven through the callback, not through the helper. Asserting that
+        # `_fence_safe` works while the command forgets to call it is the
+        # vacuous version of this test, and it is the version I wrote first:
+        # deleting the call from the callback left the suite green.
+        async def poisoned(dry_run, by, cwd=None):
+            return 0, '  #42 "``` @everyone see this" — content'
+
+        archive_commands.run_sync = poisoned
+        interaction = Interaction(User(1001))
+        await CALLBACK(interaction)
+        sent = interaction.followup.sent[0]["content"]
+        self.assertEqual(
+            sent.count("```"), 2,
+            "exactly the reply's own opening and closing fence, and no others",
+        )
+
     async def test_a_second_sync_while_one_runs_is_refused(self):
         started = asyncio.Event()
         release = asyncio.Event()
@@ -226,6 +243,50 @@ class ReadingTheResult(unittest.TestCase):
         self.assertIn("THE LAST WORD", clipped)
         self.assertTrue(clipped.startswith("…"))
         self.assertLessEqual(len(clipped), 104)
+
+
+class NotTrustingTheSheet(unittest.TestCase):
+    """The reply carries text the club types into a spreadsheet."""
+
+    def test_a_title_cannot_close_the_code_fence(self):
+        # sync-archive prints `#42 "the title"`, so a title with a fence in it
+        # would end the block the reply opened and render the rest as markdown.
+        poisoned = '  #42 "``` @everyone" — content'
+        safe = archive_commands._fence_safe(poisoned)
+        self.assertNotIn("```", safe)
+        self.assertIn("@everyone", safe, "the text is defanged, not censored")
+
+    def test_the_public_reply_refuses_mentions(self):
+        # Reading the source, because the decorator has replaced the function
+        # with a Command object under the real library and the send is three
+        # awaits deep. Both sibling command modules do the same on every send.
+        body = Path(archive_commands.__file__).read_text(encoding="utf-8")
+        sends = body.count("interaction.response.send_message(") + body.count(
+            "interaction.followup.send("
+        )
+        self.assertEqual(
+            body.count("allowed_mentions=discord.AllowedMentions.none()"),
+            sends,
+            "every send must refuse mentions — the bot sets no global default",
+        )
+
+
+class ReportingADryRun(unittest.TestCase):
+    def test_no_verdict_claims_a_write_during_a_dry_run(self):
+        # The option's whole promise is that nothing was written, so a caption
+        # reading "Synced" under it is the one sentence it must never produce.
+        for code in (0, 1, 2, -1):
+            said = archive_commands.verdict(code, dry_run=True)
+            self.assertNotIn("Synced", said, f"exit {code} claims a write")
+
+    def test_exit_one_does_not_assert_the_sheet_was_read(self):
+        # sync-archive runs `await main()` with no catch, so an uncaught throw
+        # — an unshared sheet, a renamed tab, a dead network — exits 1 exactly
+        # like the rows-would-not-write case. From out here they are the same
+        # number, so the wording must cover both.
+        said = archive_commands.verdict(1, dry_run=False)
+        self.assertNotIn("Synced what it could", said)
+        self.assertIn("terminal", said, "it still sends somebody to look")
 
 
 class StartingTheProcess(unittest.IsolatedAsyncioTestCase):
