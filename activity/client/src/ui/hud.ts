@@ -254,17 +254,6 @@ export function createHud(callbacks: HudCallbacks): Hud {
         pieceGlyph(piece, { cell: 9 }),
       ),
     );
-    const remaining = upcoming.length - rows.length;
-    if (remaining > 0) {
-      rows.push(
-        el(
-          "div",
-          { class: "queue__row" },
-          el("span", { class: "queue__index", text: "+" }),
-          el("span", { class: "label", text: String(remaining) }),
-        ),
-      );
-    }
     replaceChildren(queueList, ...rows);
   }
 
