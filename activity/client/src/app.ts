@@ -1643,7 +1643,12 @@ export class App {
     replaceChildren(this.hud.right, goal, queue);
     this.input.setGameInputEnabled(true);
     this.startClock();
-    this.relayout();
+    // The rails hold the game's HUD again, so the narrow-screen shape comes
+    // back with them: a retry arrives from the verdict, which mounts its own
+    // panel into a rail and drops `deck--play` — without this, every retry
+    // after the first run fell back to the banded layout on a phone.
+    // Idempotent where the playfield is already up: same nodes, one relayout.
+    this.showPlayfield();
   }
 
   /**
