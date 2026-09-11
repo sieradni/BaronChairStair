@@ -20,6 +20,7 @@ import asyncio
 import io
 import contextlib
 import json
+import os
 import sys
 import tempfile
 import types
@@ -320,6 +321,40 @@ class StartingTheProcess(unittest.IsolatedAsyncioTestCase):
         # The two tools CLAUDE.md reserves for a terminal must never appear.
         self.assertNotIn("publish-archive", seen["argv"])
         self.assertNotIn("puzzles", seen["argv"])
+
+    async def test_the_pm2_ipc_channel_env_is_stripped(self):
+        # pm2 fork mode runs this bot as a Node child and leaves
+        # NODE_CHANNEL_FD (and its serialization-mode sibling) in the
+        # environment even though the fd it names does not survive into a
+        # grandchild. Bun's Node compatibility layer trusts that variable at
+        # face value: `bun run <alias>` does a nested posix_spawn to run the
+        # resolved script line, and that spawn fails outright with
+        # `EBADF: Bad file descriptor (posix_spawn())` when it tries to wire
+        # up an IPC channel on a fd that was never actually open here.
+        # Reproduced under a throwaway pm2 fork-mode process; this is the fix.
+        seen: dict = {}
+
+        async def fake_exec(*argv, **kwargs):
+            seen["env"] = kwargs.get("env")
+            raise FileNotFoundError("no bun here")
+
+        real = asyncio.create_subprocess_exec
+        asyncio.create_subprocess_exec = fake_exec
+        os.environ["NODE_CHANNEL_FD"] = "3"
+        os.environ["NODE_CHANNEL_SERIALIZATION_MODE"] = "json"
+        os.environ["A_VARIABLE_THAT_SHOULD_SURVIVE"] = "yes"
+        try:
+            with tempfile.TemporaryDirectory() as here:
+                await archive_commands.run_sync(dry_run=True, by="me", cwd=Path(here))
+        finally:
+            asyncio.create_subprocess_exec = real
+            del os.environ["NODE_CHANNEL_FD"]
+            del os.environ["NODE_CHANNEL_SERIALIZATION_MODE"]
+            del os.environ["A_VARIABLE_THAT_SHOULD_SURVIVE"]
+
+        self.assertNotIn("NODE_CHANNEL_FD", seen["env"])
+        self.assertNotIn("NODE_CHANNEL_SERIALIZATION_MODE", seen["env"])
+        self.assertEqual(seen["env"]["A_VARIABLE_THAT_SHOULD_SURVIVE"], "yes")
 
     async def test_a_missing_bun_blames_bun(self):
         async def fake_exec(*argv, **kwargs):
