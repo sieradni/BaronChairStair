@@ -437,3 +437,10 @@ activity/data/archive/*.sqlite-*
 # produce them (activity/tools/audit-archive.ts, sync-archive.ts) are tracked,
 # their output is not.
 /audit/
+
+# Who may run /archive sync. Real Discord user ids, which this public
+# repository must never carry: git history here is append-only — force pushes
+# and branch deletion are refused for everyone, owners included — so a
+# mistaken commit of somebody's id could not be taken back. The shape lives in
+# the tracked puzzle-admins.example.json beside it; the real list does not.
+puzzle-admins.json

@@ -29,6 +29,8 @@ BaronChairStair/
 │   ├── presence_tracker.py   samples who is online, every 10 minutes
 │   ├── puzzle_commands.py    the /puzzle command; talks to the activity server
 │   ├── report_commands.py    /report — files a GitHub issue for a player
+│   ├── archive_commands.py   /archive sync — pulls the sheet into the archive
+│   ├── puzzle_admins.py     who may run it; reads puzzle-admins.json
 │   ├── report_text.py        what a report looks like once published
 │   ├── test_report_text.py   `python3 -m unittest discover -s client`
 │   └── puzzle_recap.py       yesterday's results, replied to yesterday's post
@@ -157,6 +159,35 @@ token should be fine-grained, scoped to Issues on that one repository, and able
 to do nothing else. `@mentions` and `#references` are defanged so a report
 cannot become a stranger's notification, the description is capped, and one
 player may file fifteen reports an hour, and one server sixty.
+
+### `/archive sync` — pull the spreadsheet in, officers only
+
+```
+/archive sync [dry_run:True]
+```
+
+Runs `bun run sync-archive` against the club's sheet and reports what moved:
+what was added, what changed content, and what would not replay. Everything it
+writes lands **unpublished**, so a sync on its own changes nothing a player is
+served — publishing stays a decision somebody makes at a terminal, and neither
+`publish-archive` nor `bun run puzzles` is reachable from Discord. `dry_run`
+reads the sheet and writes nothing at all.
+
+A group of its own rather than `/puzzle sync`, for the same reason `/report` is
+top-level: Discord will not let a command be both invocable and a group, and
+`/puzzle` is the one people already type.
+
+**Who may run it is a file, not a role.** `puzzle-admins.json` at the
+repository root holds Discord user ids, one per officer, and is **gitignored** —
+this repository is public and its history is append-only, so an id committed by
+mistake could not be taken back. Copy `puzzle-admins.example.json` to start
+one. It is read fresh on every command, so adding somebody takes effect
+immediately with no restart, and a missing or malformed file means *nobody*
+rather than everybody. Anyone not on it is turned away privately.
+
+Set `PUZZLE_ACTIVITY_DIR` only if the activity is not the `activity/` beside
+this repository; the sync runs with its working directory there, because Bun
+reads `.env` from the working directory and does not walk up.
 
 ### `/activity` — who is around
 
@@ -315,6 +346,9 @@ root and fill in what you need:
 - `DISCORD_TOKEN` — the bot. Required.
 - `PUZZLE_APP_ID`, `PUZZLE_API`, `PUZZLE_API_KEY` — the `/puzzle` commands.
   `PUZZLE_API_KEY` must match `BOT_API_KEY` in `activity/.env`.
+- `PUZZLE_ACTIVITY_DIR` — where `/archive sync` runs. Optional; defaults to the
+  `activity/` beside this repository. Who may run it is `puzzle-admins.json`,
+  not an environment variable.
 - `GEMINI_API_KEY` and the `GEMINI_*` limits — only for
   `internship_poller.py --llm`.
 

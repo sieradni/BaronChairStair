@@ -117,6 +117,7 @@ import changelog
 import puzzle_recap
 from puzzle_commands import puzzle_command
 import report_commands
+import archive_commands
 
 log = logging.getLogger(__name__)
 
@@ -1518,6 +1519,12 @@ bot.tree.add_command(puzzle_command)
 # let a command be both invocable and a group, and `/puzzle` is the one
 # people already type. See report_commands.py's header.
 bot.tree.add_command(report_commands.report_command)
+# A group of its own rather than `/puzzle sync`, for the reason two lines up:
+# `/puzzle` is the command people type, and making it a parent would rename it.
+# `/archive` is a name nobody types, so the subcommands cost nothing and there
+# is room beside `sync` for the status and publish this will want later. See
+# archive_commands.py's header.
+bot.tree.add_command(archive_commands.archive)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
