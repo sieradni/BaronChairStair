@@ -801,9 +801,44 @@ then drag to the slot, and the engine credits what the route earned. While a
 drag is under way the piece shows where it would land: a solid outline on a
 square it can reach, dashed where nothing lands.
 
+A finger is wider than a square, so a touch screen aims **above the finger**:
+the piece rides three rows up from the contact, where the pad cannot hide the
+preview. The lift answers aim and commit alike — the placement a release makes
+is the one the preview showed — while tap-to-rotate and press-and-hold keep
+their meaning under the finger. Because the bottom rows are then reached by
+pressing below the board, a touch on the strip under the card names the floor
+of its column, and everything above the board names nothing. A mouse keeps the
+1:1 mapping everywhere; a touch-capable laptop is a mouse for these purposes,
+and a phone raises the finger band only when it is tall enough to spare the
+rows for it.
+
+Fingers also come in chords: a quick **tap of two fingers undoes the last
+placement** and a **tap of three redoes it**. The chord counts simultaneous
+fingers, not successive taps, and it stays out of the one-finger game's way —
+a drag or a hold voids any chord it was counted in, and fingers resting
+together do not read as a long-press. Four or more fingers is a palm, not a
+command.
+
 The same actions have buttons: undo and redo sit in the Progress panel, and
 hold has its key. Pointers and keys share one log, so an undo takes back a
 dragged placement exactly like a pressed one.
+
+Below tablet width the play screen is **one board with one column beside
+it**: hold, progress, goal and the queue stack into a slim strip on the
+right, and the board takes every row the two desktop rails would have
+occupied — a square window gets it too, because its spare width is exactly
+what the column spends. The queue is the one panel allowed to want more: it
+runs downward at a row per piece, fills every row the column can spare, and
+shows the puzzle's whole order — a seventy-piece queue included — scrolling
+only when the window cannot afford it all at once. On a phone the column is
+compressed to what a glance needs: panels lose their desktop padding, the
+attack meter lives inside the goal panel it is progress toward, and the undo
+and redo buttons leave the column entirely — the two- and three-finger taps
+and the keyboard keys are the same `stepHistory` path, and a row of buttons
+is a row of board. The cell is roughly three times the size it was when the
+panels sat above and below — the measure that matters at finger width. When
+the run ends, the verdict and the leaderboard want width, so the narrow
+screen falls back to the older banded layout for the read.
 
 ## Look and feel
 
