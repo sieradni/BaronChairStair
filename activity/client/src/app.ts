@@ -124,13 +124,12 @@ export class App {
    * - Inside the board card, the square under the contact — the same mapping a
    *   cursor gets, so a drag tracks the finger 1:1 across the board.
    * - Below the board, the band is the board's negative extension, graded by
-   *   depth (see {@link bandRow}): raw −1 nearest the card through raw −3 at
-   *   the stage's bottom edge, which the uniform lift lands on rows 2, 1 and
-   *   0 — the bottom rows are reached by pressing below the card, exactly
-   *   because the lift aims three rows above the finger, and the aim keeps
-   *   descending as the finger does. A drag through the strip repaints the
-   *   aim continuously; the preview is the precision, not the strip's
-   *   thinness.
+   *   depth (see {@link bandRow}): raw −3 nearest the card through raw −1 at
+   *   the stage's bottom edge, which the uniform lift lands on rows 0, 1 and
+   *   2 — the floor sits just under the card where a finger reaches
+   *   comfortably, and the strip's far edge, near the screen's bottom, never
+   *   holds a seat hostage. A drag through the strip repaints the aim
+   *   continuously; the preview is the precision, not the strip's thinness.
    *
    * Columns stay strict — a square names its own column, and the margins
    * beside the card name nothing — because the lift already answers the

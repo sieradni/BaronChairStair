@@ -32,11 +32,13 @@ function freshPlanner(piece: string): RoutePlanner {
 }
 
 describe("touch reaches the bottom rows", () => {
-  test("the band's thirds, lifted, name exactly rows 2, 1 and 0", () => {
+  test("the band's thirds, lifted, name exactly rows 0, 1 and 2", () => {
+    // The floor is the strip nearest the card — a finger reaches it
+    // comfortably — and the strip's far edge never holds a seat hostage.
     const lifted = [5, 15, 25].map(
       (depth) => liftSpot({ column: 4, row: bandRow(depth, 30)! }, TOUCH_LIFT_ROWS, ENGINE_ROWS).row,
     );
-    expect(lifted).toEqual([2, 1, 0]);
+    expect(lifted).toEqual([0, 1, 2]);
   });
 
   test("each band third places on the seat it names, for every piece", () => {
@@ -71,7 +73,7 @@ describe("touch reaches the bottom rows", () => {
     // The discriminating pair: the defect was a band that produced raw 0,
     // lifting to row 3 — placeless. The floor's raw row is −3, lifting to 0.
     const planner = freshPlanner("O");
-    const floor = liftSpot({ column: 4, row: bandRow(29, 30)! }, TOUCH_LIFT_ROWS, ENGINE_ROWS);
+    const floor = liftSpot({ column: 4, row: bandRow(5, 30)! }, TOUCH_LIFT_ROWS, ENGINE_ROWS);
     expect(floor.row).toBe(0);
     expect(planner.placementAt(planner.targetAt(4, floor.row))).not.toBeNull();
     expect(planner.placementAt(planner.targetAt(4, 3))).toBeNull();

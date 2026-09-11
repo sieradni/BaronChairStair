@@ -806,11 +806,11 @@ the piece rides three rows up from the contact, where the pad cannot hide the
 preview. The lift answers aim and commit alike — the placement a release makes
 is the one the preview showed — while tap-to-rotate and press-and-hold keep
 their meaning under the finger. The strip below the board extends it downward:
-pressing just under the card names two rows up from the floor, pressing deeper
-aims lower, and the strip's bottom edge names the floor itself — so the rule a
-finger learns is one, the piece always rides three rows above the row the
-finger names, on the card and in the strip below it alike. Everything above
-the board names nothing. A mouse keeps the
+pressing just under the card names the floor of its column, and pressing
+deeper aims higher, up to two rows above the floor at the strip's far edge —
+so the rule a finger learns is one, the piece always rides three rows above
+the row the finger names, on the card and in the strip below it alike.
+Everything above the board names nothing. A mouse keeps the
 1:1 mapping everywhere; a touch-capable laptop is a mouse for these purposes,
 and a phone raises the finger band only when it is tall enough to spare the
 rows for it.

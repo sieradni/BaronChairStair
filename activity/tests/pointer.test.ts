@@ -317,35 +317,39 @@ describe("the band below the card", () => {
   /*
    * The floor band is the board's negative extension, graded by depth so the
    * lift can land it on the bottom rows — a review of the flat band found it
-   * named row 3 forever and left rows 0–2 untouchable by any gesture.
+   * named row 3 forever and left rows 0–2 untouchable by any gesture. The
+   * floor sits nearest the card: a finger presses it comfortably, and the
+   * strip's far edge — the screen's bottom on a phone — never holds a seat
+   * hostage.
    */
-  test("the band grades in thirds, deepest naming the floor", () => {
+  test("the band grades in thirds, nearest the card naming the floor", () => {
     expect(bandRow(-1, 30)).toBeNull(); // not in the band at all
-    expect(bandRow(0, 30)).toBe(-1); // nearest the card: the floor's seat
-    expect(bandRow(9, 30)).toBe(-1);
+    expect(bandRow(0, 30)).toBe(-3); // nearest the card: the floor itself
+    expect(bandRow(9, 30)).toBe(-3);
     expect(bandRow(10, 30)).toBe(-2); // middle third: one row up
     expect(bandRow(19, 30)).toBe(-2);
-    expect(bandRow(20, 30)).toBe(-3); // deepest third: the floor itself
-    expect(bandRow(29, 30)).toBe(-3);
-    expect(bandRow(30, 30)).toBe(-3); // past the band's bottom saturates
-    expect(bandRow(400, 30)).toBe(-3);
+    expect(bandRow(20, 30)).toBe(-1); // deepest third: two rows up
+    expect(bandRow(29, 30)).toBe(-1);
+    expect(bandRow(30, 30)).toBe(-1); // past the band's bottom saturates
+    expect(bandRow(400, 30)).toBe(-1);
   });
 
   test("a shallow band still grades into three strips", () => {
     // The band is stage padding, on a phone often shorter than three cell
     // heights — depth is measured in pixels so thirds never collapse.
-    expect(bandRow(0, 9)).toBe(-1);
+    expect(bandRow(0, 9)).toBe(-3);
     expect(bandRow(4, 9)).toBe(-2);
-    expect(bandRow(8, 9)).toBe(-3);
+    expect(bandRow(8, 9)).toBe(-1);
   });
 
-  test("composed with the lift, the thirds land on rows 2, 1 and 0", () => {
+  test("composed with the lift, the thirds land on rows 0, 1 and 2", () => {
     // The chain the adapter builds: the band's raw rows through the same
-    // uniform lift every touch aim takes — the floor is raw −3 lifted three.
+    // uniform lift every touch aim takes — the floor is raw −3 lifted three,
+    // pressed just under the card.
     const cases = [
-      [5, 2],
+      [5, 0],
       [15, 1],
-      [25, 0],
+      [25, 2],
     ] as const;
     for (const [depth, row] of cases) {
       const raw = bandRow(depth, 30)!;
@@ -450,7 +454,7 @@ describe("the pointer adapter", () => {
     const calls: string[] = [];
     // The loose touch map, graded the way the app's band below the card is:
     // on the card the strict row, in the band a raw negative row per third
-    // (−1 nearest the card, −3 deepest), as `bandRow` produces. The strict
+    // (−3 nearest the card, −1 deepest), as `bandRow` produces. The strict
     // map would put the same pixels on row 8.
     const detach = attachPointerPlay(
       node,
@@ -458,7 +462,7 @@ describe("the pointer adapter", () => {
         spotAt: (x, y) => ({ column: Math.floor(x / 20), row: 9 - Math.floor(y / 20) }),
         touchSpotAt: (x, y) => ({
           column: Math.min(9, Math.floor(x / 20)),
-          row: y < 20 ? 9 - Math.floor(y / 20) : -1 - Math.min(Math.floor((y - 20) / 10), 2),
+          row: y < 20 ? 9 - Math.floor(y / 20) : -3 + Math.min(Math.floor((y - 20) / 10), 2),
         }),
         aim: (spot) => calls.push(`aim:${spot.column},${spot.row}`),
         commit: (spot) => calls.push(`commit:${spot.column},${spot.row}`),
@@ -472,20 +476,20 @@ describe("the pointer adapter", () => {
       (spot) => liftSpot(spot, TOUCH_LIFT_ROWS, 20),
     );
 
-    // A drag through the deep band — the floor's press — aims and commits on
-    // the floor row: the lift lands raw −3 on row 0.
-    node.dispatchEvent(pointer("pointerdown", 25, 45, { pointerType: "touch" }));
-    node.dispatchEvent(pointer("pointermove", 45, 45, { pointerType: "touch" }));
-    expect(calls).toEqual(["aim:2,0"]);
-    node.dispatchEvent(pointer("pointerup", 45, 45, { pointerType: "touch" }));
-    expect(calls).toEqual(["aim:2,0", "commit:2,0"]);
-
-    // The band's shallow third names raw −1 and lands two rows up: graded,
-    // not one flat floor.
-    calls.length = 0;
+    // A drag through the band just under the card — the floor's press —
+    // aims and commits on the floor row: the lift lands raw −3 on row 0.
     node.dispatchEvent(pointer("pointerdown", 25, 25, { pointerType: "touch" }));
     node.dispatchEvent(pointer("pointermove", 45, 25, { pointerType: "touch" }));
+    expect(calls).toEqual(["aim:2,0"]);
     node.dispatchEvent(pointer("pointerup", 45, 25, { pointerType: "touch" }));
+    expect(calls).toEqual(["aim:2,0", "commit:2,0"]);
+
+    // The band's deep third names raw −1 and lands two rows up: graded,
+    // and the far edge never holds a seat hostage.
+    calls.length = 0;
+    node.dispatchEvent(pointer("pointerdown", 25, 45, { pointerType: "touch" }));
+    node.dispatchEvent(pointer("pointermove", 45, 45, { pointerType: "touch" }));
+    node.dispatchEvent(pointer("pointerup", 45, 45, { pointerType: "touch" }));
     expect(calls).toEqual(["aim:2,2", "commit:2,2"]);
 
     // The mouse reads the identical pixels strictly, on the board.
