@@ -287,6 +287,17 @@
   }
 
   /*
+   * The banded floor, kept unguarded on purpose. The play column rules that
+   * override it all live inside `:has()` gates, and an engine that cannot
+   * parse `:has()` drops those whole — so this is what stands there: the
+   * old rails-take-what-they-need contract, minus the min-width it used to
+   * have. Where `:has()` works, the column's own `min-width: 0` on the same
+   * elements out-specifies this and wins the cascade; that is the only
+   * reason a flat rule may sit beside the gated ones.
+   */
+  .rail > * { min-width: 118px; }
+
+  /*
    * The column's padding economy. Desktop's 11/12px panel padding, 44px
    * hold bay, 30px attack figure and dotted stat rules are right beside a
    * 300px board and wrong beside a 130px one: at this size they are the
