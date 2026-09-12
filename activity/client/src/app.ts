@@ -8,10 +8,7 @@
  */
 
 import { BOARD_HEIGHT, type PuzzlePrompt, type SolutionStep } from "@shared/puzzle";
-import {
-  attachPointerPlay,
-} from "./game/pointer";
-import type { Handling } from "@shared/tetris/handling";
+import { attachPointerPlay } from "./game/pointer";import type { Handling } from "@shared/tetris/handling";
 import type { InputEvent } from "@shared/tetris/verify";
 import type { Connection } from "./discord";
 import type { DailyEntry, DailyResponse, GalleryLine, RushState, StoredRun } from "./api";
@@ -368,7 +365,7 @@ export class App {
     // travel is amplified and virtual, so it may begin on the card, wander
     // far off it, and come back without ending. The sample map is the raw
     // projection onto the board's own frame — fractional and unclamped, in
-    // squares — so the tracker's banking sees sub-square travel and the run
+    // squares — so the tracker sees sub-square travel and the run
     // decides what off-board means. Both pointers share it; only the carry
     // factor differs (a touch at {@link TOUCH_CARRY}, a mouse at 1).
     this.detachPointerPlay = attachPointerPlay(
@@ -2182,15 +2179,9 @@ export class App {
   }
 
   /**
-   * Why a drag would not place, in the player's terms.
-   *
-   * There is no soft-drop case here, deliberately. Placement timing is a
-   * function of the live handling — a mid-route descent is held for exactly
-   * the frames it needs at whatever `sdf` the player set — so the planner's
-   * answer no longer depends on the slider, and a refusal means the same
-   * thing at every setting: nothing reaches that square. (It used to lie
-   * twice: once by refusing seats a slow soft drop could reach, then by
-   * blaming the slider when it did.)
+   * Shows a message briefly. Any state the player could wonder about is
+   * spoken here — a refusal, a clock, a mode — and each speaker owns its
+   * wording; this only paints and times it.
    */
   private toast(message: string): void {
     this.toastNode.textContent = message;

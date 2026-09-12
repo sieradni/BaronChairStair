@@ -770,8 +770,6 @@ export class PuzzleRun {
     this.renderOnce();
   }
 
-
-
   /**
    * The planner's answer, with the run's own listeners told to look away.
    *
