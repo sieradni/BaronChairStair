@@ -10,8 +10,6 @@
 import { BOARD_HEIGHT, type PuzzlePrompt, type SolutionStep } from "@shared/puzzle";
 import {
   attachPointerPlay,
-  TOUCH_CARRY,
-  type Spot,
 } from "./game/pointer";
 import type { Handling } from "@shared/tetris/handling";
 import type { InputEvent } from "@shared/tetris/verify";
@@ -115,19 +113,8 @@ export class App {
   private readonly stage = el("div", { class: "stage" }, this.canvas, this.badge.element);
 
   /**
-   * The stage as a touch surface: the nearest square, clamped.
-   *
-   * The carry model needs the finger's position, not a verdict about it — the
-   * tracker amplifies movement and clamps the carried seat itself. So this map
-   * is total over the stage: on the card, the square under the contact; beside
-   * or below it, the nearest square of the nearest column (a finger hanging
-   * off the card's edge is still asking for that edge); only above the card's
-   * top edge returns null, because nothing is ever placed by reaching up.
-   * Because every sample is clamped into the board, a drag that leaves the
-   * card holds its seat at the edge instead of vanishing — the piece waits
-   * for the finger to come back or the release to say done.
+   * The canvas-local point for a stage-local one; the canvas centres in the stage.
    */
-  /** The canvas-local point for a stage-local one; the canvas centres in the stage. */
   private onCanvas(localX: number, localY: number): { x: number; y: number } {
     const canvasBox = this.canvas.getBoundingClientRect();
     const stageBox = this.stage.getBoundingClientRect();
@@ -137,20 +124,6 @@ export class App {
     };
   }
 
-  private stageSpotAt(localX: number, localY: number): Spot | null {
-    const onCard = this.onCanvas(localX, localY);
-    const canvasBox = this.canvas.getBoundingClientRect();
-    if (onCard.y < canvasBox.height) {
-      // On the card: the strict square under the contact, margins and all.
-      return this.renderer.spotAt(onCard.x, onCard.y);
-    }
-    // Beside or below the card: the nearest square of the nearest column.
-    // Probing mid-edge of the card's own box clamps each axis independently —
-    // a press under column 3 names column 3, at whatever row is nearest.
-    const probeX = Math.max(0, Math.min(onCard.x, canvasBox.width - 1));
-    const probeY = Math.max(0, Math.min(onCard.y, canvasBox.height - 1));
-    return this.renderer.spotAt(probeX, probeY);
-  }
   /**
    * The play area. Rush borrows it whole for its intro and its sign-off, where
    * there is no board to look at and a card marooned in one rail beside an
@@ -391,31 +364,31 @@ export class App {
     // mouse, through the one run the player is looking at.
     //
     // The listener lives on the stage, not the canvas, and the whole stage is
-    // a touch surface: the carry model grabs the piece at the finger wherever
-    // the finger lands and amplifies its travel, so a drag may begin on the
-    // card, leave it, and come back without ending. A touch carries at
-    // {@link TOUCH_CARRY} — the piece moves farther than the finger, which is
-    // how the floor seats come to a finger parked near the middle — while a
-    // mouse keeps the strict 1:1 mapping (carry factor 1, strict map).
+    // one gesture surface: a drag anchors at the piece wherever it is and its
+    // travel is amplified and virtual, so it may begin on the card, wander
+    // far off it, and come back without ending. The sample map is the raw
+    // projection onto the board's own frame — fractional and unclamped, in
+    // squares — so the tracker's banking sees sub-square travel and the run
+    // decides what off-board means. Both pointers share it; only the carry
+    // factor differs (a touch at {@link TOUCH_CARRY}, a mouse at 1).
     this.detachPointerPlay = attachPointerPlay(
       this.stage,
       {
-        // The listener is on the stage, so both maps receive stage-local
-        // coordinates and translate into the canvas's own frame first.
-        spotAt: (x, y) => {
+        // The listener is on the stage, so samples are stage-local and are
+        // translated into the canvas's own frame first, then to squares.
+        sampleAt: (x, y) => {
           const onCard = this.onCanvas(x, y);
-          return this.renderer.spotAt(onCard.x, onCard.y);
+          const cell = this.renderer.cellSize;
+          const edge = this.renderer.edgeInset;
+          return {
+            column: (onCard.x - edge) / cell,
+            row: (this.canvas.clientHeight - edge - onCard.y) / cell,
+          };
         },
-        touchSpotAt: (x, y) => this.stageSpotAt(x, y),
-        boardRows: BOARD_HEIGHT,
-        aim: (spot) => this.activeRun?.aimAt(spot),
-        commit: (spot) => {
-          const run = this.activeRun;
-          if (!run) return;
-          run.aimAt(spot);
-          if (!run.placeAt()) this.toast(this.refusalFor());
-        },
-        unaim: () => this.activeRun?.clearAim(),
+        grabBase: () => this.activeRun?.grabBase(),
+        carryAt: (shift) => this.activeRun?.carryAt(shift),
+        settleAt: () => this.activeRun?.settleAt(),
+        cancelCarry: () => this.activeRun?.clearAim(),
         rotate: () => this.activeRun?.tap("rotateCW"),
         hold: () => this.runHold(),
         // The chord gestures share the buttons' path exactly — undo/redo
@@ -2219,10 +2192,6 @@ export class App {
    * twice: once by refusing seats a slow soft drop could reach, then by
    * blaming the slider when it did.)
    */
-  private refusalFor(): string {
-    return "No way to place the piece there";
-  }
-
   private toast(message: string): void {
     this.toastNode.textContent = message;
     this.toastNode.hidden = false;

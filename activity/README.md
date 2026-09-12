@@ -801,21 +801,24 @@ then drag to the slot, and the engine credits what the route earned. While a
 drag is under way the piece shows where it would land: a solid outline on a
 square it can reach, dashed where nothing lands.
 
-A finger is wider than a square, so a touch **carries the piece**: the first
-movement of a drag grabs the piece at the finger, and after that the piece
-travels farther than the finger — about one and a half rows per finger row —
-so the floor seats come to a finger parked near the board's edge and the pad
-hides nothing the aim needs. The travel is amplified in whole rows, so no row
-is ever skipped: half-steps alternate the pace between one and two rows, and
-the preview always shows the exact seat a release will buy. A drag may leave
-the card freely — the piece waits at the board's edge until the finger comes
-back — and letting go commits the seat exactly as shown: if it is not a
-placeable one the engine refuses, nothing is spent, and the piece stays put
-under the next press. A placement can be finished a stroke at a time — move
-part way, lift, press again wherever the finger lands, and carry on. Tap to
-rotate and press-and-hold keep their meaning: only a drag carries, and a
-mouse keeps the 1:1 mapping everywhere; a touch-capable laptop is a mouse for
-these purposes.
+A finger is wider than a square, so a touch **carries the piece**. A drag
+anchors at the piece — wherever it is, a seat a previous release left it on
+included — and never snaps to the finger: the finger's travel moves the
+piece, about one and a half squares per finger square on *both* axes, so the
+floor seats come to a finger parked anywhere and no column needs a precise
+stroke. The travel is amplified in whole squares measured from where the
+finger pressed, so no square on the way is skipped and a round trip — wander
+off and come back — lands the piece exactly where it was. The travel is
+virtual: a drag may leave the card without ending, and while the piece is
+carried past an edge the preview drops until the finger brings it back. Letting
+go is the only decision: on the board, a placeable seat commits and an
+obstructed one **parks** — the dashed preview stays, drawn over the stack it
+overlaps, nothing is spent, and the next drag starts from that seat; past the
+board's edge, the piece resets to falling. A placement can be finished a
+stroke at a time — move part way, release, press again wherever the finger
+lands, and carry on from where the piece waits. Tap to rotate and
+press-and-hold keep their meaning: only a drag carries, and a mouse keeps the
+1:1 mapping everywhere; a touch-capable laptop is a mouse for these purposes.
 
 Fingers also come in chords: a quick **tap of two fingers undoes the last
 placement** and a **tap of three redoes it**. The chord counts simultaneous

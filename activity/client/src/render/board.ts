@@ -190,8 +190,12 @@ export class BoardRenderer {
     this.drawCard(fieldWidth, fieldHeight);
     this.drawGrid(rows, fieldWidth, fieldHeight);
     this.drawGhost(view.ghost, rows, view.ghostInk ?? view.activeInk);
-    this.drawAim(view.aim, rows, view.activeInk);
+    // The aim paints over the blocks, deliberately: a parked preview sits on
+    // top of whatever it overlaps — that overlap is the information. A legal
+    // aim never shares a square with the stack, so the order is invisible to
+    // it, and the ghost and flash below it as always.
     this.drawBlocks(collectBlocks(view, rows), rows);
+    this.drawAim(view.aim, rows, view.activeInk);
     this.drawFlash(view.flashRows, rows, fieldWidth, view.flashStrength);
     ctx.globalAlpha = 1;
   }

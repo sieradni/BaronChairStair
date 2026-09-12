@@ -1,13 +1,14 @@
 /**
  * The pointer state machine, driven without a browser.
  *
- * A gesture tracker decides what a contact *means* — aim, commit, rotate,
- * hold — and the adapter turns those verdicts into calls on the run. Fingers
- * also come in chords — a tap of two is an undo, three a redo — and the
- * {@link MultiTapTracker} that counts them is tested alongside, because the
- * chord's whole job is to stay out of the one-finger game's way. Both halves
- * are tested here headlessly, and the adapter through a happy-dom element,
- * which dispatches real PointerEvents even though it never lays anything out.
+ * A gesture tracker decides what a contact *means* — grab, carry, settle,
+ * rotate, hold — and the adapter turns those verdicts into calls on the run.
+ * Fingers also come in chords — a tap of two is an undo, three a redo — and
+ * the {@link MultiTapTracker} that counts them is tested alongside, because
+ * the chord's whole job is to stay out of the one-finger game's way. Both
+ * halves are tested here headlessly, and the adapter through a happy-dom
+ * element, which dispatches real PointerEvents even though it never lays
+ * anything out.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -78,20 +79,16 @@ describe("gesture tracker", () => {
     expect(gestures).toEqual([]);
   });
 
-  test("a press that leaves the origin square aims, and releasing commits", () => {
-    const { tracker } = tracked();
+  test("the first move grabs and carries the travel so far; later moves carry on", () => {
+    const { tracker, gestures } = tracked();
     tracker.press(at(4, 5), 0);
-    expect(tracker.move(at(5, 5))).toEqual({ type: "aim", spot: at(5, 5) });
-    expect(tracker.move(at(6, 7))).toEqual({ type: "aim", spot: at(6, 7) });
-    expect(tracker.release(WAIT * 2)).toEqual({ type: "commit", spot: at(6, 7) });
-  });
-
-  test("returning to the origin square keeps aiming — the verdict was already made", () => {
-    const { tracker } = tracked();
-    tracker.press(at(4, 5), 0);
-    expect(tracker.move(at(5, 5))).toEqual({ type: "aim", spot: at(5, 5) });
-    expect(tracker.move(at(4, 5))).toEqual({ type: "aim", spot: at(4, 5) });
-    expect(tracker.release(QUICK * 2)).toEqual({ type: "commit", spot: at(4, 5) });
+    // The grab is the finger's first square crossing; the carry it returns is
+    // the amplified travel from the press — one finger square at 1:1 is one.
+    expect(tracker.move(at(5, 5))).toEqual({ type: "carry", shift: at(1, 0) });
+    // Carries are returned, not emitted: only grab and hold go through emit.
+    expect(gestures).toEqual([{ type: "grab" }]);
+    expect(tracker.move(at(6, 7))).toEqual({ type: "carry", shift: at(2, 2) });
+    expect(tracker.release(WAIT * 2)).toEqual({ type: "settle" });
   });
 
   test("a press that sits still becomes a hold, not a rotate", () => {
@@ -113,11 +110,11 @@ describe("gesture tracker", () => {
   test("a drag never becomes a hold, even left parked", () => {
     const { tracker, gestures, fire } = tracked();
     tracker.press(at(4, 5), 0);
-    tracker.move(at(6, 5));
+    tracker.move(at(6, 5)); // grab; the carry (2,0) is the return value
     fire(1); // the hold window passes; the drag had already cleared the clock
-    expect(gestures).toEqual([]);
+    expect(gestures).toEqual([{ type: "grab" }]);
     // And the drag can still be finished.
-    expect(tracker.release(WAIT * 2)).toEqual({ type: "commit", spot: at(6, 5) });
+    expect(tracker.release(WAIT * 2)).toEqual({ type: "settle" });
   });
 
   test("a held contact's release is inert, and a new press works normally", () => {
@@ -138,7 +135,7 @@ describe("gesture tracker", () => {
     expect(tracker.cancel()).toBeNull();
   });
 
-  test("a drag the browser cancels asks to unaim", () => {
+  test("a drag the browser cancels asks to cancel the carry", () => {
     const { tracker } = tracked();
     tracker.press(at(4, 5), 0);
     tracker.move(at(7, 5));
@@ -170,11 +167,11 @@ describe("gesture tracker", () => {
   test("restartHold leaves a drag alone, and a fired hold is not re-armed", () => {
     const { tracker, gestures, fire } = tracked();
     tracker.press(at(4, 5), 0);
-    tracker.move(at(6, 5));
+    tracker.move(at(6, 5)); // grab
     tracker.restartHold(); // a drag has already forfeited its hold
     fire(1); // nothing was armed; there is no token to fire
-    expect(gestures).toEqual([]);
-    expect(tracker.release(WAIT * 2)).toEqual({ type: "commit", spot: at(6, 5) });
+    expect(gestures).toEqual([{ type: "grab" }]);
+    expect(tracker.release(WAIT * 2)).toEqual({ type: "settle" });
 
     // A hold that already fired is not re-armed into firing twice.
     const { tracker: held, gestures: heldGestures, fire: heldFire } = tracked();
@@ -293,97 +290,116 @@ describe("multi-finger chords", () => {
   });
 });
 
-describe("the touch carry", () => {
+describe("the carry", () => {
   /*
-   * The carry model, Block Blast style: the first move of a drag grabs the
-   * piece at the finger, and every row the finger travels moves the piece
-   * TOUCH_CARRY rows — amplified in whole rows with the remainder banked, so
-   * the journey is exactly the amplified one and no row is ever skipped. The
-   * lift this replaces moved the piece *away* from the finger, which bought
+   * The carry model: a drag anchors at the piece — wherever it is, a parked
+   * preview seat included — and the finger's amplified travel from where the
+   * press landed moves the piece. The travel is absolute (measured from the
+   * press sample, truncated per axis), so reversing the finger reverses the
+   * piece step for step and a round trip computes to exactly zero. The grab —
+   * the finger's first square crossing — only flips the contact from tap to
+   * drag; the carry it returns is already the full amplified journey. The
+   * lift this replaced moved the piece *away* from the finger, which bought
    * visibility by spending reach: rows 0–2 became unreachable by any gesture.
    */
-  /** A tracker over a 20-row board, carrying at the touch factor by default. */
-  const carried = () => new PointerGestureTracker(undefined, 20, { schedule: () => 0, cancel: () => {} }, 20);
+  /** A tracker over fractional samples, carrying at the touch factor. */
+  const carried = () => new PointerGestureTracker(undefined, 20, { schedule: () => 0, cancel: () => {} });
 
   test("the carry constant is the amplified feel, not a parity trap", () => {
     expect(TOUCH_CARRY).toBe(1.5);
   });
 
-  test("a press aims at nothing; the first move out of its square grabs", () => {
+  test("a press aims at nothing; the grab is the first crossing, already carrying", () => {
     const t = carried();
     expect(t.press(at(4, 10), 0, TOUCH_CARRY)).toBeNull();
-    expect(t.move(at(4, 10))).toBeNull(); // still on the press square
-    expect(t.move(at(5, 11))).toEqual({ type: "aim", spot: at(5, 11) });
+    expect(t.move(at(4.4, 10.4))).toBeNull(); // same whole square: no grab yet
+    expect(t.move(at(5.2, 10.2))).toEqual({ type: "carry", shift: at(1, 0) });
+    // The grab carries the finger's whole amplified travel from the press —
+    // the piece moves by the finger's travel, never to the finger: no snap.
   });
 
-  test("every row the finger travels moves the piece 1.5 rows, banked", () => {
+  test("1.5 squares per finger square on both axes, exact at whole travel", () => {
     const t = carried();
     t.press(at(4, 10), 0, TOUCH_CARRY);
-    // The grab snaps the piece to the finger's current square, not the
-    // press's — the finger owns the piece from the first move (Block Blast's
-    // own behaviour: what you touch is what you hold).
-    expect(t.move(at(4, 11))).toEqual({ type: "aim", spot: at(4, 11) });
-    // Two finger rows → +3 piece rows: the amplification, exactly.
-    expect(t.move(at(4, 13))).toEqual({ type: "aim", spot: at(4, 14) });
-    // One finger row → +1.5, banked: +1 now, 0.5 carried.
-    expect(t.move(at(4, 14))).toEqual({ type: "aim", spot: at(4, 15) });
-    // The banked 0.5 plus the next row's 1.5: two more rows down.
-    expect(t.move(at(4, 15))).toEqual({ type: "aim", spot: at(4, 17) });
+    // Two finger squares → three piece squares, on each axis independently.
+    expect(t.move(at(6.5, 12.5))).toEqual({ type: "carry", shift: at(3, 3) });
+    // Three and a half finger squares → five and a quarter, truncated to
+    // whole squares on each axis.
+    expect(t.move(at(7.5, 13.5))).toEqual({ type: "carry", shift: at(5, 5) });
   });
 
-  test("the carry clamps at the floor but keeps tracking", () => {
+  test("half-step pacing still visits every square on the way", () => {
+    // Real pointer streams sample far more finely than a square; with 1.5×,
+    // successive samples two thirds of a square apart advance the piece one
+    // square at a time — the pace alternates around the amplified path.
     const t = carried();
-    t.press(at(4, 12), 0, TOUCH_CARRY);
-    t.move(at(4, 13)); // grab; piece at 13
-    // 4 finger rows → +6 → exactly the floor, unclamped.
-    expect(t.move(at(4, 17))).toEqual({ type: "aim", spot: at(4, 19) });
-    // More downward travel: the seat is already the floor, so nothing emits —
-    // the piece waits at the edge for the finger to come back.
-    expect(t.move(at(4, 19))).toBeNull();
-    t.move(at(4, 21));
-    // Reversing three finger rows from the floor: −4 amplified rows, and the
-    // clamp restarted the bank so no refused overshoot replays first.
-    expect(t.move(at(4, 18))).toEqual({ type: "aim", spot: at(4, 15) });
+    t.press(at(0, 0), 0, TOUCH_CARRY);
+    expect(t.move(at(0.2, 0.2))).toBeNull(); // still the press square: no grab
+    expect(t.move(at(0.8, 0.8))).toBeNull(); // likewise — the tap zone holds
+    expect(t.move(at(1.05, 1.05))).toEqual({ type: "carry", shift: at(1, 1) });
+    expect(t.move(at(1.4, 1.4))).toEqual({ type: "carry", shift: at(2, 2) });
+    expect(t.move(at(2.05, 2.05))).toEqual({ type: "carry", shift: at(3, 3) });
+    expect(t.move(at(2.6, 2.6))).toBeNull(); // same shift: nothing new to say
+    expect(t.move(at(3.2, 3.2))).toEqual({ type: "carry", shift: at(4, 4) });
   });
 
-  test("the carried seat follows the finger's column", () => {
+  test("a round trip returns to exactly the starting shift — no offset", () => {
     const t = carried();
     t.press(at(4, 10), 0, TOUCH_CARRY);
-    t.move(at(4, 11)); // grab at 11
-    expect(t.move(at(6, 12))).toEqual({ type: "aim", spot: at(6, 12) });
+    // Wander far off-board and come back to the press square.
+    t.move(at(12.9, 18.9)); // the grab, mid-wander
+    t.move(at(-6.3, -4.7));
+    expect(t.move(at(4.5, 10.5))).toEqual({ type: "carry", shift: at(0, 0) });
+    // And continuing from there is continuous with the start.
+    expect(t.move(at(5.5, 11.5))).toEqual({ type: "carry", shift: at(2, 2) });
   });
 
-  test("a release commits the carried seat; a never-grabbed release rotates", () => {
+  test("reversing the finger reverses the piece step for step", () => {
     const t = carried();
     t.press(at(4, 10), 0, TOUCH_CARRY);
-    t.move(at(4, 11)); // grab at 11
-    t.move(at(4, 13)); // +3 → 14
-    expect(t.release(5)).toEqual({ type: "commit", spot: at(4, 14) });
+    expect(t.move(at(5.5, 10.5))).toEqual({ type: "carry", shift: at(2, 0) }); // the grab
+    expect(t.move(at(5.9, 10.5))).toBeNull(); // same shift: nothing new to say
+    expect(t.move(at(5.2, 10.5))).toEqual({ type: "carry", shift: at(1, 0) });
+    expect(t.move(at(4.5, 10.5))).toEqual({ type: "carry", shift: at(0, 0) });
+  });
+
+  test("re-entering the grab square re-anchors with a zero shift", () => {
+    const t = carried();
+    t.press(at(4, 10), 0, TOUCH_CARRY);
+    t.move(at(6.5, 10.5)); // the grab, carried (3,0)
+    // Back onto the press square from the other side: zero, not an offset
+    // accumulated from the excursion.
+    expect(t.move(at(4.2, 10.2))).toEqual({ type: "carry", shift: at(0, 0) });
+  });
+
+  test("a mouse carries at 1:1 — the strict drag is the carry factor of one", () => {
+    const t = new PointerGestureTracker(undefined, 20, { schedule: () => 0, cancel: () => {} });
+    t.press(at(4, 10), 0);
+    expect(t.move(at(5.5, 11.5))).toEqual({ type: "carry", shift: at(1, 1) }); // the grab
+    expect(t.move(at(6.5, 12.5))).toEqual({ type: "carry", shift: at(2, 2) });
+    expect(t.release(5)).toEqual({ type: "settle" });
+  });
+
+  test("a drag settles; a never-grabbed release rotates", () => {
+    const t = carried();
+    t.press(at(4, 10), 0, TOUCH_CARRY);
+    t.move(at(4.5, 12.5)); // grabbed on the row crossing: shift (0,3)
+    expect(t.release(5)).toEqual({ type: "settle" });
 
     const tap = carried();
     tap.press(at(4, 10), 0, TOUCH_CARRY);
     expect(tap.release(5)).toEqual({ type: "rotate" });
   });
 
-  test("a mouse carries at 1:1 — the strict drag is the carry factor of one", () => {
-    const t = new PointerGestureTracker(undefined, 20, { schedule: () => 0, cancel: () => {} }, 20);
-    t.press(at(4, 10), 0);
-    t.move(at(4, 12)); // grab at 12
-    expect(t.move(at(4, 13))).toEqual({ type: "aim", spot: at(4, 13) });
-    expect(t.move(at(4, 14))).toEqual({ type: "aim", spot: at(4, 14) });
-    expect(t.release(5)).toEqual({ type: "commit", spot: at(4, 14) });
-  });
-
-  test("a drag still voids the hold, and the carried seat survives a re-grab", () => {
+  test("a drag still voids the hold, and a cancelled carry ends cleanly", () => {
     const t = carried();
     t.press(at(4, 10), 0, TOUCH_CARRY);
-    t.move(at(4, 11)); // grabbed: the hold clock was cleared
+    t.move(at(5.5, 10.5)); // grabbed: the carry (2,0) is live
     t.cancel(); // the browser took the contact
-    // A fresh press grabs wherever the finger lands — resume by re-grab —
-    // and the clamp still bounds the carried seat.
+    expect(t.cancel()).toBeNull(); // nothing left to cancel
+    // A fresh press works normally.
     t.press(at(4, 17), 0, TOUCH_CARRY);
-    t.move(at(4, 18)); // grab at 18
-    expect(t.move(at(4, 20))).toEqual({ type: "aim", spot: at(4, 19) });
+    expect(t.move(at(5.5, 17.5))).toEqual({ type: "carry", shift: at(2, 0) });
   });
 });
 
@@ -436,112 +452,106 @@ describe("the pointer adapter", () => {
     }) as unknown as PointerEvent;
   }
 
-  test("tap rotates, drag aims and commits, right-click is ignored", async () => {
+  test("tap rotates, drag grabs, carries and settles, right-click is ignored", async () => {
     const { attachPointerPlay } = await import("../client/src/game/pointer");
     const node = element();
     const box = { left: 10, top: 20 };
     node.getBoundingClientRect = () => box as DOMRect;
     const calls: string[] = [];
-    let aim: Spot | null = null;
+    // One raw sample map for every pointer: fractional, unclamped — the
+    // adapter's own frame math plus the board's, no verdicts about edges.
     const detach = attachPointerPlay(node, {
-      spotAt: (x, y) => ({ column: Math.floor(x / 20), row: 9 - Math.floor(y / 20) }),
-      aim: (spot) => {
-        aim = spot;
-        calls.push(`aim:${spot.column},${spot.row}`);
-      },
-      commit: (spot) => calls.push(`commit:${spot.column},${spot.row}`),
-      unaim: () => calls.push("unaim"),
+      sampleAt: (x, y) => ({ column: x / 20, row: (200 - y) / 20 }),
+      grabBase: () => calls.push("grab"),
+      carryAt: (shift) => calls.push(`carry:${shift.column},${shift.row}`),
+      settleAt: () => calls.push("settle"),
+      cancelCarry: () => calls.push("cancelCarry"),
       rotate: () => calls.push("rotate"),
       hold: () => calls.push("hold"),
       undo: () => calls.push("undo"),
       redo: () => calls.push("redo"),
     });
 
-    // spotAt receives coordinates the adapter has already made local.
     // A right-click never starts a gesture.
     node.dispatchEvent(pointer("pointerdown", 25, 25, { button: 2, pointerType: "mouse" }));
-    // A tap: down and up on the same square (cell 0, row 9).
+    // A tap: down and up on the same square.
     node.dispatchEvent(pointer("pointerdown", 25, 25));
     node.dispatchEvent(pointer("pointerup", 25, 25));
     expect(calls).toEqual(["rotate"]);
-    expect(aim).toBeNull();
+    expect(calls).not.toContain("grab");
 
-    // A drag to the neighbouring cell (1, 9), then let go.
-    node.dispatchEvent(pointer("pointerdown", 25, 25));
-    node.dispatchEvent(pointer("pointermove", 45, 25));
-    expect(calls).toEqual(["rotate", "aim:1,9"]);
-    node.dispatchEvent(pointer("pointerup", 45, 25));
-    expect(calls).toEqual(["rotate", "aim:1,9", "commit:1,9"]);
+    // A drag: the grab anchors at the piece, the carry is the amplified
+    // travel from the press, and the release settles.
+    calls.length = 0;
+    node.dispatchEvent(pointer("pointerdown", 25, 25)); // sample (1.25, 8.75)
+    node.dispatchEvent(pointer("pointermove", 45, 25)); // grab; (2.25-1.25)*1.5 → col 1
+    node.dispatchEvent(pointer("pointermove", 45, 65)); // row 6.75: (6.75-8.75)*1.5 → -3
+    expect(calls).toEqual(["grab", "carry:1,0", "carry:1,-3"]);
+    node.dispatchEvent(pointer("pointerup", 45, 65));
+    expect(calls).toEqual(["grab", "carry:1,0", "carry:1,-3", "settle"]);
 
     detach();
   });
 
-  test("a touch carries the piece farther than the finger; a mouse tracks 1:1", async () => {
+  test("a touch carries 1.5×, a mouse 1:1, through the same sample map", async () => {
     const { attachPointerPlay } = await import("../client/src/game/pointer");
     const node = element();
     node.getBoundingClientRect = () => ({ left: 0, top: 0 }) as DOMRect;
     const calls: string[] = [];
-    // The touch map is the app's: on the card the strict square, beside or
-    // below it the nearest square — every sample clamped into the board, so
-    // a drag may leave the card without the piece losing its seat. Cell is
-    // 20px; the board is 10 by 10.
     const detach = attachPointerPlay(node, {
-      spotAt: (x, y) => ({ column: Math.floor(x / 20), row: 9 - Math.floor(y / 20) }),
-      touchSpotAt: (x, y) => ({
-        column: Math.max(0, Math.min(9, Math.floor(x / 20))),
-        row: Math.max(0, Math.min(9, 9 - Math.floor(y / 20))),
-      }),
-      aim: (spot) => calls.push(`aim:${spot.column},${spot.row}`),
-      commit: (spot) => calls.push(`commit:${spot.column},${spot.row}`),
-      unaim: () => calls.push("unaim"),
+      sampleAt: (x, y) => ({ column: x / 20, row: (200 - y) / 20 }),
+      grabBase: () => calls.push("grab"),
+      carryAt: (shift) => calls.push(`carry:${shift.column},${shift.row}`),
+      settleAt: () => calls.push("settle"),
+      cancelCarry: () => calls.push("cancelCarry"),
       rotate: () => calls.push("rotate"),
       hold: () => calls.push("hold"),
       undo: () => calls.push("undo"),
       redo: () => calls.push("redo"),
     });
 
-    // The same two-row finger drag, both pointers: the touch's piece lands
-    // one and a half times farther than the mouse's — the amplification,
-    // visible through the adapter. Both grab at (2,8); the touch carries
-    // −3 rows to row 5, the mouse −2 to row 6.
+    // The same two-square finger drag, both pointers: the touch's piece
+    // travels three squares, the mouse's two — the amplification, through
+    // the adapter. Both grab on the first crossing and carry from the press.
     node.dispatchEvent(pointer("pointerdown", 25, 25, { pointerType: "touch" }));
     node.dispatchEvent(pointer("pointermove", 45, 25, { pointerType: "touch" }));
     node.dispatchEvent(pointer("pointermove", 45, 65, { pointerType: "touch" }));
-    expect(calls).toEqual(["aim:2,8", "aim:2,5"]);
+    expect(calls).toEqual(["grab", "carry:1,0", "carry:1,-3"]);
     node.dispatchEvent(pointer("pointerup", 45, 65, { pointerType: "touch" }));
-    expect(calls).toEqual(["aim:2,8", "aim:2,5", "commit:2,5"]);
+    expect(calls).toEqual(["grab", "carry:1,0", "carry:1,-3", "settle"]);
 
     calls.length = 0;
     node.dispatchEvent(pointer("pointerdown", 25, 25, { pointerType: "mouse" }));
     node.dispatchEvent(pointer("pointermove", 45, 25, { pointerType: "mouse" }));
     node.dispatchEvent(pointer("pointermove", 45, 65, { pointerType: "mouse" }));
     node.dispatchEvent(pointer("pointerup", 45, 65, { pointerType: "mouse" }));
-    expect(calls).toEqual(["aim:2,8", "aim:2,6", "commit:2,6"]);
+    expect(calls).toEqual(["grab", "carry:1,0", "carry:1,-2", "settle"]);
 
-    // A finger that drags far past the board's bottom edge: every sample
-    // clamps to the floor, the carried seat waits there, and the release
-    // commits the floor seat it showed.
+    // A finger that drags far past the board's edge: the samples keep
+    // coming — nothing clamps — and coming back to the grab square
+    // recomputes to zero. The run owns what off-board means; the adapter
+    // never censored it.
     calls.length = 0;
-    node.dispatchEvent(pointer("pointerdown", 25, 45, { pointerType: "touch" }));
-    node.dispatchEvent(pointer("pointermove", 45, 45, { pointerType: "touch" }));
-    node.dispatchEvent(pointer("pointermove", 45, 400, { pointerType: "touch" }));
-    node.dispatchEvent(pointer("pointerup", 45, 400, { pointerType: "touch" }));
-    expect(calls).toEqual(["aim:2,7", "aim:2,0", "commit:2,0"]);
+    node.dispatchEvent(pointer("pointerdown", 25, 25, { pointerType: "touch" }));
+    node.dispatchEvent(pointer("pointermove", 45, 25, { pointerType: "touch" }));
+    node.dispatchEvent(pointer("pointermove", 45, 800, { pointerType: "touch" }));
+    node.dispatchEvent(pointer("pointermove", 25, 25, { pointerType: "touch" }));
+    expect(calls).toEqual(["grab", "carry:1,0", "carry:1,-58", "carry:0,0"]);
 
     detach();
   });
 
-  test("a tap never aims, lifted or not", async () => {
+  test("a tap never grabs, lifted or not", async () => {
     const { attachPointerPlay } = await import("../client/src/game/pointer");
     const node = element();
     node.getBoundingClientRect = () => ({ left: 0, top: 0 }) as DOMRect;
     const calls: string[] = [];
     const detach = attachPointerPlay(node, {
-      spotAt: () => at(3, 4),
-      touchSpotAt: () => at(3, 0),
-      aim: () => calls.push("aim"),
-      commit: () => calls.push("commit"),
-      unaim: () => calls.push("unaim"),
+      sampleAt: () => at(3, 4),
+      grabBase: () => calls.push("grab"),
+      carryAt: () => calls.push("carry"),
+      settleAt: () => calls.push("settle"),
+      cancelCarry: () => calls.push("cancelCarry"),
       rotate: () => calls.push("rotate"),
       hold: () => calls.push("hold"),
       undo: () => calls.push("undo"),
@@ -559,10 +569,11 @@ describe("the pointer adapter", () => {
     node.getBoundingClientRect = () => ({ left: 0, top: 0 }) as DOMRect;
     const calls: string[] = [];
     const detach = attachPointerPlay(node, {
-      spotAt: () => at(3, 4),
-      aim: () => calls.push("aim"),
-      commit: () => calls.push("commit"),
-      unaim: () => calls.push("unaim"),
+      sampleAt: () => at(3, 4),
+      grabBase: () => calls.push("grab"),
+      carryAt: () => calls.push("carry"),
+      settleAt: () => calls.push("settle"),
+      cancelCarry: () => calls.push("cancelCarry"),
       rotate: () => calls.push("rotate"),
       hold: () => calls.push("hold"),
       undo: () => calls.push("undo"),
@@ -586,10 +597,11 @@ describe("the pointer adapter", () => {
     node.getBoundingClientRect = () => ({ left: 0, top: 0 }) as DOMRect;
     const calls: string[] = [];
     const detach = attachPointerPlay(node, {
-      spotAt: () => at(3, 4),
-      aim: () => calls.push("aim"),
-      commit: () => calls.push("commit"),
-      unaim: () => calls.push("unaim"),
+      sampleAt: () => at(3, 4),
+      grabBase: () => calls.push("grab"),
+      carryAt: () => calls.push("carry"),
+      settleAt: () => calls.push("settle"),
+      cancelCarry: () => calls.push("cancelCarry"),
       rotate: () => calls.push("rotate"),
       hold: () => calls.push("hold"),
       undo: () => calls.push("undo"),
@@ -610,10 +622,11 @@ describe("the pointer adapter", () => {
     node.getBoundingClientRect = () => ({ left: 0, top: 0 }) as DOMRect;
     const calls: string[] = [];
     const detach = attachPointerPlay(node, {
-      spotAt: () => at(3, 4),
-      aim: () => calls.push("aim"),
-      commit: () => calls.push("commit"),
-      unaim: () => calls.push("unaim"),
+      sampleAt: () => at(3, 4),
+      grabBase: () => calls.push("grab"),
+      carryAt: () => calls.push("carry"),
+      settleAt: () => calls.push("settle"),
+      cancelCarry: () => calls.push("cancelCarry"),
       rotate: () => calls.push("rotate"),
       hold: () => calls.push("hold"),
       undo: () => calls.push("undo"),
@@ -636,11 +649,12 @@ describe("the pointer adapter", () => {
     node.getBoundingClientRect = () => ({ left: 0, top: 0 }) as DOMRect;
     const calls: string[] = [];
     const detach = attachPointerPlay(node, {
-      // No square under anything: the chord is about the fingers, not the map.
-      spotAt: () => null,
-      aim: () => calls.push("aim"),
-      commit: () => calls.push("commit"),
-      unaim: () => calls.push("unaim"),
+      // The raw map is total — chords are about the fingers, not the board.
+      sampleAt: () => at(-5, 30),
+      grabBase: () => calls.push("grab"),
+      carryAt: () => calls.push("carry"),
+      settleAt: () => calls.push("settle"),
+      cancelCarry: () => calls.push("cancelCarry"),
       rotate: () => calls.push("rotate"),
       hold: () => calls.push("hold"),
       undo: () => calls.push("undo"),
@@ -655,16 +669,17 @@ describe("the pointer adapter", () => {
     detach();
   });
 
-  test("a drag with a second finger resting commits instead of undoing", async () => {
+  test("a drag with a second finger resting settles instead of undoing", async () => {
     const { attachPointerPlay } = await import("../client/src/game/pointer");
     const node = element();
     node.getBoundingClientRect = () => ({ left: 0, top: 0 }) as DOMRect;
     const calls: string[] = [];
     const detach = attachPointerPlay(node, {
-      spotAt: (x) => ({ column: Math.floor(x / 20), row: 9 }),
-      aim: () => calls.push("aim"),
-      commit: () => calls.push("commit"),
-      unaim: () => calls.push("unaim"),
+      sampleAt: (x) => ({ column: x / 20, row: 9 }),
+      grabBase: () => calls.push("grab"),
+      carryAt: (shift) => calls.push(`carry:${shift.column},${shift.row}`),
+      settleAt: () => calls.push("settle"),
+      cancelCarry: () => calls.push("cancelCarry"),
       rotate: () => calls.push("rotate"),
       hold: () => calls.push("hold"),
       undo: () => calls.push("undo"),
@@ -677,7 +692,7 @@ describe("the pointer adapter", () => {
     node.dispatchEvent(pointer("pointerup", 50, 10, { pointerId: 1 }));
     node.dispatchEvent(pointer("pointerup", 30, 30, { pointerId: 2 }));
     // The primary was playing, not tapping: the drag lands, the chord is void.
-    expect(calls).toEqual(["aim", "commit"]);
+    expect(calls).toEqual(["grab", "carry:3,0", "settle"]);
     detach();
   });
 
@@ -690,10 +705,11 @@ describe("the pointer adapter", () => {
     const detach = attachPointerPlay(
       node,
       {
-        spotAt: () => at(3, 4),
-        aim: () => calls.push("aim"),
-        commit: () => calls.push("commit"),
-        unaim: () => calls.push("unaim"),
+        sampleAt: () => at(3, 4),
+        grabBase: () => calls.push("grab"),
+        carryAt: () => calls.push("carry"),
+        settleAt: () => calls.push("settle"),
+        cancelCarry: () => calls.push("cancelCarry"),
         rotate: () => calls.push("rotate"),
         hold: () => calls.push("hold"),
         undo: () => calls.push("undo"),
@@ -731,10 +747,11 @@ describe("the pointer adapter", () => {
       },
     });
     const detach = attachPointerPlay(node as unknown as HTMLElement, {
-      spotAt: () => null,
-      aim: () => {},
-      commit: () => {},
-      unaim: () => {},
+      sampleAt: () => at(0, 0),
+      grabBase: () => {},
+      carryAt: () => {},
+      settleAt: () => {},
+      cancelCarry: () => {},
       rotate: () => {},
       hold: () => {},
       undo: () => {},
