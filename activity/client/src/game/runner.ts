@@ -720,7 +720,6 @@ export class PuzzleRun {
    * keeps falling from its natural seat the whole time.
    */
   carryAt(shift: { column: number; row: number }): void {
-    if (!this.carryBase || (this.phase !== "ready" && this.phase !== "playing")) return;
     this.flushPending();
     if (!this.carryBase || (this.phase !== "ready" && this.phase !== "playing")) return;
     this.parked = null;
@@ -731,9 +730,11 @@ export class PuzzleRun {
       shifted.every(([x]) => x >= 0 && x < BOARD_WIDTH) &&
       shifted.every(([, y]) => y >= 0 && y < ENGINE_ROWS);
     if (!onBoard) {
-      // Fully virtual: the preview simply vanishes. Re-aiming happens on the
-      // next in-bounds move — the drag never lost the thread.
+      // Fully virtual: the preview simply vanishes — a carried park included,
+      // or a park would outlive its own drag's off-board release. Re-aiming
+      // happens on the next in-bounds move; the drag never lost the thread.
       this.aim = null;
+      this.parked = null;
       this.renderOnce();
       return;
     }

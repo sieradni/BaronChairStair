@@ -716,4 +716,34 @@ describe("the carry's endings", () => {
     pumpUntil(() => run.snapshot().piecesPlaced === 1);
     run.dispose();
   });
+
+  test("releasing off-board from a park resets the park, and the piece falls on", () => {
+    const run = newStackedRun();
+    run.grabBase();
+    run.carryAt({ column: 0, row: 0 });
+    run.carryAt(shiftTo(run, 0, 0)); // park on the stack
+    run.settleAt();
+    expect(previewOf(run)).not.toBeNull(); // the dashed ghost stands
+
+    // The finger comes back, drags the parked ghost past the top edge and
+    // lets go there: the park must go with it — the reset is the same reset
+    // a falling piece gets, not a park that survives its own drag.
+    run.grabBase();
+    run.carryAt({ column: 0, row: 0 });
+    run.carryAt({ column: 0, row: 60 }); // every cell above the ceiling
+    expect(previewOf(run)).toBeNull(); // preview dropped, drag still live
+    run.settleAt();
+    expect(previewOf(run)).toBeNull(); // the park did not survive
+    expect(run.snapshot().piecesPlaced).toBe(0);
+    expect(run.log()).toEqual([]); // and nothing was spent by any of it
+
+    // The piece is untouched and placeable, as after any reset.
+    run.grabBase();
+    run.carryAt({ column: 0, row: 0 });
+    run.carryAt(shiftTo(run, 8, 0));
+    expect(previewOf(run)?.legal).toBe(true);
+    run.settleAt();
+    pumpUntil(() => run.snapshot().piecesPlaced === 1);
+    run.dispose();
+  });
 });
