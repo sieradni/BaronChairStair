@@ -11,7 +11,10 @@ module. This file covers the part of the recap that is pure string building, so
 where the dependency *is* installed there is no reason not to check it.
 """
 
+import os
+import pathlib
 import unittest
+from unittest import mock
 
 try:
     import puzzle_recap
@@ -153,6 +156,64 @@ class RushAlignment(unittest.TestCase):
         lines = puzzle_recap._rush_lines(self.board())
         self.assertTrue(any(line.endswith("— 1 puzzle") for line in lines))
         self.assertTrue(any(line.endswith("— 17 puzzles") for line in lines))
+
+
+
+@needs_discord
+class TheRecapIsOffUnlessTurnedOn(unittest.TestCase):
+    """
+    The recap is the one message this bot sends that pings people: every player
+    it names is notified, every day. So it runs only where PUZZLE_RECAP turns it
+    on — a deploy switches it off everywhere, and turning it back on is one line
+    in .env.
+    """
+
+    def enabled_with(self, value):
+        env = {k: v for k, v in os.environ.items() if k != "PUZZLE_RECAP"}
+        if value is not None:
+            env["PUZZLE_RECAP"] = value
+        with mock.patch.dict(os.environ, env, clear=True):
+            return puzzle_recap.enabled()
+
+    def test_it_is_off_when_nothing_is_set(self):
+        self.assertFalse(self.enabled_with(None))
+
+    def test_it_stays_off_for_anything_that_does_not_mean_on(self):
+        for value in ("", "  ", "off", "0", "false", "no", "maybe"):
+            with self.subTest(value=value):
+                self.assertFalse(self.enabled_with(value))
+
+    def test_it_turns_on_however_on_is_written(self):
+        for value in ("on", "ON", " on ", "true", "1", "yes"):
+            with self.subTest(value=value):
+                self.assertTrue(self.enabled_with(value))
+
+
+class TheBotHonoursTheSwitch(unittest.TestCase):
+    """
+    enabled() deciding correctly is worth nothing if the bot starts the recap
+    anyway. discord_bot.py cannot be imported here without a token, so this
+    reads its source — the approach test_changelog_wiring.py takes for
+    puzzle_commands. No decorator: it needs nothing installed, so it runs even
+    on a bare box, which is where a broken gate would otherwise go unnoticed.
+    """
+
+    SOURCE = (pathlib.Path(__file__).resolve().parent / "discord_bot.py").read_text().splitlines()
+
+    def _starts(self):
+        return [n for n, line in enumerate(self.SOURCE) if "puzzle_recap_post.start()" in line]
+
+    def test_the_recap_is_started_from_exactly_one_place(self):
+        self.assertEqual(len(self._starts()), 1)
+
+    def test_that_place_is_guarded_by_the_switch(self):
+        start = self._starts()[0]
+        # Walk back to the `if` that owns the call, however it is wrapped.
+        top = start - 1
+        while top > start - 8 and not self.SOURCE[top].lstrip().startswith("if "):
+            top -= 1
+        condition = " ".join(self.SOURCE[top:start])
+        self.assertIn("puzzle_recap.enabled()", condition)
 
 
 if __name__ == "__main__":

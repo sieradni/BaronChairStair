@@ -126,7 +126,8 @@ Report these and stop; do not act on them unasked.
 
 - `PUZZLE_API_KEY` in the root `.env` must match `BOT_API_KEY` in `activity/.env` —
   **different names on either side.** A mismatch is a 401, an unset key a 404, and the
-  daily recap simply never posts.
+  daily recap simply never posts — though check `PUZZLE_RECAP=on` first: the recap
+  is off unless it is set.
 - A new slash command needs a restart to appear, and a global sync can take an hour.
   `sync_guilds.py <SERVER_ID>` pushes it to one guild at once — then
   `sync_guilds.py --clear <SERVER_ID>` once the global ones land, or the picker shows
