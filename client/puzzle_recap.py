@@ -38,14 +38,15 @@ def enabled() -> bool:
 
     Off unless PUZZLE_RECAP says on (``on``, ``true``, ``1`` or ``yes``, in any
     case). The recap is the one message this bot sends that pings people on
-    purpose — every player it names is notified, every day — so a server opts
-    into it rather than a deploy switching it on. Read when the bot connects;
-    changing it takes a restart.
+    purpose — every player it names is notified, every day — so the operator
+    opts in, for every server this bot is in at once, rather than a deploy
+    switching it on. Read when the bot connects; changing it takes a restart.
 
-    Off stops the posting and nothing else. /puzzle still notes where each day
-    was announced, so turning the recap back on works from the next day, and it
-    never replays the days it skipped, because `pending` only looks at
-    yesterday. Those notes are pruned only while the recap runs; at one row per
+    Off stops the posting and nothing else: /puzzle still notes where each day
+    was announced. So a restart with it turned back on posts yesterday's recap
+    straight away — the loop's first pass runs as soon as the bot is ready —
+    and then one a day. Nothing older than yesterday is ever posted, because
+    `pending` only looks at yesterday. Those notes are pruned only while the recap runs; at one row per
     server per day, that costs nothing worth a second loop.
     """
     return os.environ.get(ENABLE_VAR, "").strip().lower() in _ON

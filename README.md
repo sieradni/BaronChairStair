@@ -8,7 +8,7 @@ Four hand-made puzzles every day, a five-minute rush, 1v1 duels, and an archive
 of 138 to work through — opened as a Discord Activity, and announced in your
 server by a bot.
 
-`beta 0.7` · MIT licensed · Bun + TypeScript + Python
+MIT licensed · Bun + TypeScript + Python · [what's new](changelog.json)
 
 Built for the **Tetris at UCI** club.
 

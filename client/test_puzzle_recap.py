@@ -11,8 +11,10 @@ module. This file covers the part of the recap that is pure string building, so
 where the dependency *is* installed there is no reason not to check it.
 """
 
+import ast
 import os
 import pathlib
+import types
 import unittest
 from unittest import mock
 
@@ -192,28 +194,48 @@ class TheRecapIsOffUnlessTurnedOn(unittest.TestCase):
 class TheBotHonoursTheSwitch(unittest.TestCase):
     """
     enabled() deciding correctly is worth nothing if the bot starts the recap
-    anyway. discord_bot.py cannot be imported here without a token, so this
-    reads its source — the approach test_changelog_wiring.py takes for
-    puzzle_commands. No decorator: it needs nothing installed, so it runs even
-    on a bare box, which is where a broken gate would otherwise go unnoticed.
+    anyway. Importing discord_bot.py here would load the repository's real .env
+    (override=True) and open its real databases, so this reads the source
+    instead — the approach test_changelog_wiring.py takes for puzzle_commands.
+    No decorator: it needs nothing installed, so it runs even on a bare box,
+    which is where a broken gate would otherwise go unnoticed.
+
+    The gate is *evaluated*, not searched for. A text search for
+    `puzzle_recap.enabled()` also matches `not puzzle_recap.enabled()`, and an
+    earlier version of this test passed with the gate inverted — which would
+    turn the recap on for every deploy while the start-up log said it was off.
     """
 
-    SOURCE = (pathlib.Path(__file__).resolve().parent / "discord_bot.py").read_text().splitlines()
+    TREE = ast.parse((pathlib.Path(__file__).resolve().parent / "discord_bot.py").read_text())
 
-    def _starts(self):
-        return [n for n, line in enumerate(self.SOURCE) if "puzzle_recap_post.start()" in line]
+    @staticmethod
+    def _is_start(node):
+        return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "start" and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "puzzle_recap_post")
+
+    def _gates(self):
+        """Every `if` whose own body starts the recap."""
+        return [node for node in ast.walk(self.TREE) if isinstance(node, ast.If)
+                and any(isinstance(s, ast.Expr) and self._is_start(s.value) for s in node.body)]
+
+    def _starts_it(self, enabled):
+        """What the gate decides, with the recap's table healthy and the loop idle."""
+        (gate,) = self._gates()
+        env = {"recap_error": None,
+               "puzzle_recap": types.SimpleNamespace(enabled=lambda: enabled),
+               "puzzle_recap_post": types.SimpleNamespace(is_running=lambda: False)}
+        return bool(eval(compile(ast.Expression(gate.test), "<gate>", "eval"), env))
 
     def test_the_recap_is_started_from_exactly_one_place(self):
-        self.assertEqual(len(self._starts()), 1)
+        self.assertEqual(len([n for n in ast.walk(self.TREE) if self._is_start(n)]), 1)
 
-    def test_that_place_is_guarded_by_the_switch(self):
-        start = self._starts()[0]
-        # Walk back to the `if` that owns the call, however it is wrapped.
-        top = start - 1
-        while top > start - 8 and not self.SOURCE[top].lstrip().startswith("if "):
-            top -= 1
-        condition = " ".join(self.SOURCE[top:start])
-        self.assertIn("puzzle_recap.enabled()", condition)
+    def test_that_place_is_inside_an_if(self):
+        self.assertEqual(len(self._gates()), 1)
+
+    def test_the_gate_starts_it_only_when_it_is_on(self):
+        self.assertFalse(self._starts_it(enabled=False))
+        self.assertTrue(self._starts_it(enabled=True))
 
 
 if __name__ == "__main__":
