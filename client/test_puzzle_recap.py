@@ -191,6 +191,11 @@ class TheRecapIsOffUnlessTurnedOn(unittest.TestCase):
                 self.assertTrue(self.enabled_with(value))
 
 
+def _decide(condition: ast.expr, **names) -> bool:
+    """What an `if` in discord_bot.py decides, with its free names bound to `names`."""
+    return bool(eval(compile(ast.Expression(condition), "<condition>", "eval"), names))
+
+
 class TheBotHonoursTheSwitch(unittest.TestCase):
     """
     enabled() deciding correctly is worth nothing if the bot starts the recap
@@ -219,13 +224,13 @@ class TheBotHonoursTheSwitch(unittest.TestCase):
         return [node for node in ast.walk(self.TREE) if isinstance(node, ast.If)
                 and any(isinstance(s, ast.Expr) and self._is_start(s.value) for s in node.body)]
 
-    def _starts_it(self, enabled):
-        """What the gate decides, with the recap's table healthy and the loop idle."""
+    def _starts_it(self, enabled, recap_error=None):
+        """What the gate decides with the loop idle; the table is healthy unless told."""
         (gate,) = self._gates()
-        env = {"recap_error": None,
-               "puzzle_recap": types.SimpleNamespace(enabled=lambda: enabled),
-               "puzzle_recap_post": types.SimpleNamespace(is_running=lambda: False)}
-        return bool(eval(compile(ast.Expression(gate.test), "<gate>", "eval"), env))
+        return _decide(gate.test,
+                       recap_error=recap_error,
+                       puzzle_recap=types.SimpleNamespace(enabled=lambda: enabled),
+                       puzzle_recap_post=types.SimpleNamespace(is_running=lambda: False))
 
     def test_the_recap_is_started_from_exactly_one_place(self):
         self.assertEqual(len([n for n in ast.walk(self.TREE) if self._is_start(n)]), 1)
@@ -236,6 +241,61 @@ class TheBotHonoursTheSwitch(unittest.TestCase):
     def test_the_gate_starts_it_only_when_it_is_on(self):
         self.assertFalse(self._starts_it(enabled=False))
         self.assertTrue(self._starts_it(enabled=True))
+
+    def test_a_recap_table_that_could_not_be_made_keeps_it_off_even_when_on(self):
+        # recap_error is set when puzzle_recap.init_db failed at start-up. The
+        # recap turns itself off then, and switching it on must not overrule
+        # that: every tick would be a query against a table that is not there.
+        self.assertFalse(self._starts_it(enabled=True, recap_error="OperationalError: x"))
+
+
+class TheStartUpNoticeMatchesTheSwitch(unittest.TestCase):
+    """
+    DEPLOY.md's verification step 3 has an operator whose recap is silent look
+    for `puzzle recap off: …` in the start-up log before chasing PUZZLE_API_KEY.
+    With its condition inverted, the notice says "off" exactly when the recap is
+    on and nothing when it is off — so the operator chases the key for a recap
+    that is simply switched off, the very thing the notice exists to prevent.
+
+    Read and evaluated like the gate above, for the same reasons: importing
+    discord_bot.py would load the real .env and open the real databases, and a
+    text search cannot tell `enabled()` from `not enabled()`.
+    """
+
+    NOTICE = "puzzle recap off"
+
+    @classmethod
+    def _is_notice(cls, statement):
+        call = statement.value if isinstance(statement, ast.Expr) else None
+        return (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                and call.func.id == "print" and len(call.args) >= 1
+                and isinstance(call.args[0], ast.Constant)
+                and isinstance(call.args[0].value, str)
+                and call.args[0].value.startswith(cls.NOTICE))
+
+    def _notices(self):
+        """Every module-level `if` whose own body prints the notice."""
+        return [node for node in TheBotHonoursTheSwitch.TREE.body
+                if isinstance(node, ast.If) and any(self._is_notice(s) for s in node.body)]
+
+    def _says_off(self, enabled, recap_error=None):
+        """Whether start-up prints the notice; the recap's table is healthy unless told."""
+        (notice,) = self._notices()
+        return _decide(notice.test,
+                       recap_error=recap_error,
+                       puzzle_recap=types.SimpleNamespace(enabled=lambda: enabled))
+
+    def test_the_notice_is_printed_from_exactly_one_place(self):
+        self.assertEqual(len(self._notices()), 1)
+
+    def test_it_says_off_only_when_the_recap_is_off(self):
+        self.assertTrue(self._says_off(enabled=False))
+        self.assertFalse(self._says_off(enabled=True))
+
+    def test_a_recap_table_that_could_not_be_made_is_not_reported_as_switched_off(self):
+        # Start-up has already printed "puzzle recap disabled: <error>" then.
+        # Adding "set PUZZLE_RECAP=on" would point the operator at the wrong fix.
+        self.assertFalse(self._says_off(enabled=False, recap_error="OperationalError: x"))
 
 
 if __name__ == "__main__":

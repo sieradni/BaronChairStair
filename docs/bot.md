@@ -37,13 +37,14 @@ comes back, so the two can never disagree about a score. Needs
 still registers and explains what is missing rather than failing shut.
 
 The daily recap is **off unless `PUZZLE_RECAP=on`** is set in `.env`, because it
-mentions everyone it names — turned on, it pings every player every day. Turning
-it on posts the previous day's recap as soon as the bot starts, then one a day.
-When it is on, once a day after the puzzle turns over, the bot replies to that
-server's own `/puzzle` message with how yesterday went — who solved which of the day's puzzles
-and how fast, who missed, and how long the server's run of solves is. It happens
-once per server per day, and only in servers that announced the puzzle in the
-first place, because the reply needs something to reply to.
+mentions everyone it names — turned on, it pings every player it names, every
+day. Turning it on posts the previous day's recap as soon as the bot starts,
+then one a day. When it is on, once a day after the puzzle turns over, the bot
+replies to that server's own `/puzzle` message with how yesterday went — who
+solved which of the day's puzzles and how fast, who missed, and how long the
+server's run of solves is. It happens once per server per day, and only in
+servers that announced the puzzle in the first place, because the reply needs
+something to reply to.
 
 ### Versions, and how a server hears about them
 

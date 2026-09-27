@@ -46,8 +46,9 @@ def enabled() -> bool:
     was announced. So a restart with it turned back on posts yesterday's recap
     straight away — the loop's first pass runs as soon as the bot is ready —
     and then one a day. Nothing older than yesterday is ever posted, because
-    `pending` only looks at yesterday. Those notes are pruned only while the recap runs; at one row per
-    server per day, that costs nothing worth a second loop.
+    `pending` only looks at yesterday. Those notes are pruned only while the
+    recap runs; at one row per server per day, that costs nothing worth a
+    second loop.
     """
     return os.environ.get(ENABLE_VAR, "").strip().lower() in _ON
 

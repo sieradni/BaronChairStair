@@ -372,9 +372,9 @@ except sqlite3.Error as e:
     recap_error = f"{type(e).__name__}: {e}"
     print(f"puzzle recap disabled: {recap_error}", file=sys.stderr)
 if recap_error is None and not puzzle_recap.enabled():
-    # Said once, at start-up, because DEPLOY.md's check is "the daily recap
-    # posts" — without this, an operator chases PUZZLE_API_KEY for a recap that
-    # is simply switched off.
+    # Said once, at start-up. DEPLOY.md's verification step 3 points at this
+    # line; without it, an operator whose recap is silent chases PUZZLE_API_KEY
+    # for a recap that is simply switched off.
     print("puzzle recap off: set PUZZLE_RECAP=on in .env to turn it on",
           file=sys.stderr)
 

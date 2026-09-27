@@ -4,7 +4,7 @@
     {
       "version": "beta 0.9",
       "changes": [
-        "**No more daily ping.** The bot used to reply to each day's `/puzzle` announcement with the previous day's results, mentioning the people who played, so they got a notification every day. That post is switched off. Your own solves and streak, and the leaderboards, are still in the activity; the server's streak and the finished day's board were only in that post, so they went with it."
+        "**No more daily ping.** The day after each puzzle, the bot used to reply to that day's `/puzzle` announcement with how it went, mentioning the people who played, so they got a notification every day. That post is switched off. Your own solves and streak, and the leaderboards, are still in the activity; the server's streak and the finished day's board were only in that post, so they went with it."
       ]
     },
     {

@@ -317,7 +317,7 @@ than the run the server timed.
 `GET /api/recap?guild=<id>&day=<n>` gives the bot everything it needs to look
 back on one finished day in one server: which puzzle it was, that server's
 board, its rush board, and how many consecutive days somebody there has
-solved. Gated on `BOT_API_KEY`, like the other two bot routes. The bot only asks
+solved. Gated on `BOT_API_KEY`, like the other three bot routes. The bot only asks
 when its recap is switched on — `PUZZLE_RECAP=on` in the bot's `.env` — since the
 recap pings every player it names.
 

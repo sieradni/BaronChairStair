@@ -15,11 +15,13 @@ This file is the *operational* half: what to set, how to restart, how to tell wh
 worked. [`README.md`](README.md) describes what the commands do and is the better place
 to start if you want to know what `/report` *is*.
 
-If you are upgrading both halves, either order works. The bot reads exactly two of the
-activity's routes — `/api/today` and `/api/recap` — and both are unchanged by the
-current release, so neither half can be broken by the other being older. Do the activity
-first anyway, out of habit: that is the half with an ordering rule inside it, and it is
-the half worth having your full attention.
+If you are upgrading both halves, either order works. The bot calls exactly three of the
+activity's routes — it reads `/api/today` and `/api/recap`, and `/archive sync` posts to
+`/api/bot/reload-archive` — and the current release changes none of them. An activity
+older than the reload route costs only a delay: the sync still publishes, and its reply
+says the puzzles go live at the activity's next restart. So neither half can be broken
+by the other being older. Do the activity first anyway, out of habit: that is the half
+with an ordering rule inside it, and it is the half worth having your full attention.
 
 ---
 
