@@ -5,10 +5,10 @@
 **A daily Tetris puzzle you play inside Discord.**
 
 Four hand-made puzzles every day, a five-minute rush, 1v1 duels, and an archive
-of 138 to work through — opened as a Discord Activity, announced by a bot that
-tells the server who solved what.
+of 138 to work through — opened as a Discord Activity, and announced in your
+server by a bot.
 
-`beta 0.7` · MIT licensed · Bun + TypeScript + Python
+MIT licensed · Bun + TypeScript + Python · [what's new](changelog.json)
 
 Built for the **Tetris at UCI** club.
 
@@ -44,8 +44,9 @@ for as long as you leave it there — and undo and redo are always one key away.
 | `/internships …` | The club's internship tracker: recent postings, salaries, a ping list |
 | `/archive sync` | **Officers only.** Pull the club's spreadsheet in, and make its new puzzles playable |
 
-The day after each puzzle, the bot replies to its own announcement with how the
-server did — who solved what, how fast, and how long the server's streak is.
+The bot can also reply to each day's announcement with how the server did — who
+solved what, how fast, and the server's streak. That recap is **off unless
+`PUZZLE_RECAP=on`** is set, because it pings every player it names.
 
 Every command in detail: **[docs/bot.md](docs/bot.md)**.
 
@@ -183,6 +184,8 @@ inline. The ones that matter:
 - **`PUZZLE_APP_ID`, `PUZZLE_API`, `PUZZLE_API_KEY`** — the `/puzzle` command.
   `PUZZLE_API_KEY` must match `BOT_API_KEY` in `activity/.env` — different names
   on either side, and a mismatch is a silent 401.
+- **`PUZZLE_RECAP`** — `on` turns on the daily recap. Off by default, because it
+  pings every player it names.
 - **`GEMINI_API_KEY`** — only for `internship_poller.py --llm`.
 
 Who may run `/archive sync` is a file, not a variable: `puzzle-admins.json`,

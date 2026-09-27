@@ -49,7 +49,9 @@ Daily recap (backed by puzzle_recap.py; polled every 5 minutes):
     once per server per day: the claim is a (guild_id, day) primary key in
     stats.db, not a timer, so a restart at any hour cannot double-post it.
     A server that never ran /puzzle gets no recap; there is nothing to
-    reply to. This is the one place the bot mentions people on purpose.
+    reply to. This is the one place the bot mentions people on purpose —
+    every player it names is pinged, every day — so it is OFF unless
+    PUZZLE_RECAP=on is set in .env.
 
 Activity tracker (backed by presence_tracker.py; samples every 10 minutes):
     /activity graph [days] [breakdown] [guild_id]
@@ -369,6 +371,12 @@ try:
 except sqlite3.Error as e:
     recap_error = f"{type(e).__name__}: {e}"
     print(f"puzzle recap disabled: {recap_error}", file=sys.stderr)
+if recap_error is None and not puzzle_recap.enabled():
+    # Said once, at start-up. DEPLOY.md's verification step 3 points at this
+    # line; without it, an operator whose recap is silent chases PUZZLE_API_KEY
+    # for a recap that is simply switched off.
+    print("puzzle recap off: set PUZZLE_RECAP=on in .env to turn it on",
+          file=sys.stderr)
 
 # bot_versions, owned by client/changelog.py. Same policy again: without the
 # table nobody is told what changed, and `/puzzle` carries on regardless.
@@ -489,7 +497,9 @@ async def on_ready():
             internship_sweep.start()
     if presence_error is None and not presence_sample.is_running():
         presence_sample.start()
-    if recap_error is None and not puzzle_recap_post.is_running():
+    # Off unless PUZZLE_RECAP=on: it pings every player it names, every day.
+    if (recap_error is None and puzzle_recap.enabled()
+            and not puzzle_recap_post.is_running()):
         puzzle_recap_post.start()
     print(f"Logged in as {bot.user} (id: {bot.user.id})")
 

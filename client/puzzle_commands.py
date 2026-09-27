@@ -15,7 +15,9 @@ Environment (see example.env):
     PUZZLE_API      Base URL of the activity server, e.g.
                        https://puzzle.example.com
     PUZZLE_API_KEY  Shared secret matching the server's BOT_API_KEY.
-                       Only needed for the recap, which reads /api/recap.
+                       Needed by the recap, which reads /api/recap, and by
+                       /archive sync (archive_commands.py), which posts to
+                       /api/bot/reload-archive so the activity reloads.
 """
 
 import logging

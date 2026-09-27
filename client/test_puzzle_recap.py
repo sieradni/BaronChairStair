@@ -11,7 +11,12 @@ module. This file covers the part of the recap that is pure string building, so
 where the dependency *is* installed there is no reason not to check it.
 """
 
+import ast
+import os
+import pathlib
+import types
 import unittest
+from unittest import mock
 
 try:
     import puzzle_recap
@@ -153,6 +158,144 @@ class RushAlignment(unittest.TestCase):
         lines = puzzle_recap._rush_lines(self.board())
         self.assertTrue(any(line.endswith("— 1 puzzle") for line in lines))
         self.assertTrue(any(line.endswith("— 17 puzzles") for line in lines))
+
+
+
+@needs_discord
+class TheRecapIsOffUnlessTurnedOn(unittest.TestCase):
+    """
+    The recap is the one message this bot sends that pings people: every player
+    it names is notified, every day. So it runs only where PUZZLE_RECAP turns it
+    on — a deploy switches it off everywhere, and turning it back on is one line
+    in .env.
+    """
+
+    def enabled_with(self, value):
+        env = {k: v for k, v in os.environ.items() if k != "PUZZLE_RECAP"}
+        if value is not None:
+            env["PUZZLE_RECAP"] = value
+        with mock.patch.dict(os.environ, env, clear=True):
+            return puzzle_recap.enabled()
+
+    def test_it_is_off_when_nothing_is_set(self):
+        self.assertFalse(self.enabled_with(None))
+
+    def test_it_stays_off_for_anything_that_does_not_mean_on(self):
+        for value in ("", "  ", "off", "0", "false", "no", "maybe"):
+            with self.subTest(value=value):
+                self.assertFalse(self.enabled_with(value))
+
+    def test_it_turns_on_however_on_is_written(self):
+        for value in ("on", "ON", " on ", "true", "1", "yes"):
+            with self.subTest(value=value):
+                self.assertTrue(self.enabled_with(value))
+
+
+def _decide(condition: ast.expr, **names) -> bool:
+    """What an `if` in discord_bot.py decides, with its free names bound to `names`."""
+    return bool(eval(compile(ast.Expression(condition), "<condition>", "eval"), names))
+
+
+class TheBotHonoursTheSwitch(unittest.TestCase):
+    """
+    enabled() deciding correctly is worth nothing if the bot starts the recap
+    anyway. Importing discord_bot.py here would load the repository's real .env
+    (override=True) and open its real databases, so this reads the source
+    instead — the approach test_changelog_wiring.py takes for puzzle_commands.
+    No decorator: it needs nothing installed, so it runs even on a bare box,
+    which is where a broken gate would otherwise go unnoticed.
+
+    The gate is *evaluated*, not searched for. A text search for
+    `puzzle_recap.enabled()` also matches `not puzzle_recap.enabled()`, and an
+    earlier version of this test passed with the gate inverted — which would
+    turn the recap on for every deploy while the start-up log said it was off.
+    """
+
+    TREE = ast.parse((pathlib.Path(__file__).resolve().parent / "discord_bot.py").read_text())
+
+    @staticmethod
+    def _is_start(node):
+        return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "start" and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "puzzle_recap_post")
+
+    def _gates(self):
+        """Every `if` whose own body starts the recap."""
+        return [node for node in ast.walk(self.TREE) if isinstance(node, ast.If)
+                and any(isinstance(s, ast.Expr) and self._is_start(s.value) for s in node.body)]
+
+    def _starts_it(self, enabled, recap_error=None):
+        """What the gate decides with the loop idle; the table is healthy unless told."""
+        (gate,) = self._gates()
+        return _decide(gate.test,
+                       recap_error=recap_error,
+                       puzzle_recap=types.SimpleNamespace(enabled=lambda: enabled),
+                       puzzle_recap_post=types.SimpleNamespace(is_running=lambda: False))
+
+    def test_the_recap_is_started_from_exactly_one_place(self):
+        self.assertEqual(len([n for n in ast.walk(self.TREE) if self._is_start(n)]), 1)
+
+    def test_that_place_is_inside_an_if(self):
+        self.assertEqual(len(self._gates()), 1)
+
+    def test_the_gate_starts_it_only_when_it_is_on(self):
+        self.assertFalse(self._starts_it(enabled=False))
+        self.assertTrue(self._starts_it(enabled=True))
+
+    def test_a_recap_table_that_could_not_be_made_keeps_it_off_even_when_on(self):
+        # recap_error is set when puzzle_recap.init_db failed at start-up. The
+        # recap turns itself off then, and switching it on must not overrule
+        # that: every tick would be a query against a table that is not there.
+        self.assertFalse(self._starts_it(enabled=True, recap_error="OperationalError: x"))
+
+
+class TheStartUpNoticeMatchesTheSwitch(unittest.TestCase):
+    """
+    DEPLOY.md's verification step 3 has an operator whose recap is silent look
+    for `puzzle recap off: …` in the start-up log before chasing PUZZLE_API_KEY.
+    With its condition inverted, the notice says "off" exactly when the recap is
+    on and nothing when it is off — so the operator chases the key for a recap
+    that is simply switched off, the very thing the notice exists to prevent.
+
+    Read and evaluated like the gate above, for the same reasons: importing
+    discord_bot.py would load the real .env and open the real databases, and a
+    text search cannot tell `enabled()` from `not enabled()`.
+    """
+
+    NOTICE = "puzzle recap off"
+
+    @classmethod
+    def _is_notice(cls, statement):
+        call = statement.value if isinstance(statement, ast.Expr) else None
+        return (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                and call.func.id == "print" and len(call.args) >= 1
+                and isinstance(call.args[0], ast.Constant)
+                and isinstance(call.args[0].value, str)
+                and call.args[0].value.startswith(cls.NOTICE))
+
+    def _notices(self):
+        """Every module-level `if` whose own body prints the notice."""
+        return [node for node in TheBotHonoursTheSwitch.TREE.body
+                if isinstance(node, ast.If) and any(self._is_notice(s) for s in node.body)]
+
+    def _says_off(self, enabled, recap_error=None):
+        """Whether start-up prints the notice; the recap's table is healthy unless told."""
+        (notice,) = self._notices()
+        return _decide(notice.test,
+                       recap_error=recap_error,
+                       puzzle_recap=types.SimpleNamespace(enabled=lambda: enabled))
+
+    def test_the_notice_is_printed_from_exactly_one_place(self):
+        self.assertEqual(len(self._notices()), 1)
+
+    def test_it_says_off_only_when_the_recap_is_off(self):
+        self.assertTrue(self._says_off(enabled=False))
+        self.assertFalse(self._says_off(enabled=True))
+
+    def test_a_recap_table_that_could_not_be_made_is_not_reported_as_switched_off(self):
+        # Start-up has already printed "puzzle recap disabled: <error>" then.
+        # Adding "set PUZZLE_RECAP=on" would point the operator at the wrong fix.
+        self.assertFalse(self._says_off(enabled=False, recap_error="OperationalError: x"))
 
 
 if __name__ == "__main__":

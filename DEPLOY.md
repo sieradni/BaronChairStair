@@ -15,11 +15,13 @@ This file is the *operational* half: what to set, how to restart, how to tell wh
 worked. [`README.md`](README.md) describes what the commands do and is the better place
 to start if you want to know what `/report` *is*.
 
-If you are upgrading both halves, either order works. The bot reads exactly two of the
-activity's routes — `/api/today` and `/api/recap` — and both are unchanged by the
-current release, so neither half can be broken by the other being older. Do the activity
-first anyway, out of habit: that is the half with an ordering rule inside it, and it is
-the half worth having your full attention.
+If you are upgrading both halves, either order works. The bot calls exactly three of the
+activity's routes — it reads `/api/today` and `/api/recap`, and `/archive sync` posts to
+`/api/bot/reload-archive` — and the current release changes none of them. An activity
+older than the reload route costs only a delay: the sync still publishes, and its reply
+says the puzzles go live at the activity's next restart. So neither half can be broken
+by the other being older. Do the activity first anyway, out of habit: that is the half
+with an ordering rule inside it, and it is the half worth having your full attention.
 
 ---
 
@@ -77,8 +79,9 @@ grep -oE '^[A-Z_][A-Z0-9_]*=' .env | tr -d '='
 |---|---|---|
 | `DISCORD_TOKEN` | everything | the bot does not start |
 | `PUZZLE_APP_ID` | the launch link | `/puzzle` cannot build its button |
-| `PUZZLE_API` | the recap | the recap has nowhere to read from |
-| `PUZZLE_API_KEY` | the recap | the recap silently never posts |
+| `PUZZLE_API` | the recap; `/archive sync` telling the activity to reload | the recap has nowhere to read from; a sync publishes, but the activity is not told |
+| `PUZZLE_API_KEY` | the recap; `/archive sync` telling the activity to reload | the recap silently never posts; a sync publishes, but the activity is not told |
+| `PUZZLE_RECAP` | the recap | the recap is off — the default, because it pings every player it names |
 | `GITHUB_TOKEN` | `/report` | `/report` answers "Reports aren't wired up yet" |
 | `GITHUB_REPO` | `/report` | as above |
 
@@ -177,8 +180,10 @@ propagate. To push the tree into one guild immediately, and tidy up afterwards, 
 
 1. It connected — the log names the bot user and the guilds it is in.
 2. `/puzzle` returns the launch button, and the activity opens from it.
-3. The daily recap posts. If it silently does not, check `PUZZLE_API_KEY` against
-   `BOT_API_KEY` in `activity/.env`.
+3. The daily recap is **off unless `PUZZLE_RECAP=on`**, and the log says so at start-up
+   (`puzzle recap off: …`). Turning it on posts the previous day's recap as soon as the
+   bot starts, then one a day. If it is on and silently does not post, check
+   `PUZZLE_API_KEY` against `BOT_API_KEY` in `activity/.env`.
 4. `/report` appears in the command list. Run it, pick a category, type a description,
    and confirm the issue appears at
    <https://github.com/tetrisuci/BaronChairStair/issues>. **Close your test issue

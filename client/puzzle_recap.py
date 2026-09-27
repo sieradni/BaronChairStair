@@ -20,11 +20,38 @@ deliberate trade: a send that fails costs that server that day, because the
 alternative is a retry that eventually double-posts.
 """
 
+import os
 import sqlite3
 import time
 from dataclasses import dataclass
 
 import discord
+
+#: The setting that turns the recap on. See `enabled()`.
+ENABLE_VAR = "PUZZLE_RECAP"
+_ON = {"on", "true", "1", "yes"}
+
+
+def enabled() -> bool:
+    """
+    Whether this bot posts the daily recap at all.
+
+    Off unless PUZZLE_RECAP says on (``on``, ``true``, ``1`` or ``yes``, in any
+    case). The recap is the one message this bot sends that pings people on
+    purpose — every player it names is notified, every day — so the operator
+    opts in, for every server this bot is in at once, rather than a deploy
+    switching it on. Read when the bot connects; changing it takes a restart.
+
+    Off stops the posting and nothing else: /puzzle still notes where each day
+    was announced. So a restart with it turned back on posts yesterday's recap
+    straight away — the loop's first pass runs as soon as the bot is ready —
+    and then one a day. Nothing older than yesterday is ever posted, because
+    `pending` only looks at yesterday. Those notes are pruned only while the
+    recap runs; at one row per server per day, that costs nothing worth a
+    second loop.
+    """
+    return os.environ.get(ENABLE_VAR, "").strip().lower() in _ON
+
 
 # Solvers named with their time. Past this they keep their ping but lose the
 # clock — a wall of times is not a leaderboard anybody reads.
