@@ -849,7 +849,26 @@ obstructed one **parks** — the dashed preview stays, drawn over the stack it
 overlaps, nothing is spent, and the next drag starts from that seat; past the
 board's edge, the piece resets to falling. A placement can be finished a
 stroke at a time — move part way, release, press again wherever the finger
-lands, and carry on from where the piece waits. Tap to rotate and
+lands, and carry on from where the piece waits. A fast, clean **swipe down**
+is the one exception to letting go: a stroke that dives — every movement
+deeper (a square's truncation wobble is noise, not steering), the whole
+swipe judged by its angle on the lift — about thirty degrees off vertical
+is a drop, a wider diagonal is steering — hard-drops the position the piece
+was shown at when the stroke began, no rest required. The stroke may begin
+anywhere the finger has been still: the drag's first movement, or a fresh
+descent after a beat of stillness — a short one, measured on the raw
+finger stream so a resting finger's jitter is stillness — positioning and
+swiping can share one contact, separated by a pause. The drop executes when the finger lifts;
+until then the piece just follows it, and once the stroke has covered its
+threshold the drop is earned: the finger may hold still before lifting, and
+still drops. The stroke's travel never steers the drop — the seat the
+descent began on is the seat that locks, past an overhang included — and a
+clean dive begun past the board's edge takes the piece to the nearest floor
+seat of the columns it dove through. A dive flowed straight out of
+positioning, with no pause, is only carrying, and its release settles or
+parks as above. Rotating a seat that is locking cancels the wait, as any
+key does — but the seat rotates in place rather than snapping back to the
+piece. Tap to rotate and
 press-and-hold keep their meaning: only a drag carries, and a mouse keeps the
 1:1 mapping everywhere; a touch-capable laptop is a mouse for these purposes.
 
@@ -862,7 +881,10 @@ command.
 
 The same actions have buttons: undo and redo sit in the Progress panel, and
 hold has its key. Pointers and keys share one log, so an undo takes back a
-dragged placement exactly like a pressed one.
+dragged placement exactly like a pressed one. A take-back leaves the piece
+at the rotation the placement locked: the dashed preview and the physical
+piece agree from the moment of the undo, and the next rotation tap turns
+both normally.
 
 Below tablet width the play screen is **one board with one column beside
 it**: hold, progress, goal and the queue stack into a slim strip on the

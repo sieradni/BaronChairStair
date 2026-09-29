@@ -1,5 +1,5 @@
 /**
- * Pointer play: tap to rotate, drag to place, long-press to hold.
+ * Pointer play: tap to rotate, drag to place, flick down to slam, long-press to hold.
  *
  * The gestures are deliberately the same on a mouse and a finger — a mouse is
  * just a finger that never loses contact — so one state machine serves both.
@@ -28,8 +28,28 @@
  * carried position sits off the board the preview drops (that is the reset
  * the model asks for) but the drag stays live; correcting the finger brings
  * the preview back before the release. Releasing on the board settles the
- * piece exactly as previewed — a placeable seat commits, a blocked one
- * parks; releasing off the board resets the piece to falling.
+ * piece exactly as previewed — a placeable seat opens the rest gate, a
+ * blocked one parks — and releasing off the board resets the piece to
+ * falling. A clean downward swipe is a slam instead: a stroke that only
+ * descends — every movement deeper or a square's blip shallower (truncation
+ * noise: the stroke keeps its deepest row), the whole chord judged by its
+ * ANGLE on the lift rather than per-sample column rules
+ * ({@link SLAM_MAX_ANGLE}) — hard-drops the position the piece was shown
+ * at when the stroke began, on the release, skipping the release-and-rest
+ * wait a settle begins. Once the stroke has crossed the threshold the drop is
+ * earned: the finger may hold still before lifting, and still drops. A
+ * stroke may begin anywhere the finger has been still: the drag's first
+ * movement, or a fresh descent after a beat of stillness
+ * ({@link SLAM_PAUSE_MS}, measured by the piece — if the preview moved,
+ * it wasn't a pause) — positioning and swiping can share one contact,
+ * separated by a beat. The stroke's travel is
+ * gesture, never steering, and the piece the finger moves is the piece
+ * that drops: the preview keeps following the finger the whole way — a
+ * stroke never moves what the player sees, so there is nothing to snap
+ * back — and a clean dive dropped short of the board takes the piece to
+ * the nearest floor seat of its column. A dive flowed straight out of
+ * positioning without a pause is only carrying: the release settles
+ * exactly as if the swipe had never happened.
  *
  * Fingers also come in chords: a tap of two is an undo and a tap of three a
  * redo ({@link MultiTapTracker}). The chord counts every contact the stage
@@ -51,6 +71,7 @@ export type Gesture =
   | { readonly type: "grab" }
   | { readonly type: "carry"; readonly shift: Spot }
   | { readonly type: "settle" }
+  | { readonly type: "slam"; readonly origin: Spot }
   | { readonly type: "cancel" }
   | { readonly type: "rotate" }
   | { readonly type: "hold" };
@@ -77,6 +98,72 @@ export const HOLD_MS = 550;
  * amplification exists to stop.
  */
 export const TOUCH_CARRY = 1.5;
+
+/**
+ * How far down a swipe must travel to be a slam, in amplified squares.
+ *
+ * Three is the boundary of a deliberate plunge: the carry's own
+ * amplification turns two finger-rows into three squares, so the
+ * threshold sits exactly at what carrying produces — a flick need only
+ * be as long as an ordinary fast drag, which is what makes it reliable,
+ * while slower travel the whole way never arms inside the window. The
+ * depth is the stroke's DEEPEST row on the descent from where the stroke
+ * began (its own travel, rows counting up from the floor, so downward is
+ * negative): a shallower plunge is positioning, but a one-square shallow
+ * blip is truncation noise a real finger cannot help, so it neither
+ * deepens nor breaks the stroke — only a rise of more than a square does.
+ */
+export const SLAM_MIN_SHIFT = 3;
+
+/**
+ * How long a swipe may take, in milliseconds, and how much silence ends
+ * one — or separates two. A real slam lands inside a hundred; 400 leaves
+ * room for a sample stream that drops in several steps and for the beat
+ * of stillness a positioning hand needs before the dive — finger-testing
+ * kept missing the older, tighter windows. Before the stroke
+ * has crossed the threshold, the window is the whole envelope: it times
+ * the descent from where the stroke began toward the threshold, every
+ * gap between the stroke's movements included; a stroke that outlives it
+ * unarmed is a player positioning the piece — and the silence re-arms
+ * the swipe, so the next descent starts a fresh stroke of its own. Once
+ * the threshold is crossed the drop is earned and the clock stops
+ * mattering: the finger may stall, and the lift still drops. The same
+ * span read as silence is what lets one contact do two gestures — a
+ * pause longer than the window ends the live stroke, and the next
+ * movement, if it descends, begins a fresh one from wherever the piece
+ * is then shown. Positioning, a beat, a swipe: one contact, two
+ * intentions.
+ */
+export const SLAM_MAX_MS = 400;
+
+/**
+ * How far off vertical a swipe may points and stay a swipe, in degrees.
+ *
+ * The judge is the CHORD — the angle from where the stroke began to where
+ * the finger lifted — not the wobble of individual samples: a real flick
+ * sways on the way down and lands where it meant to, so per-sample column
+ * rules made every sway a broken stroke. Amplification is equal on both
+ * axes, so the angle measured in shift space is the angle the finger drew.
+ * Thirty degrees off vertical keeps a confident diagonal a drop while a
+ * 45-degree steer — carrying the piece across the board — is still
+ * carrying, and the drop takes the seat the stroke began on either way.
+ */
+export const SLAM_MAX_ANGLE = 30;
+
+/**
+ * How much stillness ends a stroke, or separates two gestures, in
+ * milliseconds.
+ *
+ * Deliberately much shorter than the swipe window: the beat a positioning
+ * hand needs before a dive is small — the finger settles, then goes — and
+ * the old window-long wait made positioning-then-swipe miss its beat.
+ * Stillness is measured BY THE PIECE: the beat accrues from the last move
+ * that changed the carried shift — the last time the preview moved. Wobble
+ * that leaves the piece on the same square is a pause; a move the player
+ * can see (a boundary flip included) is not. The rule matches what the
+ * screen shows, which is the only consistency a player can hold onto.
+ */
+export const SLAM_PAUSE_MS = 150;
 
 /**
  * How long the whole of a multi-finger chord may take, first finger down to
@@ -234,6 +321,47 @@ export class PointerGestureTracker {
   private lastSample: Spot | null = null;
   /** This contact's amplification: {@link TOUCH_CARRY} for a touch, 1 otherwise. */
   private carry = 1;
+  /** When the live stroke began, to time it by; null once broken or never begun. */
+  private downAt: number | null = null;
+  /** The deepest row the live stroke has descended to; each movement must go deeper. */
+  private strokeRow: number | null = null;
+  /** The finger's raw row when the stroke began — the raw depth's reference. */
+  private strokeFromRawRow: number | null = null;
+  /** The deepest RAW row the stroke's finger has reached, untruncated. */
+  private strokeRowRaw: number | null = null;
+  /** The finger's shift when the live stroke began: the stroke's depth is its own travel from here. */
+  private strokeFrom: Spot | null = null;
+  /** The piece's shift when the stroke began — the seat a slam takes, in the drag's own shift space. */
+  private strokeOrigin: Spot | null = null;
+  /** The contact's stroke is clean so far: the release, promptly after, is what drops. */
+  private slammed = false;
+  /** The last timestamped move: the pause that separates two gestures is measured from it. */
+  private lastMoveAt: number | null = null;
+  /**
+   * The last timestamped move that CHANGED the carried shift — the pause
+   * clock, and the pause is measured BY THE PIECE: if the preview moved,
+   * it wasn't a pause; wobble that leaves the piece on the same square is
+   * stillness. This is the rule a player can see. (An earlier attempt
+   * measured stillness on the raw finger stream, but that counts a
+   * boundary flip — a visible preview move — as stillness while demanding
+   * sub-tenth-square finger immobility the player cannot deliver. The
+   * preview answers both failures at once: deduped moves are stillness
+   * whatever the finger did, and a flip is activity because the player
+   * watched the piece jump.)
+   */
+  private lastChangedAt: number | null = null;
+  /** The finger's last carried shift — the stroke's own travel is measured against it. */
+  private lastFinger: Spot | null = null;
+  /**
+   * Whether this contact has carried the piece anywhere yet — any nonzero
+   * shift, ever. "The drag's first movement" as the swipe's descent gate
+   * reads it: a one-shot flag burned by a nonzero carry, not by the grab
+   * move itself. The grab usually fires before the amplified shift leaves
+   * zero (the square boundary comes first), and burning on THAT move made
+   * every continuous dive from the press a settle — the finger never
+   * stopped, so no pause ever opened a stroke either.
+   */
+  private carried = false;
 
   constructor(
     private readonly emit: (gesture: Gesture) => void = () => {},
@@ -254,9 +382,28 @@ export class PointerGestureTracker {
     this.dragging = false;
     this.lastShift = null;
     this.lastSample = sample;
+    this.lastFinger = null;
+    this.carried = false;
     this.carry = Math.max(1, carry);
+    this.endStroke();
+    this.lastMoveAt = null;
+    this.lastChangedAt = null;
     this.armHold();
     return null;
+  }
+
+  /**
+   * Ends any live stroke. The fields are the stroke; nulling them is the
+   * same whatever broke it — a rise, a detour, a stall, a pause.
+   */
+  private endStroke(): void {
+    this.downAt = null;
+    this.strokeRow = null;
+    this.strokeFromRawRow = null;
+    this.strokeRowRaw = null;
+    this.strokeOrigin = null;
+    this.strokeFrom = null;
+    this.slammed = false;
   }
 
   /**
@@ -272,8 +419,13 @@ export class PointerGestureTracker {
    * only by shift. Re-entering the press square computes a zero shift: the
    * finger's return to where the drag started is a fresh start, with no
    * offset accumulated from anywhere it went.
+   *
+   * `now` is the move's timestamp, and only the slam needs it — how fast
+   * the descent was, and how long the finger has been silent. A caller
+   * that cannot timestamp its moves (the pure tests) omits it and simply
+   * never slams: a time-blind stream cannot mean a flick.
    */
-  move(sample: Spot): Gesture | null {
+  move(sample: Spot, now?: number): Gesture | null {
     if (!this.origin || this.holding) return null;
     if (!this.dragging) {
       if (sameSquare(this.lastSample!, sample)) return null;
@@ -285,11 +437,124 @@ export class PointerGestureTracker {
     }
     const shift = this.carriedShift(this.origin, sample);
     this.lastSample = sample;
-    if (this.lastShift && shift.column === this.lastShift.column && shift.row === this.lastShift.row) {
+    // The pause between gestures is read off the move stream itself: a
+    // gap longer than the window ends whatever UNARMED stroke is live,
+    // and the silence re-arms the swipe for a fresh descent after it. An
+    // armed stroke is a decision already made — the window timed the dive
+    // that earned it, not the hold that follows — so a stall after the
+    // crossing keeps it; only a detour or the lift can unmake it now.
+    const previousChangedAt = this.lastChangedAt;
+    if (now !== undefined) {
+      // The window that expires an UNARMED stroke runs on its own clock;
+      // the silence that separates two gestures runs on the stillness
+      // clock (below) — a held-still finger's sub-square stream is
+      // stillness, however the truncated shift flips.
+      if (
+        !this.slammed &&
+        ((this.downAt !== null && now - this.downAt > SLAM_MAX_MS) ||
+          (previousChangedAt !== null && now - previousChangedAt > SLAM_MAX_MS))
+      ) {
+        this.endStroke();
+      }
+      this.lastMoveAt = now;
+    }
+    if (this.downAt !== null) {
+      // A live stroke demands a still-deepening dive — laterally free.
+      // The chord is judged by its ANGLE on the lift, not by per-sample
+      // column rules: a real flick sways on the way down and lands where
+      // it meant to, and a per-sample column clamp made every sway a
+      // broken stroke. Only a deliberate RISE ends the stroke here: a
+      // one-square shallowing is truncation noise — amplified rows land
+      // near boundaries, and killing the stroke on that blip is what made
+      // a clean flick a coin toss. The stroke keeps its DEEPEST row.
+      if (shift.row > this.strokeRow! + 1) {
+        this.endStroke();
+      } else if (shift.row < this.strokeRow!) {
+        this.strokeRow = shift.row;
+      }
+    } else if (now !== undefined) {
+      // A descent begins a stroke only where the finger has been still:
+      // the drag's first movement, or the first movement after a pause.
+      // A dive flowed straight out of positioning is the positioning
+      // still going — carrying, never a swipe. The dive that opens a
+      // stroke is the first move DOWNWARD past the row the finger is
+      // resting on — a finger parked HIGH (the piece moved up first) then
+      // diving starts its stroke here, not above at some earlier stamp.
+      // The pause is measured from the last move that CHANGED the shift —
+      // a held-still finger keeps streaming sub-square events whose shift
+      // dedupes to the same square, and they must not reset the pause
+      // clock under themselves.
+      const first = !this.carried; // the drag's first meaningful travel
+      // The pause is measured BY THE PIECE: stillness since the last move
+      // that changed the carried shift — the last time the preview moved.
+      const afterPause = previousChangedAt !== null && now - previousChangedAt > SLAM_PAUSE_MS;
+      const resting = this.lastFinger ?? { column: 0, row: 0 };
+      const restingRowRaw = this.lastSample ? this.lastSample.row : sample.row;
+      if (shift.row < resting.row && (first || afterPause)) {
+        this.downAt = now;
+        this.strokeRow = shift.row;
+        // The stroke's origin is the seat the piece was shown at — the
+        // last carried shift, or the drag's anchor when nothing has
+        // carried yet. The runner maps it back to a seat at the slam, so
+        // the drop takes what the player watched the stroke begin on —
+        // and for a dive out of a pause, that is exactly the pause
+        // position: where the finger was resting, wherever it parked
+        // the piece first.
+        this.strokeOrigin = this.lastShift ? { ...this.lastShift } : { column: 0, row: 0 };
+        // The depth a stroke is judged by is its own travel: the descent
+        // from where the finger actually was (the pause row), never the
+        // frozen depth of some earlier, broken stroke above it. The RAW
+        // row is kept too: the arming threshold reads amplified RAW
+        // travel, not truncated shifts, which lose up to a square at each
+        // end of the stroke and made arming a truncation lottery.
+        this.strokeFrom = { column: resting.column, row: resting.row };
+        this.strokeFromRawRow = restingRowRaw;
+        this.strokeRowRaw = this.strokeFromRawRow - (resting.row - shift.row) / this.carry;
+      }
+    }
+    // The stroke's deepest RAW descent: kept in lockstep with the
+    // truncated strokeRow above.
+    if (this.downAt !== null && this.strokeRowRaw !== null) {
+      const rawRow = this.strokeFromRawRow! - (this.strokeFrom!.row - shift.row) / this.carry;
+      if (rawRow < this.strokeRowRaw!) this.strokeRowRaw = rawRow;
+    }
+    // Arming: the stroke has covered the threshold inside the window.
+    // Board rows count up from the floor, so downward is the negative
+    // direction, and the depth is the stroke's own deepest descent — a
+    // positioning drift cannot borrow a later twitch's speed. The depth
+    // is amplified RAW finger travel (`(travel) * carry`, untruncated):
+    // truncated shifts lose up to a square at each end of the stroke,
+    // which made arming a lottery of where the boundaries fell.
+    if (
+      !this.slammed &&
+      now !== undefined &&
+      this.downAt !== null &&
+      this.strokeFrom !== null &&
+      now - this.downAt <= SLAM_MAX_MS &&
+      (this.strokeFromRawRow! - this.strokeRowRaw!) * this.carry >= SLAM_MIN_SHIFT
+    ) {
+      this.slammed = true;
+    }
+    this.lastFinger = shift;
+    // Meaningful travel happened: the drag's first-movement window is
+    // spent. A zero shift (the grab move, a return to the press point)
+    // does not spend it — the descent may still begin.
+    if (shift.column !== 0 || shift.row !== 0) this.carried = true;
+    // The preview ALWAYS follows the finger — armed or not. The stroke's
+    // travel is gesture, never steering: what the finger moved is what
+    // the drop will take, and the runner maps the stroke's origin through
+    // whatever slides and rotations have happened since. A stroke never
+    // moves what the player sees mid-gesture, so there is nothing to snap
+    // back when the drop arrives.
+    const carried = shift;
+    if (this.lastShift && carried.column === this.lastShift.column && carried.row === this.lastShift.row) {
       return null;
     }
-    this.lastShift = shift;
-    return { type: "carry", shift };
+    this.lastShift = carried;
+    // The shift changed: this is activity, and the pause clock restarts
+    // from it. Deduped moves leave {@link lastChangedAt} standing.
+    if (now !== undefined) this.lastChangedAt = now;
+    return { type: "carry", shift: carried };
   }
 
   /**
@@ -307,21 +572,51 @@ export class PointerGestureTracker {
 
   /**
    * The contact ended. A drag settles the piece exactly as carried — the run
-   * decides between committing, parking and resetting; a tap rotates; a held
-   * contact has already had its say.
+   * decides between committing, parking and resetting; a tap rotates; a slam
+   * and a held contact have already had their say and leave nothing behind.
    */
   release(now: number): Gesture | null {
     this.clearHoldTimer();
+    // The armed stroke fires here: the window timed the dive that earned
+    // the drop, not the hold after it — swipe down, stop, release drops
+    // the piece, because the stroke crossed the threshold while it was
+    // still alive. An unarmed stroke never got there.
+    let swiped = this.slammed;
+    const strokeOrigin = this.strokeOrigin;
+    // The angle judge runs at the lift, over the WHOLE stroke: the chord
+    // from where the dive began to where the finger released. A flick may
+    // sway on the way down — per-sample column clamps broke on every sway
+    // — but the chord names the gesture: within {@link SLAM_MAX_ANGLE} of
+    // vertical is a drop, wider is steering.
+    if (swiped && this.strokeFrom && this.lastFinger) {
+      const angleOffVertical =
+        (Math.atan2(
+          this.lastFinger.column - this.strokeFrom.column,
+          this.strokeFrom.row - this.lastFinger.row,
+        ) *
+          180) /
+        Math.PI;
+      if (Math.abs(angleOffVertical) > SLAM_MAX_ANGLE) swiped = false;
+    }
+    this.endStroke();
+    this.lastMoveAt = null;
+    this.lastChangedAt = null;
     const { origin, dragging } = this;
     this.origin = null;
     this.lastShift = null;
     this.lastSample = null;
+    this.lastFinger = null;
     this.dragging = false;
     if (this.holding) {
       this.holding = false;
       return null;
     }
     if (!origin) return null;
+    // The stroke that stayed clean to the very lift fires here: the whole
+    // gesture belonged to the player until the finger was up. The origin
+    // rides along: the drop takes the seat the piece was shown at when
+    // the stroke began, wherever the finger has been since.
+    if (swiped && strokeOrigin) return { type: "slam", origin: strokeOrigin };
     if (dragging) return { type: "settle" };
     // One threshold everywhere: a press held shorter than the hold window is
     // a rotate — the same window the timer fires the hold at, so a release
@@ -345,13 +640,18 @@ export class PointerGestureTracker {
   /** The contact was taken away by the browser: a second finger, a scroll. */
   cancel(): Gesture | null {
     this.clearHoldTimer();
+    this.endStroke();
+    this.lastMoveAt = null;
+    this.lastChangedAt = null;
     const wasHolding = this.holding;
     const hadPress = this.origin !== null;
+    this.slammed = false;
+    this.dragging = false;
+    this.holding = false;
     this.origin = null;
     this.lastShift = null;
     this.lastSample = null;
-    this.dragging = false;
-    this.holding = false;
+    this.lastFinger = null;
     // A held contact carried nothing, so there is nothing to reset — and a
     // cancel with no contact at all names nothing.
     return wasHolding || !hadPress ? null : { type: "cancel" };
@@ -404,6 +704,15 @@ export interface PointerBoard {
    * to settle).
    */
   settleAt(): void;
+  /**
+   * A clean downward swipe: hard-drop the piece from the seat it was shown
+   * at when the stroke began — `origin`, the stroke's start in the drag's
+   * own shift space, to be mapped back through whatever slides and
+   * rotations have happened since — descended to rest, without waiting for
+   * the release and the rest. A swipe with nowhere to go is a settled
+   * nothing.
+   */
+  slamDrop(origin: Spot): void;
   /** The drag died without a release: drop the preview, piece falls on. */
   cancelCarry(): void;
   /** One clockwise rotation. */
@@ -444,6 +753,7 @@ export function attachPointerPlay(
       case "grab": board.grabBase(); break;
       case "carry": board.carryAt(gesture.shift); break;
       case "settle": board.settleAt(); break;
+      case "slam": board.slamDrop(gesture.origin); break;
       case "cancel": board.cancelCarry(); break;
       case "rotate": board.rotate(); break;
       case "hold": board.hold(); break;
@@ -458,7 +768,12 @@ export function attachPointerPlay(
   // carry and settle return to the adapter synchronously, but hold fires
   // through the constructor's emit — both arrive here.
   const play = (gesture: Gesture | null): void => {
-    if (gesture && (gesture.type === "grab" || gesture.type === "hold")) chord.poison();
+    if (
+      gesture &&
+      (gesture.type === "grab" || gesture.type === "hold" || gesture.type === "slam")
+    ) {
+      chord.poison();
+    }
     apply(gesture);
   };
   const tracker = new PointerGestureTracker(play, holdDelay, clock);
@@ -494,12 +809,19 @@ export function attachPointerPlay(
     } catch {
       // Play on without capture.
     }
-    apply(tracker.press(sample, event.timeStamp, event.pointerType === "touch" ? TOUCH_CARRY : 1));
+    apply(
+      tracker.press(
+        sample,
+        event.timeStamp,
+        event.pointerType === "touch" ? TOUCH_CARRY : 1,
+      ),
+    );
   };
 
   const onMove = (event: PointerEvent): void => {
     if (event.pointerId !== activeId) return;
-    apply(tracker.move(local(event)));
+    // The timestamp is the slam's evidence: how fast the descent was.
+    apply(tracker.move(local(event), event.timeStamp));
   };
 
   const onUp = (event: PointerEvent): void => {

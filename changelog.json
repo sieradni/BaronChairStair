@@ -2,6 +2,13 @@
   "$comment": "The project's version and its player-facing release notes. Newest first; order in this list IS the version order. Read by client/changelog.py — the bot's /puzzle announcement. Adding a release means putting it at the top. Keep `changes` to things a player can see.",
   "releases": [
     {
+      "version": "beta 0.10",
+      "changes": [
+        "**Touch play gains a slam and a deliberate lock.** A fast, straight-down flick drops the piece into the seat the preview shows — mid-air, parked, or from a stroke that began past the board's edge — and a sideways pull carries instead of slamming. A placement locks only after the piece rests a moment with your finger off it: a ring shows the wait, and turning the piece during the wait cancels it in place. Tapping a piece you have parked turns it where it sits, and taking a placement back leaves the piece and its preview turning together.",
+        "**Dragging on the play screen no longer selects text.** A drifting finger can no longer highlight the board mid-gesture; building, browsing and reading still select as before."
+      ]
+    },
+    {
       "version": "beta 0.9",
       "changes": [
         "**No more daily ping.** The day after each puzzle, the bot used to reply to that day's `/puzzle` announcement with how it went, mentioning the people who played, so they got a notification every day. That post is switched off. Your own solves and streak, and the leaderboards, are still in the activity; the server's streak and the finished day's board were only in that post, so they went with it."

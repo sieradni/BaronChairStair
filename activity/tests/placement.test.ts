@@ -9,7 +9,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { PuzzleRun } from "../client/src/game/runner";
+import { PuzzleRun, cwTurnsBetween } from "../client/src/game/runner";
+import { MINO_INK } from "../client/src/render/skin";
 import { decodeBoard, ENGINE_ROWS, type PuzzlePrompt } from "../shared/puzzle";
 import { DEFAULT_HANDLING } from "../shared/tetris/handling";
 import { type InputEvent, parseInputLog, verifyRun } from "../shared/tetris/verify";
@@ -85,6 +86,98 @@ describe("drag to place", () => {
       [3, 0],
       [3, 1],
     ]);
+    run.dispose();
+  });
+
+  test("undo hands the piece back at the seat it was taken from", () => {
+    const run = newRun();
+    run.aimAt(floorAim(2));
+    run.placeAt();
+    pumpUntil(() => run.snapshot().piecesPlaced === 1);
+    pump(SAFE_LOCK_FRAMES);
+    const seat = [
+      [2, 0],
+      [2, 1],
+      [3, 0],
+      [3, 1],
+    ] as const;
+
+    expect(run.undo()).toBe(true);
+    expect(run.snapshot().piecesPlaced).toBe(0);
+    // The virtual position survives the take-back: a parked preview at the
+    // very squares the placement locked — dashed, held, never committed.
+    const parked = run.view().aim;
+    expect(parked).not.toBeNull();
+    expect(parked?.legal).toBe(false);
+    expect(sorted(parked!.cells)).toEqual([...seat]);
+
+    // A grab re-anchors on the parked seat, so the position is live again:
+    // zero travel shows the same seat, and the flick re-commits it.
+    run.grabBase();
+    run.carryAt({ column: 0, row: 0 });
+    expect(sorted(run.view().aim!.cells)).toEqual([...seat]);
+    run.slamDrop({ column: 0, row: 0 });
+    expect(run.snapshot().piecesPlaced).toBe(1);
+    pump(SAFE_LOCK_FRAMES);
+    // And the server agrees the re-taken seat is the one that locked.
+    const log = structuredClone(run.log()) as InputEvent[];
+    expect(parseInputLog(log)).toEqual(log);
+    const verified = verifyRun(SETUP, DEFAULT_HANDLING, log);
+    expect(verified.placements).toHaveLength(1);
+    expect([...verified.placements[0]!.cells].sort((a, b) => a[0] - b[0] || a[1] - b[1])).toEqual([
+      ...seat,
+    ]);
+    run.dispose();
+  });
+
+  test("each undo level hands back that level's own seat", () => {
+    const run = newRun();
+    run.aimAt(floorAim(2));
+    run.placeAt();
+    pumpUntil(() => run.snapshot().piecesPlaced === 1);
+    pump(SAFE_LOCK_FRAMES);
+    run.aimAt(floorAim(7));
+    run.placeAt();
+    pumpUntil(() => run.snapshot().piecesPlaced === 2);
+    pump(SAFE_LOCK_FRAMES);
+
+    expect(run.undo()).toBe(true);
+    expect(run.snapshot().piecesPlaced).toBe(1);
+    // The newest take-back parks at the second placement's seat
+    // (the O covers the aimed column's left edge: 6-7, as 2-3 above).
+    expect(sorted(run.view().aim!.cells)).toEqual([
+      [6, 0],
+      [6, 1],
+      [7, 0],
+      [7, 1],
+    ]);
+    expect(run.undo()).toBe(true);
+    expect(run.snapshot().piecesPlaced).toBe(0);
+    // One level further down, the first placement's seat comes back instead.
+    expect(sorted(run.view().aim!.cells)).toEqual([
+      [2, 0],
+      [2, 1],
+      [3, 0],
+      [3, 1],
+    ]);
+    run.dispose();
+  });
+
+  test("redo spends the handed-back piece again and clears the park", () => {
+    const run = newRun();
+    run.aimAt(floorAim(2));
+    run.placeAt();
+    pumpUntil(() => run.snapshot().piecesPlaced === 1);
+    pump(SAFE_LOCK_FRAMES);
+    expect(run.undo()).toBe(true);
+    expect(run.view().aim).not.toBeNull(); // the park is showing
+
+    expect(run.redo()).toBe(true);
+    pumpUntil(() => run.snapshot().piecesPlaced === 1);
+    // The piece is spent again, exactly as the log says: no park survives a
+    // redo, and the fresh falling piece speaks with its own shadow.
+    expect(run.view().aim).toBeNull();
+    expect(run.view().ghost.length).toBeGreaterThan(0);
     run.dispose();
   });
 
@@ -614,31 +707,39 @@ const sorted = (cells: readonly (readonly [number, number])[]) =>
   [...cells].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
 
 describe("the carry's endings", () => {
-  test("a grab previews the piece where it is and moves nothing", () => {
+  test("a grab previews the shadow: the seat the piece would land on", () => {
     const run = newStackedRun();
     run.grabBase();
-    // The grab itself shows nothing — the piece is where it was.
+    // The grab itself shows nothing — the anchor moves nothing.
     expect(previewOf(run)).toBeNull();
-    // The first carry of zero names the piece's own position: legal, at spawn.
+    // The first carry of zero names the shadow: where the piece would rest
+    // if it dropped now. On the open half of the board that is the floor —
+    // legal, rows 0–1 — though the piece hangs far above it.
     run.carryAt({ column: 0, row: 0 });
-    // Shown where the piece is — floating at spawn, which no route can place,
-    // so the preview is the dashed illegal one: visible, and not a lie.
+    const shadow = sorted(previewOf(run)!.cells);
+    expect(previewOf(run)?.legal).toBe(true);
+    expect(Math.min(...shadow.map(([, y]) => y))).toBe(0);
+    // Carried one square up, the preview sits on the stack's row: the
+    // anchor is the landing seat, not the hanging piece.
+    run.carryAt({ column: 0, row: 1 });
     expect(previewOf(run)?.legal).toBe(false);
     expect(run.snapshot().piecesPlaced).toBe(0);
     expect(run.log()).toEqual([]);
     run.dispose();
   });
 
-  test("a release on a placeable seat commits exactly what was previewed", () => {
+  test("a release waits out its rest, then commits exactly what was previewed", () => {
     const run = newStackedRun();
     run.grabBase();
-    // The first carry of zero names the piece's own position.
-    run.carryAt({ column: 0, row: 0 }); // the grab: preview at the piece
+    // The first carry of zero names the shadow.
+    run.carryAt({ column: 0, row: 0 });
+    run.carryAt(shiftTo(run, 8, 0)); // to open floor right of the stack
     const shown = sorted(previewOf(run)!.cells);
-    run.carryAt(shiftTo(run, 8, 0)); // corner to open floor right of the stack
     expect(previewOf(run)?.legal).toBe(true);
     run.settleAt();
-    expect(previewOf(run)).toBeNull(); // committed: no preview left
+    // The release does not spend the piece: the gate holds the preview.
+    expect(run.snapshot().piecesPlaced).toBe(0);
+    expect(sorted(previewOf(run)!.cells)).toEqual(shown);
     pumpUntil(() => run.snapshot().piecesPlaced === 1);
 
     // What locked is what was shown, shifted to the seat the finger named.
@@ -648,6 +749,252 @@ describe("the carry's endings", () => {
       const dy = 0 - cornerOf(shown).row;
       expect(committed[y + dy]![x + dx]).not.toBeNull();
     }
+    run.dispose();
+  });
+
+  test("a re-grab that moves away cancels the gate: nothing commits", () => {
+    const run = newStackedRun();
+    run.grabBase();
+    run.carryAt({ column: 0, row: 0 });
+    run.carryAt(shiftTo(run, 8, 0));
+    run.settleAt();
+    expect(previewOf(run)).not.toBeNull();
+    // The finger comes back down on the arranged seat — the grab anchors
+    // there and the wait survives the touch — and then the player drags
+    // away: the seat the gate was holding is no longer the seat showing,
+    // so the wait dies with the move.
+    run.grabBase();
+    run.carryAt({ column: 0, row: 0 });
+    expect(previewOf(run)).not.toBeNull();
+    run.carryAt(shiftTo(run, 3, 1)); // a real move: a change of mind
+    pump(50); // well past the rest (≈833ms, clear of the 750ms gate)
+    expect(run.snapshot().piecesPlaced).toBe(0);
+    expect(run.log()).toEqual([]);
+    // And the piece is still the player's: carried to a seat (the shift is
+    // measured from the drag's anchor, corner 8 — so -1 puts corner 7, and
+    // the S's foot reaches column 9) and flicked, it places as ever.
+    run.carryAt({ column: -1, row: 0 });
+    expect(previewOf(run)?.legal).toBe(true);
+    run.slamDrop({ column: -1, row: 0 });
+    expect(run.snapshot().piecesPlaced).toBe(1);
+    run.dispose();
+  });
+
+  test("a grab during the rest re-anchors on the seat the gate was holding", () => {
+    const run = newStackedRun();
+    run.grabBase();
+    run.carryAt({ column: 0, row: 0 });
+    run.carryAt(shiftTo(run, 8, 0));
+    run.settleAt(); // gate open on the arranged seat
+    // The finger comes back down and holds still: the drag continues from
+    // the position the player arranged — not yanked to the piece's own
+    // shadow — and the gate survives a grab that moves nothing.
+    run.grabBase();
+    run.carryAt({ column: 0, row: 0 });
+    expect(run.view().aim?.progress).toBeDefined(); // still waiting, same seat
+    pump(50);
+    expect(run.snapshot().piecesPlaced).toBe(1); // the gate kept its promise
+    run.dispose();
+  });
+
+  test("a grab during the rest carries the arranged seat as the anchor", () => {
+    const run = newStackedRun();
+    run.grabBase();
+    run.carryAt({ column: 0, row: 0 });
+    run.carryAt(shiftTo(run, 8, 0));
+    run.settleAt();
+    const arranged = sorted(run.view().aim!.cells);
+    run.grabBase(); // anchored on the gate's seat, wherever the piece hangs
+    run.carryAt({ column: -4, row: 0 }); // travel left: continues from the seat
+    const carried = sorted(run.view().aim!.cells);
+    expect(carried).toEqual(arranged.map(([x, y]) => [x - 4, y]));
+    // Returning the finger home is the arranged seat again — the shift is
+    // measured from where the drag anchored.
+    run.carryAt({ column: 0, row: 0 });
+    expect(sorted(run.view().aim!.cells)).toEqual(arranged);
+    run.slamDrop({ column: 0, row: 0 });
+    expect(run.snapshot().piecesPlaced).toBe(1);
+    run.dispose();
+  });
+
+  test("a swipe past a far carry drops the anchor, not the carried seat", () => {
+    const run = newStackedRun();
+    run.grabBase();
+    run.carryAt({ column: 0, row: 0 });
+    const anchor = sorted(previewOf(run)!.cells); // the shadow: where the drag began
+    run.carryAt(shiftTo(run, 8, 0)); // the preview carried to the far column
+    expect(previewOf(run)?.legal).toBe(true);
+    const before = run.view().cells;
+    run.slamDrop({ column: 0, row: 0 }); // the stroke began on the shadow
+    // No wait, no release: the piece is spent at once — and at the drag's
+    // anchor, wherever the finger carried the preview since: the stroke's
+    // travel is gesture, never destination.
+    expect(run.snapshot().piecesPlaced).toBe(1);
+    const committed = sorted(
+      run.view().cells.flatMap((row, y) =>
+        row.map((cell, x) =>
+          cell && !before[y]?.[x] ? ([x, y] as const) : null,
+        ).filter((c): c is readonly [number, number] => c !== null),
+      ),
+    );
+    expect(committed).toEqual(anchor);
+    run.dispose();
+  });
+
+  test("rotating mid-air then grabbing re-anchors on the shown preview", () => {
+    // The user's report: after a rotation (which ends the drag), grabbing
+    // again and dragging teleported the preview back to the piece's
+    // physical shadow after one square of travel. The grab anchors on the
+    // shown position — here the dangling aim the rotation left — so the
+    // piece moves FROM where the player sees it, never to the shadow.
+    const run = newStackedRun();
+    run.grabBase();
+    run.carryAt({ column: 0, row: 0 });
+    run.carryAt(shiftTo(run, 4, 1)); // the piece is arranged mid-air, floating
+    run.tap("rotateCW"); // ends the drag; the preview dangles, rotated in place
+    const shown = sorted(previewOf(run)!.cells);
+    run.grabBase(); // the finger comes back down
+    run.carryAt({ column: 0, row: 0 }); // zero travel: exactly what was shown
+    expect(sorted(previewOf(run)!.cells)).toEqual(shown); // not the physical shadow
+    // The first square of travel moves the piece one square from where it
+    // was shown — the jump is gone. The shift is measured from the SHOWN
+    // corner, so a one-corner-square move is one amplified square.
+    const from = cornerOf(shown);
+    run.carryAt({ column: 0, row: -1 });
+    expect(cornerOf(previewOf(run)!.cells).row).toBe(from.row - 1);
+    run.dispose();
+  });
+
+  test("a drag-grab after a key move restarts from the piece's own position", () => {
+    // The key-move case, stated honestly: moveLeft clears the aim (the
+    // piece moved under it — there is no position left to preserve), so
+    // the next grab anchors on the piece's own shadow, exactly like a
+    // fresh grab. The position on screen is gone; the piece is what is
+    // grabbed.
+    const run = newStackedRun();
+    run.grabBase();
+    run.carryAt({ column: 0, row: 0 });
+    run.carryAt(shiftTo(run, 4, 1));
+    run.tap("moveLeft"); // the piece shifts left; the dangling aim is gone
+    expect(previewOf(run)).toBeNull();
+    run.grabBase();
+    run.carryAt({ column: 0, row: 0 });
+    // The fresh grab's shadow sits at the PIECE's column — one left of the
+    // arrangement, where the key moved it — not at the arranged position.
+    expect(cornerOf(previewOf(run)!.cells).column).toBe(3);
+    run.dispose();
+  });
+
+  test("a rotation mid-carry re-derives the preview instead of resetting it", () => {
+    const run = newStackedRun();
+    run.grabBase();
+    run.carryAt({ column: 0, row: 0 });
+    run.carryAt(shiftTo(run, 8, 0));
+    const shown = sorted(previewOf(run)!.cells);
+    expect(previewOf(run)?.legal).toBe(true);
+    // The tap used to end the drag — the preview would be gone here.
+    run.tap("rotateCW");
+    expect(previewOf(run)).not.toBeNull();
+    // The preview re-derived from the rotated piece at the same travel.
+    expect(sorted(previewOf(run)!.cells)).toEqual(shown);
+    // And it still places, straight from the carried state.
+    run.settleAt();
+    pumpUntil(() => run.snapshot().piecesPlaced === 1);
+    run.dispose();
+  });
+
+  test("a rotation re-derives from a parked anchor too, seat-bottom steady", () => {
+    const run = newStackedRun();
+    run.grabBase();
+    run.carryAt({ column: 0, row: 0 });
+    run.carryAt(shiftTo(run, 0, 0)); // park on the stack
+    run.settleAt();
+    run.grabBase(); // anchored on the park
+    const parked = sorted(previewOf(run)!.cells);
+    run.carryAt({ column: 0, row: 0 });
+    expect(sorted(previewOf(run)!.cells)).toEqual(parked);
+    run.carryAt(shiftTo(run, 8, 0));
+    expect(previewOf(run)?.legal).toBe(true);
+    run.tap("rotateCW");
+    expect(previewOf(run)).not.toBeNull();
+    // The preview's bottom row survived the rotation in place.
+    expect(Math.min(...previewOf(run)!.cells.map(([, y]) => y))).toBe(0);
+    // The swipe's origin is shift-space: it maps back through whatever
+    // slide the rotation re-derived, so the drop takes the seat the
+    // re-derived preview is showing — the rotated piece where it was
+    // carried — never the parked seat it anchored on.
+    const shown = sorted(previewOf(run)!.cells);
+    const before = run.view().cells;
+    run.slamDrop(shiftTo(run, 8, 0)); // origin in shift space: the shown seat
+    expect(run.snapshot().piecesPlaced).toBe(1);
+    const committed = sorted(
+      run.view().cells.flatMap((row, y) =>
+        row.map((cell, x) =>
+          cell && !before[y]?.[x] ? ([x, y] as const) : null,
+        ).filter((c): c is readonly [number, number] => c !== null),
+      ),
+    );
+    expect(committed).toEqual(shown);
+    run.dispose();
+  });
+
+  test("rotating during the lock cancels it, but rotates the seat in place", () => {
+    // The user's report, twice over: the rotation must cancel the lock —
+    // a key is a key, and the piece stays unspent — but the seat the
+    // player arranged must not TELEPORT back to the piece's physical
+    // shadow while it happens. The preview re-derives onto the rotated
+    // piece at the same corner; the commit it was waiting for is gone.
+    const run = newStackedRun();
+    run.grabBase();
+    run.carryAt({ column: 0, row: 0 });
+    run.carryAt(shiftTo(run, 8, 0));
+    run.settleAt();
+    const waitingRow = Math.min(...run.view().aim!.cells.map(([, y]) => y));
+    run.tap("rotateCW"); // cancels the gate; the seat rotates in place
+    const rotated = previewOf(run);
+    expect(rotated).not.toBeNull(); // the position survived, not reset
+    expect(Math.min(...rotated!.cells.map(([, y]) => y))).toBe(waitingRow); // same bottom row
+    expect(rotated!.legal).toBe(true); // re-derived onto the rotated piece
+    pump(50); // well past the rest: the cancelled gate must not commit
+    expect(run.snapshot().piecesPlaced).toBe(0);
+    expect(run.log().length).toBeGreaterThan(0); // the rotation played
+    // And the player can still finish the arrangement from here: re-seat
+    // and the gate opens again on the rotated piece.
+    run.carryAt({ column: 0, row: 0 });
+    run.settleAt();
+    pumpUntil(() => run.snapshot().piecesPlaced === 1);
+    run.dispose();
+  });
+
+  test("a non-rotating key during the rest still cancels the gate", () => {
+    const run = newStackedRun();
+    run.grabBase();
+    run.carryAt({ column: 0, row: 0 });
+    run.carryAt(shiftTo(run, 8, 0));
+    run.settleAt();
+    run.tap("moveLeft"); // a move is a change of mind: the gate dies
+    pump(50); // ≈833ms, clear of the 750ms gate: had it lived, it would have committed.
+    expect(run.snapshot().piecesPlaced).toBe(0);
+    expect(run.log().length).toBeGreaterThan(0); // the key played, though
+    run.dispose();
+  });
+
+  test("the view carries the gate's progress while the piece waits", () => {
+    const run = newStackedRun();
+    run.grabBase();
+    run.carryAt({ column: 0, row: 0 });
+    run.carryAt(shiftTo(run, 8, 0));
+    run.settleAt();
+    // A slice of the rest: part-way through, not done.
+    pump(10);
+    const waiting = run.view().aim;
+    expect(waiting?.progress).toBeGreaterThan(0);
+    expect(waiting?.progress).toBeLessThan(1);
+    pumpUntil(() => run.snapshot().piecesPlaced === 1);
+    // The ring rides the commit briefly, then fades away with the gate.
+    expect(run.view().aim?.progress).toBeGreaterThanOrEqual(1);
+    pump(60);
+    expect(run.view().aim?.progress).toBeUndefined();
     run.dispose();
   });
 
@@ -744,6 +1091,199 @@ describe("the carry's endings", () => {
     expect(previewOf(run)?.legal).toBe(true);
     run.settleAt();
     pumpUntil(() => run.snapshot().piecesPlaced === 1);
+    run.dispose();
+  });
+
+  test("after an undo the physical piece is spun to the park's orientation", () => {
+    // The reported contract: take back a placement made with a rotated
+    // piece and BOTH the virtual park and the physical piece show that
+    // rotation — the piece is re-spawned flat by the rebuild, so undo
+    // spins it to the seat's orientation with silent rotateCW pairs. A
+    // flat piece under a 180ed (or vertical) park is exactly the desync
+    // that made every later rotation tap look insane.
+    // The O cannot discriminate orientations; an S stands with one tap.
+    const sPuzzle: PuzzlePrompt = { ...PUZZLE, queue: ["S", "O", "O", "O", "O", "O"] };
+    const sRun = new PuzzleRun(sPuzzle, DEFAULT_HANDLING, {
+      onFrame: () => {},
+      onFinish: () => {},
+      onLock: () => {},
+    });
+    sRun.tap("rotateCW");
+    sRun.aimAt(floorAim(2));
+    expect(sRun.placeAt()).toBe(true);
+    pumpUntil(() => sRun.snapshot().piecesPlaced === 1);
+    pump(SAFE_LOCK_FRAMES);
+    expect(sRun.undo()).toBe(true);
+
+    // The park holds the locked seat — a standing S, three rows tall —
+    // and the physical piece now agrees with it — zero turns between
+    // them, where the rebuild alone had left the piece flat.
+    const parked = sRun.view().aim;
+    expect(parked).not.toBeNull();
+    const parkedCells = sorted(parked!.cells);
+    const height =
+      Math.max(...parkedCells.map(([, y]) => y)) - Math.min(...parkedCells.map(([, y]) => y)) + 1;
+    expect(height).toBe(3); // the seat was locked vertical, and the park kept it
+    expect(cwTurnsBetween(sRun.view().active, parked!.cells)).toBe(0);
+
+    // Playing on from the take-back, the sync rides in the log as ordinary
+    // keys: place the handed-back piece again and the server replays the
+    // whole log — sync pairs included — to exactly the placement the park
+    // showed.
+    sRun.grabBase();
+    sRun.carryAt({ column: 0, row: 0 });
+    sRun.slamDrop({ column: 0, row: 0 });
+    expect(sRun.snapshot().piecesPlaced).toBe(1);
+    pump(SAFE_LOCK_FRAMES);
+    const syncLog = structuredClone(sRun.log()) as InputEvent[];
+    expect(syncLog.some((e) => e.data.key === "rotateCW")).toBe(true); // the sync is IN the log
+    expect(parseInputLog(syncLog)).toEqual(syncLog);
+    const syncVerified = verifyRun(
+      {
+        board: decodeBoard(sPuzzle.board, ENGINE_ROWS),
+        queue: sPuzzle.queue,
+        hold: sPuzzle.hold,
+      },
+      DEFAULT_HANDLING,
+      syncLog,
+    );
+    expect(syncVerified.placements).toHaveLength(1);
+    expect(sorted(syncVerified.placements[0]!.cells)).toEqual(parkedCells);
+    sRun.dispose();
+  });
+
+  test("undoing a placement made after a hold keeps the hold swap", () => {
+    // The reported flow, exactly: hold Z, place J (drag or keys), undo.
+    // The hold pair sits in the log BEFORE the placement's boundary, so the
+    // first undo used to cut it too — the held Z re-spawning (bay Z,
+    // physical Z) while the parked preview still described the J's seat: a
+    // red J ghost over a physical Z. A completed swap now opens its own
+    // boundary, so the first undo keeps the swap and parks the J seat.
+    const zj: PuzzlePrompt = { ...PUZZLE, queue: ["Z", "J", "O", "O", "O", "O"] };
+    const run = new PuzzleRun(zj, DEFAULT_HANDLING, {
+      onFrame: () => {},
+      onFinish: () => {},
+      onLock: () => {},
+    });
+    run.tap("hold"); // Z into the bay, J spawns
+    pump(2);
+    expect(run.snapshot().hold).toBe("Z");
+    run.aimAt(floorAim(2));
+    expect(run.placeAt()).toBe(true);
+    pumpUntil(() => run.snapshot().piecesPlaced === 1);
+    pump(SAFE_LOCK_FRAMES);
+    expect(run.undo()).toBe(true);
+    // The placement is taken back; the HOLD STAYS: the bay still reads Z
+    // (the swap was kept), and the falling piece is the J — the same piece
+    // the park describes, not a re-spawned Z. The letter is the point of
+    // this test: the reported bug was a red J ghost over a physical Z.
+    expect(run.snapshot().hold).toBe("Z");
+    // The falling piece is the J (the reported bug: a red J ghost over a
+    // physical Z). Ink by letter, so the discrimination is exact.
+    expect(run.view().activeInk).toBe(MINO_INK.J);
+    const parked = run.view().aim;
+    expect(parked).not.toBeNull();
+    expect(parked!.legal).toBe(false); // the locked seat, dashed as ever
+    expect(cwTurnsBetween(run.view().active, parked!.cells)).toBe(0); // physical IS the J
+    // And a second undo reverts the swap itself: the bay empties and the Z
+    // is falling again.
+    expect(run.undo()).toBe(true);
+    expect(run.snapshot().hold).toBeNull();
+    run.dispose();
+  });
+
+  test("redo survives the undo-time sync: the redone log is the one the player played", () => {
+    // The sync pairs are housekeeping — recorded on the segment and
+    // stripped again by redo, so the redone log is byte-for-byte the log
+    // the player played, and the placement spends again exactly as before.
+    const sPuzzle: PuzzlePrompt = { ...PUZZLE, queue: ["S", "O", "O", "O", "O", "O"] };
+    const sRun = new PuzzleRun(sPuzzle, DEFAULT_HANDLING, {
+      onFrame: () => {},
+      onFinish: () => {},
+      onLock: () => {},
+    });
+    sRun.tap("rotateCW");
+    sRun.aimAt(floorAim(2));
+    expect(sRun.placeAt()).toBe(true);
+    pumpUntil(() => sRun.snapshot().piecesPlaced === 1);
+    pump(SAFE_LOCK_FRAMES);
+    // The seat is derived from the placement's own verified log, never
+    // hand-built: redo must reproduce the very placement that was taken
+    // back, whatever squares it covered.
+    const firstLog = structuredClone(sRun.log()) as InputEvent[];
+    const firstVerified = verifyRun(
+      {
+        board: decodeBoard(sPuzzle.board, ENGINE_ROWS),
+        queue: sPuzzle.queue,
+        hold: sPuzzle.hold,
+      },
+      DEFAULT_HANDLING,
+      firstLog,
+    );
+    expect(firstVerified.placements).toHaveLength(1);
+    const seat = sorted(firstVerified.placements[0]!.cells);
+    expect(sRun.undo()).toBe(true);
+    expect(sRun.view().aim).not.toBeNull(); // the park is showing
+
+    expect(sRun.redo()).toBe(true);
+    pumpUntil(() => sRun.snapshot().piecesPlaced === 1);
+    pump(SAFE_LOCK_FRAMES);
+    // No park survives a redo, and the fresh falling piece speaks with its
+    // own shadow.
+    expect(sRun.view().aim).toBeNull();
+    expect(sRun.view().ghost.length).toBeGreaterThan(0);
+    const log = structuredClone(sRun.log()) as InputEvent[];
+    expect(parseInputLog(log)).toEqual(log);
+    const verified = verifyRun(
+      {
+        board: decodeBoard(sPuzzle.board, ENGINE_ROWS),
+        queue: sPuzzle.queue,
+        hold: sPuzzle.hold,
+      },
+      DEFAULT_HANDLING,
+      log,
+    );
+    expect(verified.placements).toHaveLength(1);
+    expect(sorted(verified.placements[0]!.cells)).toEqual(seat);
+    sRun.dispose();
+  });
+
+  test("rotating a parked piece rotates park and piece together, in place", () => {
+    // The teleport, pinned at the source: after the undo parks a rotated
+    // piece (synced to it), each rotation tap must advance BOTH one
+    // quarter-turn from the seat's current orientation — the park redrawn
+    // from the piece's post-tap cells at the same corner, the piece under
+    // it matching — never snapping the seat back to a stale orientation.
+    // The piece is a T: four distinct orientations make the test
+    // direction-sensitive — an S (or I, O, Z) has only two, and a
+    // counterclockwise geometry helper passes every one of its checks.
+    const tPuzzle: PuzzlePrompt = { ...PUZZLE, queue: ["T", "O", "O", "O", "O", "O"] };
+    const run = new PuzzleRun(tPuzzle, DEFAULT_HANDLING, {
+      onFrame: () => {},
+      onFinish: () => {},
+      onLock: () => {},
+    });
+    run.tap("rotateCW"); // stand the T up
+    run.aimAt(floorAim(2));
+    expect(run.placeAt()).toBe(true);
+    pumpUntil(() => run.snapshot().piecesPlaced === 1);
+    pump(SAFE_LOCK_FRAMES);
+    expect(run.undo()).toBe(true);
+    const firstPark = sorted(run.view().aim!.cells);
+
+    run.tap("rotateCW");
+    const secondPark = sorted(run.view().aim!.cells);
+    expect(run.view().aim).not.toBeNull();
+    expect(cwTurnsBetween(firstPark, secondPark)).toBe(1); // one CW turn — a CCW helper reads 3 here
+    expect(cornerOf(firstPark)).toEqual(cornerOf(secondPark)); // in place
+    expect(cwTurnsBetween(run.view().active, secondPark)).toBe(0); // piece matches the park
+
+    run.tap("rotateCW");
+    const thirdPark = sorted(run.view().aim!.cells);
+    expect(run.view().aim).not.toBeNull();
+    expect(cwTurnsBetween(secondPark, thirdPark)).toBe(1); // the next tap rotates BOTH normally
+    expect(cornerOf(secondPark)).toEqual(cornerOf(thirdPark));
+    expect(cwTurnsBetween(run.view().active, thirdPark)).toBe(0);
     run.dispose();
   });
 });

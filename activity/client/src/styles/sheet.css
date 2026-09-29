@@ -164,6 +164,21 @@
   }
 }
 
+/*
+ * A live run is a gesture surface end to end: a drag can begin anywhere on
+ * the deck, and a second tap of a two-finger undo can land on a caption or
+ * a stat. Text selection there is never wanted — on mobile a long-press or
+ * a drift across the HUD paints a selection highlight over the play surface
+ * and eats the gesture's move stream — so the play deck opts out entirely,
+ * whatever the pointer. Screens without a run (home, verdict, builder) keep
+ * selection; copy-the-goal-text still works there.
+ */
+.deck--play:not(:has(.build__board)) {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
 .field {
   position: absolute;
   top: 50%;

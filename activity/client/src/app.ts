@@ -8,7 +8,8 @@
  */
 
 import { BOARD_HEIGHT, type PuzzlePrompt, type SolutionStep } from "@shared/puzzle";
-import { attachPointerPlay } from "./game/pointer";import type { Handling } from "@shared/tetris/handling";
+import { attachPointerPlay } from "./game/pointer";
+import type { Handling } from "@shared/tetris/handling";
 import type { InputEvent } from "@shared/tetris/verify";
 import type { Connection } from "./discord";
 import type { DailyEntry, DailyResponse, GalleryLine, RushState, StoredRun } from "./api";
@@ -385,6 +386,7 @@ export class App {
         grabBase: () => this.activeRun?.grabBase(),
         carryAt: (shift) => this.activeRun?.carryAt(shift),
         settleAt: () => this.activeRun?.settleAt(),
+        slamDrop: (origin) => this.activeRun?.slamDrop(origin),
         cancelCarry: () => this.activeRun?.clearAim(),
         rotate: () => this.activeRun?.tap("rotateCW"),
         hold: () => this.runHold(),
