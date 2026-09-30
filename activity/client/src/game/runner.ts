@@ -1296,11 +1296,12 @@ export class PuzzleRun {
    * The seat is descended the way the keyboard's hard drop descends a piece —
    * one row at a time, while the row below is free — and then committed
    * through the same plan-and-lock path a release uses, without waiting out
-   * the rest. A dive that began past an edge still takes: the stroke's
-   * columns name the floor seats they point at, so the piece is seated at
-   * the stroke's top row on those columns' terrain and descended from
-   * there. A seat buried inside the stack has nothing to descend and stands
-   * as a park — the arrangement is the player's, nothing spent. A rest gate
+   * the rest. A slam whose stroke seat sits off the board is INVALID: the
+   * seat is where the piece would be shown, and off the board nothing is
+   * shown — the gesture has no target, and the release resets the piece to
+   * falling, exactly as a drag released off the board does. A seat buried
+   * inside the stack has nothing to descend and stands as a park — the
+   * arrangement is the player's, nothing spent. A rest gate
    * the slam answers goes with the carry: this commit IS that commit, made
    * now rather than waited out.
    */
@@ -1324,56 +1325,29 @@ export class PuzzleRun {
     let cells = base.cells.map(
       ([x, y]) => [x + origin.column + slide, y + origin.row - drop] as const,
     );
+    // The stroke seat is where the piece would be shown. Off the board,
+    // nothing IS shown: an invalid slam resets the piece, exactly as a
+    // drag released off the board does — the piece falls on as if
+    // untouched, and the swipe spends nothing.
+    if (!this.fallingFitsAt(cells)) {
+      this.renderOnce();
+      return;
+    }
     // Descend the stroke's seat until it rests: the hard drop the swipe
     // promised, made good. A seat buried in the stack has nothing to
     // descend, so the loop leaves it as it is.
     while (this.fallingFitsAt(cells.map(([x, y]) => [x, y - 1] as const))) {
       cells = cells.map(([x, y]) => [x, y - 1] as const);
     }
-    // The drop ALWAYS takes the stroke that was properly executed — even a
-    // clean dive that began past an edge, where no seat to descend exists.
-    // The stroke's shape is clamped whole back onto the board — the piece
-    // is the shape the player dove with, so the clamp slides it as one by
-    // the least translation that fits it, never one column at a time —
-    // and then descends to rest on the terrain under its columns — rising
-    // clear first when the clamp seated it inside that terrain, so a stroke
-    // that began past a wall lands on top of the wall, at the edge it dove
-    // toward. A seat buried inside the stack has nothing to descend and no
-    // edge to clamp to; the swipe spends nothing.
+    // A seat buried inside the stack was ON the board: no reset, no spend
+    // — the arrangement is the player's, parked where they left it.
     if (!this.fallingFitsAt(cells)) {
-      const left = Math.min(...cells.map(([x]) => x));
-      const right = Math.max(...cells.map(([x]) => x));
-      const clampX =
-        left < 0 && right < BOARD_WIDTH
-          ? -left
-          : right >= BOARD_WIDTH && left >= 0
-            ? BOARD_WIDTH - 1 - right
-            : 0;
-      if (clampX !== 0) {
-        cells = cells.map(([x, y]) => [x + clampX, y] as const);
-        // The clamp may have seated the shape inside the terrain the dive
-        // pointed at. The whole shape rises as one until it clears — the
-        // piece is one shape — and the descent below then lands it on top:
-        // a stroke that began past a wall lands at the wall, not inside it.
-        while (
-          !this.fallingFitsAt(cells) &&
-          cells.every(([, y]) => y + 1 < ENGINE_ROWS)
-        ) {
-          cells = cells.map(([x, y]) => [x, y + 1] as const);
-        }
-        while (this.fallingFitsAt(cells.map(([x, y]) => [x, y - 1] as const))) {
-          cells = cells.map(([x, y]) => [x, y - 1] as const);
-        }
-      }
-    }
-    // `placeAt` re-searches the route against the real piece and validates
-    // the seat itself; the synthetic aim only carries the target. It runs
-    // only when the seat still fits — a stroke that pointed off the board
-    // entirely has no column to clamp to, and the swipe spends nothing.
-    if (!this.fallingFitsAt(cells)) {
+      this.parked = { cells: cells as TargetCells };
       this.renderOnce();
       return;
     }
+    // `placeAt` re-searches the route against the real piece and validates
+    // the seat itself; the synthetic aim only carries the target.
     this.aim = { cells: cells as TargetCells, legal: true };
     if (!this.placeAt()) this.renderOnce();
   }

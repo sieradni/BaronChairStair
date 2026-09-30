@@ -880,12 +880,10 @@ not. That beat ends a stroke as well as separating two: a finger that stops
 diving for longer than the beat has stopped swiping, whatever the stroke armed
 on the way down, and its release settles instead — the seated piece is where
 the player left it. A dive flowed straight out of positioning, with no pause,
-is only carrying. A stroke that began past the board's edge still drops: its
-seat is clamped whole — the piece is one shape, never column by column — back
-onto the board at the edge the dive pointed down toward, lifted clear of the
-terrain there as one shape, and descended to rest on top of it — a stroke past
-a wall lands at the wall, not inside it; a stroke with no column on the board
-at all spends nothing.
+is only carrying. A stroke whose seat is off the board is not a slam at all: the seat is
+where the piece would be shown, and past an edge nothing is shown — the
+gesture has no target, and the release resets the piece to falling exactly
+as a drag released off the board does.
 
 A keyboard reaches the same seats, and it never plays the arrangement: a
 hard drop during the wait cancels it and hard-drops the physical piece from

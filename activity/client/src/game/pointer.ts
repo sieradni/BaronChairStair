@@ -742,11 +742,12 @@ export interface PointerBoard {
    */
   settleAt(): void;
   /**
-   * A clean downward swipe: hard-drop the seat the preview is showing —
-   * descended to rest the way a hard drop descends it — and commit it at
-   * once, without waiting out the rest. A swipe with no seat to take (a drag
-   * that ended past the edge, or a seat already inside the stack) is a
-   * settled nothing.
+   * A clean downward swipe: hard-drop the stroke's seat — descended to
+   * rest the way a hard drop descends it — and commit it at once, without
+   * waiting out the rest. An invalid swipe — a stroke seat past the edge,
+   * where nothing is shown to drop — resets the piece, as any drag
+   * released off the board; a seat already inside the stack is a settled
+   * nothing.
    */
   slamDrop(origin: Spot): void;
   /** The drag died without a release: drop the preview, piece falls on. */
