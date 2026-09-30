@@ -41,7 +41,7 @@ def get(url):
 
 
 def subnames(cmd):
-    """Subcommand names, so `internships` shows what it actually contains."""
+    """Subcommand names, so a group like `activity` shows what it contains."""
     return [o["name"] for o in cmd.get("options", []) if o["type"] in (1, 2)]
 
 

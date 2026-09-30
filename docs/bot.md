@@ -162,25 +162,3 @@ reads `.env` from the working directory and does not walk up.
 Backed by `presence_tracker.py`, which samples every 10 minutes. Both accept a
 `guild_id` to inspect any server the bot is in. The x-axis is labelled in
 Pacific time, because the club is.
-
-### `/internships` — the tracker
-
-```
-/internships recent [days] [us_only]    recently posted tech internships
-/internships info <role>                salary and description for one role
-/internships ping                       subscribe yourself to notices
-/internships pinglist                   who is subscribed
-/internships debug                      sweep health, DB size, Gemini quota
-```
-
-Swept every 15 minutes, with notices batched to at most one an hour. A new
-posting produces one quiet, mention-free message per subscribed channel with a
-button on it; pressing the button replies ephemerally, so a good sweep never
-floods a channel.
-
-### `/bennxt` — retired
-
-`roles`, `recent`, `notify`, `notifylist` and `debug` all reply *"bennxt is no
-longer bummxt"*. The civil and mechanical job tracker behind them was removed
-once bennxt got hired. The commands and their descriptions are kept so old
-invocations still resolve and the picker looks unchanged.

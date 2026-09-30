@@ -2,6 +2,12 @@
   "$comment": "The project's version and its player-facing release notes. Newest first; order in this list IS the version order. Read by client/changelog.py — the bot's /puzzle announcement. Adding a release means putting it at the top. Keep `changes` to things a player can see.",
   "releases": [
     {
+      "version": "beta 0.11",
+      "changes": [
+        "**`/internships` and `/bennxt` are gone from this bot.** Internship alerts now come from a separate bot, **DIAYN**, in the club's Discord server, and everyone who had alerts on has been carried over to it. DIAYN sends alerts as direct messages, so keep Direct Messages from the club server's members turned on. Use `/internships` on DIAYN to see or change yours. The puzzles and every other command here work as before."
+      ]
+    },
+    {
       "version": "beta 0.10",
       "changes": [
         "**A flick slams, and a placement waits to be locked.** A fast, straight-down flick now hard-drops the piece from the seat it showed when the stroke began — the slam is one command, and a beat of stillness ends it: drag to a seat, rest a moment, and the drag becomes a placement there rather than a flick anywhere. A placement then locks only after the piece rests for about three quarters of a second with nobody touching the screen — the wait counts against your clock, like any other pause. A ring shows the wait; putting a hand back on the piece holds it; and any key press — a hard drop, a turn, an undo — cancels the wait and plays the falling piece itself, exactly as the keyboard always plays. Tapping a piece you have parked turns it where it sits, and taking a placement back leaves the piece and its preview turning together. A stroke that begins with the piece past the board's edge is not a slam — nothing is shown there to drop — so the piece resets on the release, exactly as a drag released off the board does. The same gestures work under a mouse as under a finger.",
