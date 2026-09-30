@@ -4,7 +4,7 @@
     {
       "version": "beta 0.10",
       "changes": [
-        "**`/internships` and `/bennxt` are gone from this bot.** Internship alerts are moving to a separate bot, DIAYN, which the club will invite to the server, so keep an eye on the server for it. This bot will not post internship notices any more. The puzzles and every other command work as before."
+        "**`/internships` and `/bennxt` are gone from this bot.** Internship alerts now come from a separate bot, **DIAYN**, which is in this server, and everyone who had alerts on has been carried over to it. DIAYN sends alerts as direct messages, so keep Direct Messages from this server's members turned on. Use `/internships` on DIAYN to see or change yours. The puzzles and every other command here work as before."
       ]
     },
     {
