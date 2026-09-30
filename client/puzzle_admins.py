@@ -13,9 +13,9 @@ this module and worth reading first:
 
 **It fails closed.** A missing, unreadable or malformed file means *nobody* is
 allowed, not everybody. Every other config loader in this repository degrades
-permissively — the changelog goes quiet, `boards.json` falls back to a seed
-list, `/report` says it is not wired up — because for all of them the open
-state is the harmless one. Here it is the whole point of the file, and a
+permissively — the changelog goes quiet, `/puzzle` explains what is missing,
+`/report` says it is not wired up — because for all of them the open state is
+the harmless one. Here it is the whole point of the file, and a
 loader that copied that habit would hand the archive to the first person who
 typed the command on the day somebody fat-fingered a comma.
 

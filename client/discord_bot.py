@@ -126,9 +126,9 @@ PRESENCE_SAMPLE_MINUTES = presence_tracker.SAMPLE_MINUTES
 PRESENCE_DAYS_DEFAULT   = presence_tracker.GRAPH_DAYS_DEFAULT
 PRESENCE_DAYS_MAX       = presence_tracker.GRAPH_DAYS_MAX
 
-# Posting titles/locations come from external APIs and could contain <@id>
-# text, and announcements are deliberately silent — nothing this bot sends
-# about internships should ever ping anyone.
+# Text the bot repeats but did not write — a server's name, above all — could
+# contain <@id> or @everyone, and a reply that carries it must never ping
+# anyone. The daily recap is the one deliberate exception; see RECAP_MENTIONS.
 NO_MENTIONS = discord.AllowedMentions.none()
 
 
@@ -260,11 +260,12 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 
 # ── No link-preview embeds, anywhere ──────────────────────────────────────────
-# Job listings carry apply/company URLs, and Discord would render a preview
-# card per link — several per message, burying the text. Rather than passing
-# suppress_embeds=True at ~30 call sites (and remembering it forever), patch
-# the three send paths once so every message the bot sends defaults to it.
-# Callers can still opt out explicitly with suppress_embeds=False.
+# Discord renders a preview card for every link in a message — a filed
+# /report's issue URL, for one — and the card buries the text it came with.
+# Rather than passing suppress_embeds=True at every call site (and remembering
+# it forever), patch the send paths once so every message the bot sends
+# defaults to it. A message that brings its own embed is left alone, and
+# callers can still opt out explicitly with suppress_embeds=False.
 
 def _no_embeds(send):
     async def wrapper(*args, **kwargs):
@@ -283,7 +284,7 @@ commands.Context.send = _no_embeds(commands.Context.send)
 commands.Context.reply = _no_embeds(commands.Context.reply)
 discord.Message.reply = _no_embeds(discord.Message.reply)
 
-db = sqlite3.connect(ROOT / "stats.db")  # pinned like postings.db — never CWD
+db = sqlite3.connect(ROOT / "stats.db")  # anchored to the repo root — never CWD
 
 TRACKED_STICKER_ID = 1485928821038383314
 
@@ -324,7 +325,7 @@ except sqlite3.Error as e:
 
 # presence_samples, owned by client/presence_tracker.py. A schema mismatch
 # disables presence tracking instead of taking the whole bot down with it --
-# same policy as the internship tracker below.
+# same policy as the recap and changelog tables above.
 try:
     presence_tracker.init_db(db)
     presence_error = None
@@ -408,7 +409,7 @@ async def _sync_global_commands():
 async def on_ready():
     # on_ready fires on every reconnect, and global command writes are rate
     # limited -- a failure here must not take down everything after it, which
-    # includes re-attaching the persistent digest button.
+    # includes starting the presence sampler and the daily recap.
     try:
         await _sync_global_commands()
     except Exception:
