@@ -47,13 +47,13 @@ describe("the slam", () => {
     run.grabBase();
     run.carryAt({ column: 0, row: 0 }); // the shadow: the L's bar on the well floor
     expect(run.view().aim?.legal).toBe(true);
-    run.slamDrop({ column: 0, row: 0 });
+    run.slamDrop();
     // No rest, no release: the piece is spent in the same instant.
     expect(run.snapshot().piecesPlaced).toBe(1);
     run.dispose();
   });
 
-  test("a swipe from a floating preview drops the anchor it began on", () => {
+  test("a swipe from a floating preview descends the seat it shows to rest", () => {
     const run = newRun();
     run.grabBase();
     run.carryAt({ column: 0, row: 0 });
@@ -61,10 +61,11 @@ describe("the slam", () => {
     run.carryAt({ column: 0, row: 3 }); // carried up: floating over the well, illegal as shown
     expect(run.view().aim?.legal).toBe(false);
     const before = run.view().cells;
-    // The dive began on the shadow — origin 0,0 in shift space — so the
-    // drop takes the anchor, never the floated seat: the stroke's travel
-    // is gesture, not destination.
-    run.slamDrop({ column: 0, row: 0 });
+    // The drop takes the floated seat and descends it the way a hard drop
+    // descends a piece — down until the row below is occupied — which lands
+    // it exactly on the shadow it was floating above. A mid-air seat the
+    // player cannot place by releasing still gets its hard drop.
+    run.slamDrop();
     expect(run.snapshot().piecesPlaced).toBe(1);
     const added = sorted(
       run.view().cells.flatMap((row, y) =>
@@ -77,34 +78,57 @@ describe("the slam", () => {
     run.dispose();
   });
 
-  test("a swipe anchored on a parked seat is a settled nothing", () => {
+  test("a swipe at a seat inside the stack is a settled nothing", () => {
     const run = newRun();
     run.grabBase();
     run.carryAt({ column: -3, row: 3 }); // floating over the J stack: buried
     run.settleAt(); // released unplaceable: the seat parks, dashed
+    const parked = sorted(run.view().aim!.cells);
     run.grabBase(); // the drag re-anchors on the park
-    run.slamDrop({ column: 0, row: 0 }); // the stroke began on the park
-    // The park sits inside the stack: nothing to descend, nothing to
-    // place — the swipe spends nothing. (The park's re-commit path is the
-    // rest gate or a carry to a legal seat, never the swipe.)
+    run.carryAt({ column: 0, row: 0 }); // zero travel: the park's own seat, shown
+    run.slamDrop();
+    // The seat is inside the stack. A hard drop asks whether the piece fits
+    // where it is before it asks about the row below, and a piece already
+    // overlapping the stack is not somewhere anything can be dropped from:
+    // the swipe spends nothing. (The park's re-commit path is the rest gate
+    // or a carry to a legal seat, never the swipe.)
+    expect(run.snapshot().piecesPlaced).toBe(0);
+    expect(run.log()).toEqual([]);
+    expect(sorted(run.view().aim!.cells)).toEqual(parked); // still the player's
+    run.dispose();
+  });
+
+  test("a swipe with the preview off the board spends nothing", () => {
+    const run = newRun();
+    run.grabBase();
+    run.carryAt({ column: 9, row: 0 }); // carried off the right edge: no preview
+    expect(run.view().aim).toBeNull();
+    run.slamDrop();
+    // No seat on screen, no drop: a stroke that ended past the edge names
+    // nothing to take, and guessing at the columns it passed through would
+    // be inventing a placement the player never saw.
     expect(run.snapshot().piecesPlaced).toBe(0);
     expect(run.log()).toEqual([]);
     run.dispose();
   });
 
-  test("a rotation mid-stroke rides along: the swipe takes the shown seat", () => {
-    // A keyboard tap can rotate a drag in flight (a touch cannot): the
-    // preview re-derives onto the rotated piece at the same seat. The
-    // origin is shift-space — it maps back through whatever slide the
-    // rotation re-derived — so the swipe takes the seat the player is
-    // watching, in the orientation it is shown, with no re-stamp at all.
+  test("a keyboard rotation mid-stroke rides along: the swipe takes the shown seat", () => {
+    // A keyboard can rotate a drag in flight (a touch cannot), and the key
+    // goes through {@link input} — not the pointer's own tap — so this is the
+    // path a mouse-and-keyboard player takes. The seat stays where the player
+    // arranged it and turns in place; the swipe then takes the seat on screen,
+    // in the orientation it is shown.
     const run = newRun();
     run.grabBase();
     run.carryAt({ column: 0, row: 0 });
-    run.tap("rotateCW"); // mid-stroke: the shown piece is now the rotated one
+    const arranged = sorted(run.view().aim!.cells);
+    run.input("rotateCW", true);
+    run.input("rotateCW", false);
     const shown = sorted(run.view().aim!.cells);
+    expect(shown.length).toBe(4); // the seat is still there, turned in place
+    expect([...shown].sort()).not.toEqual([...arranged].sort()); // and it IS turned
     const before = run.view().cells;
-    run.slamDrop({ column: 0, row: 0 });
+    run.slamDrop();
     expect(run.snapshot().piecesPlaced).toBe(1);
     const added = sorted(
       run.view().cells.flatMap((row, y) =>
@@ -121,7 +145,7 @@ describe("the slam", () => {
     const run = newRun();
     run.grabBase();
     run.carryAt({ column: 0, row: 0 });
-    run.slamDrop({ column: 0, row: 0 });
+    run.slamDrop();
     pumpUntil(() => run.snapshot().piecesPlaced === 1);
     const log = structuredClone(run.log());
     const verified = verifyRun(
@@ -140,7 +164,7 @@ describe("the slam", () => {
     const shown = run.view().aim!.cells;
     expect(run.view().aim?.legal).toBe(true);
     const boardBefore = run.view().cells;
-    run.slamDrop({ column: 0, row: 0 });
+    run.slamDrop();
     expect(run.snapshot().piecesPlaced).toBe(1);
     // What landed is exactly what was shown: the slam added nothing,
     // moved nothing — the seat the finger held is the seat that locked.
@@ -166,9 +190,11 @@ describe("the slam", () => {
     expect(waiting?.progress).toBeDefined(); // the gate is open
     expect(run.snapshot().piecesPlaced).toBe(0);
     const seat0 = waiting!.cells;
-    run.grabBase(); // the finger comes back down; the gate dies, the aim lives
+    // The finger comes back down on the waiting seat: the grab anchors there,
+    // and a still finger neither cancels the seat nor moves it.
+    run.grabBase();
     expect(run.snapshot().piecesPlaced).toBe(0);
-    run.slamDrop({ column: 0, row: 0 }); // ...and the flick hard-drops the seat it was waiting on
+    run.slamDrop(); // ...and the flick hard-drops the seat it was waiting on
     expect(run.snapshot().piecesPlaced).toBe(1);
     // Exactly one commit: the slammed seat stayed slammed — no gate woke
     // up afterwards to place a second piece or to reset the first.

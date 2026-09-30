@@ -67,6 +67,10 @@ function tracked(holdDelay = 20) {
   return { tracker, gestures, fire: fake.fire };
 }
 
+/** A tracker over fractional samples, carrying at the touch factor. */
+const carried = () =>
+  new PointerGestureTracker(undefined, 20, { schedule: () => 0, cancel: () => {} });
+
 const WAIT = 8;
 /** Short of the injected 20ms hold window, so a release at WAIT is a rotate. */
 const QUICK = WAIT;
@@ -150,23 +154,82 @@ describe("gesture tracker", () => {
     // Three amplified squares — two finger-rows at the carry's
     // amplification — is the threshold, crossed here in one move.
     expect(tracker.move(at(4, 1), 100)).toEqual({ type: "carry", shift: at(0, -4) });
-    // The flick is the finger leaving the board, not the descent. The
-    // origin rides along: the drop takes the seat the stroke began on.
-    expect(tracker.release(120)).toEqual({ type: "slam", origin: at(0, 0) });
+    // The flick is the finger leaving the board, not the descent. Nothing
+    // rides along: the drop takes the seat the preview is showing.
+    expect(tracker.release(120)).toEqual({ type: "slam" });
     expect(gestures).toEqual([{ type: "grab" }]);
   });
 
-  test("a stroke, once armed, survives a stall and drops on the lift", () => {
-    // The window timed the dive, not the hold after it: the drop is
-    // earned the moment the stroke covers the threshold. The finger may
-    // stop — the pause the flowing contract allows — and the lift still
-    // drops. The preview never froze: it has been following the finger
-    // all along, so the stall shows exactly what the finger shows.
+  test("a stroke that stops diving is positioning again: the lift settles", () => {
+    // The window timed the dive, so the dive has to be recent: a finger still
+    // for longer than the window has stopped flicking, and the release settles
+    // the seat the preview is showing — where the finger stopped, not where the
+    // dive began. (An armed stroke used to survive any stall, which is how a
+    // slow drag down into a tuck armed on the way and then slammed the piece
+    // back onto the overhang it had just been carried under.)
     const { tracker } = tracked();
     tracker.press(at(4, 5), 0);
     expect(tracker.move(at(4, 1), 90)).toEqual({ type: "carry", shift: at(0, -4) }); // arms
     expect(tracker.move(at(4, 1), 700)).toBeNull(); // the stall: same shift, deduped
-    expect(tracker.release(820)).toEqual({ type: "slam", origin: at(0, 0) });
+    expect(tracker.release(820)).toEqual({ type: "settle" });
+
+    // Inside the window the lift is still the dive's own gesture.
+    const prompt = tracked();
+    prompt.tracker.press(at(4, 5), 0);
+    expect(prompt.tracker.move(at(4, 1), 90)).toEqual({ type: "carry", shift: at(0, -4) });
+    expect(prompt.tracker.release(480)).toEqual({ type: "slam" });
+  });
+
+  test("arming measures the finger's own travel, so the threshold is not a lottery", () => {
+    // The stroke begins where the finger actually rested (row 3.4), not where
+    // its truncated square sat (row 3): 1.9 finger rows is 2.85 amplified
+    // squares — under the three it takes to arm — while the truncated shifts
+    // have already crossed it. Reading the truncated cells is what made the
+    // crossing anywhere between one and three finger rows depending on where
+    // the sample boundaries fell.
+    const t = carried();
+    t.press(at(4, 5), 0, TOUCH_CARRY);
+    expect(t.move(at(4, 3.4), 40)).toEqual({ type: "carry", shift: at(0, -2) }); // positioning
+    expect(t.move(at(4, 1.5), 500)).toEqual({ type: "carry", shift: at(0, -5) }); // own dive: 1.9 rows
+    expect(t.release(520)).toEqual({ type: "settle" });
+  });
+
+  test("two finger rows is exactly the crossing, and what it is measured on", () => {
+    // The same drag twice, a hair either side of the amplified threshold: the
+    // truncated shift is identical in both, so nothing about the preview can
+    // tell them apart — only the finger's own travel does.
+    const under = carried();
+    under.press(at(4, 10), 0, TOUCH_CARRY);
+    expect(under.move(at(4, 8.1), 60)).toEqual({ type: "carry", shift: at(0, -2) }); // 1.9 rows: 2.85
+    expect(under.release(80)).toEqual({ type: "settle" });
+
+    const exact = carried();
+    exact.press(at(4, 10), 0, TOUCH_CARRY);
+    expect(exact.move(at(4, 8), 60)).toEqual({ type: "carry", shift: at(0, -3) }); // 2 rows: 3.0
+    expect(exact.release(80)).toEqual({ type: "slam" });
+  });
+
+  test("the angle judge reads the finger's chord, not the truncated shifts", () => {
+    // A square of truncation is a lot of angle on a short dive: this flick is
+    // 28 degrees off vertical as the finger drew it — inside the thirty a drop
+    // is allowed — while its truncated cells read 34, which used to settle it.
+    const t = carried();
+    t.press(at(4, 5), 0, TOUCH_CARRY);
+    expect(t.move(at(5.4, 2.4), 60)).toEqual({ type: "carry", shift: at(2, -3) });
+    expect(t.release(80)).toEqual({ type: "slam" });
+
+    // And a real steer is still a steer: 45 degrees off vertical.
+    const steer = carried();
+    steer.press(at(4, 5), 0, TOUCH_CARRY);
+    expect(steer.move(at(6.7, 2.3), 60)).toEqual({ type: "carry", shift: at(4, -4) });
+    expect(steer.release(80)).toEqual({ type: "settle" });
+
+    // And the allowance is thirty, not "somewhere under forty-five": a
+    // chord five degrees past the limit is a steer, and settles.
+    const lean = carried();
+    lean.press(at(4, 5), 0, TOUCH_CARRY);
+    expect(lean.move(at(6.8, 1), 60)).toEqual({ type: "carry", shift: at(4, -6) });
+    expect(lean.release(80)).toEqual({ type: "settle" });
   });
 
   test("a veer past a square of wobble hands the finger back", () => {
@@ -204,7 +267,7 @@ describe("gesture tracker", () => {
     expect(tracker.move(at(4, 2), 60)).toEqual({ type: "carry", shift: at(0, -3) }); // at threshold
     expect(tracker.move(at(4.2, 2.6), 80)).toEqual({ type: "carry", shift: at(0, -2) }); // noise: one square shallow
     expect(tracker.move(at(4.1, 1.4), 100)).toEqual({ type: "carry", shift: at(0, -3) }); // deeper again: stroke alive
-    expect(tracker.release(130)).toEqual({ type: "slam", origin: at(0, 0) });
+    expect(tracker.release(130)).toEqual({ type: "slam" });
   });
 
   test("a blip may also land above the threshold before the stroke reaches it", () => {
@@ -217,7 +280,7 @@ describe("gesture tracker", () => {
     expect(tracker.move(at(4.1, 1.9), 80)).toEqual({ type: "carry", shift: at(0, -3) }); // crosses at -3
     expect(tracker.move(at(4.2, 2.8), 100)).toEqual({ type: "carry", shift: at(0, -2) }); // blip: one shallow
     expect(tracker.move(at(4.1, 1.8), 120)).toEqual({ type: "carry", shift: at(0, -3) }); // back to the deepest
-    expect(tracker.release(150)).toEqual({ type: "slam", origin: at(0, 0) });
+    expect(tracker.release(150)).toEqual({ type: "slam" });
   });
 
   test("a re-dive after a reversal is carrying, not a second swipe", () => {
@@ -277,7 +340,7 @@ describe("gesture tracker", () => {
     tracker.press(at(4, 5), 0);
     expect(tracker.move(at(4, 3), 40)).toEqual({ type: "carry", shift: at(0, -2) }); // positioning: two squares, under the threshold
     expect(tracker.move(at(4, -1), 500)).toEqual({ type: "carry", shift: at(0, -6) }); // pause, then the dive: a fresh stroke arms at once
-    expect(tracker.release(520)).toEqual({ type: "slam", origin: at(0, -2) }); // from the shown seat
+    expect(tracker.release(520)).toEqual({ type: "slam" }); // from the shown seat
   });
 
   test("a two-finger-row drag is the threshold: a flick, not a carry", () => {
@@ -288,7 +351,7 @@ describe("gesture tracker", () => {
     const { tracker } = tracked();
     tracker.press(at(4, 5), 0);
     expect(tracker.move(at(4, 2), 90)).toEqual({ type: "carry", shift: at(0, -3) });
-    expect(tracker.release(110)).toEqual({ type: "slam", origin: at(0, 0) });
+    expect(tracker.release(110)).toEqual({ type: "slam" });
   });
 
   test("a fast drag just under the threshold is a settle, not a slam", () => {
@@ -327,10 +390,10 @@ describe("gesture tracker", () => {
     expect(tracker.move(at(6, 9), 40)).toEqual({ type: "carry", shift: at(2, 4) }); // positioning: up and sideways
     expect(tracker.move(at(7, 9), 60)).toEqual({ type: "carry", shift: at(3, 4) });
     // The pause, then the dive: the preview follows it, because it always
-    // does — and the origin remembers where the piece stood when it began.
+    // does — and the drop takes the seat the dive left the preview showing.
     expect(tracker.move(at(7, 1), 500)).toEqual({ type: "carry", shift: at(3, -4) }); // the dive arms at once
     expect(tracker.move(at(7, 0), 530)).toEqual({ type: "carry", shift: at(3, -5) }); // diving deeper
-    expect(tracker.release(550)).toEqual({ type: "slam", origin: at(3, 4) });
+    expect(tracker.release(550)).toEqual({ type: "slam" });
   });
 
   test("a dive out of a pause takes the PAUSE position, not the stroke's first stamp", () => {
@@ -350,7 +413,7 @@ describe("gesture tracker", () => {
     expect(tracker.move(at(5.4, 11.0), 900)).toEqual({ type: "carry", shift: at(1, 2) });
     expect(tracker.move(at(5.5, 9.0), 930)).toEqual({ type: "carry", shift: at(1, 0) }); // three past the rest: armed
     expect(tracker.move(at(5.6, 6.0), 960)).toEqual({ type: "carry", shift: at(1, -3) }); // deeper still
-    expect(tracker.release(980)).toEqual({ type: "slam", origin: at(1, 3) }); // the PAUSE seat
+    expect(tracker.release(980)).toEqual({ type: "slam" }); // the PAUSE seat
   });
 
   test("a held-still finger's sub-square jitter does not reset the pause clock", () => {
@@ -373,7 +436,7 @@ describe("gesture tracker", () => {
     // stroke — but 1110 past the last CHANGED move: real stillness, so
     // the stroke begins and its own dive covers the threshold.
     expect(tracker.move(at(5.4, 3.5), 1150)).toEqual({ type: "carry", shift: at(1, -1) });
-    expect(tracker.release(1180)).toEqual({ type: "slam", origin: at(1, 2) });
+    expect(tracker.release(1180)).toEqual({ type: "slam" });
   });
 
   test("a boundary flip moves the preview, so it restarts the pause", () => {
@@ -407,7 +470,7 @@ describe("gesture tracker", () => {
     expect(tracker.move(at(6.4, 7.9), 600)).toEqual({ type: "carry", shift: at(2, 2) }); // preview moves
     expect(tracker.move(at(6.4, 3.5), 900)).toEqual({ type: "carry", shift: at(2, -1) }); // dive, beat respected
     expect(tracker.move(at(6.4, 2.9), 930)).toEqual({ type: "carry", shift: at(2, -2) }); // past the rest: armed
-    expect(tracker.release(960)).toEqual({ type: "slam", origin: at(2, 2) }); // the post-flip seat
+    expect(tracker.release(960)).toEqual({ type: "slam" }); // the post-flip seat
   });
 
   test("a dive after a rise is carrying, not a second chance", () => {
@@ -429,7 +492,7 @@ describe("gesture tracker", () => {
     expect(tracker.move(at(4, 9), 40)).toEqual({ type: "carry", shift: at(0, 4) }); // up
     expect(tracker.move(at(4, 1), 500)).toEqual({ type: "carry", shift: at(0, -4) }); // pause, then the dive: armed at once
     expect(tracker.move(at(4, 0), 530)).toEqual({ type: "carry", shift: at(0, -5) }); // deeper: followed
-    expect(tracker.release(550)).toEqual({ type: "slam", origin: at(0, 4) });
+    expect(tracker.release(550)).toEqual({ type: "slam" });
   });
 
   test("a cancelled swipe is inert on the release the browser owes nothing", () => {
@@ -601,9 +664,6 @@ describe("the carry", () => {
    * lift this replaced moved the piece *away* from the finger, which bought
    * visibility by spending reach: rows 0–2 became unreachable by any gesture.
    */
-  /** A tracker over fractional samples, carrying at the touch factor. */
-  const carried = () => new PointerGestureTracker(undefined, 20, { schedule: () => 0, cancel: () => {} });
-
   test("the carry constant is the amplified feel, not a parity trap", () => {
     expect(TOUCH_CARRY).toBe(1.5);
   });
@@ -764,6 +824,8 @@ describe("the pointer adapter", () => {
       grabBase: () => calls.push("grab"),
       carryAt: (shift) => calls.push(`carry:${shift.column},${shift.row}`),
       settleAt: () => calls.push("settle"),
+      contactDown: () => {},
+      contactUp: () => {},
       slamDrop: () => calls.push("slam"),
       cancelCarry: () => calls.push("cancelCarry"),
       rotate: () => calls.push("rotate"),
@@ -803,6 +865,8 @@ describe("the pointer adapter", () => {
       grabBase: () => calls.push("grab"),
       carryAt: (shift) => calls.push(`carry:${shift.column},${shift.row}`),
       settleAt: () => calls.push("settle"),
+      contactDown: () => {},
+      contactUp: () => {},
       slamDrop: () => calls.push("slam"),
       cancelCarry: () => calls.push("cancelCarry"),
       rotate: () => calls.push("rotate"),
@@ -853,6 +917,8 @@ describe("the pointer adapter", () => {
       grabBase: () => calls.push("grab"),
       carryAt: () => calls.push("carry"),
       settleAt: () => calls.push("settle"),
+      contactDown: () => {},
+      contactUp: () => {},
       slamDrop: () => calls.push("slam"),
       cancelCarry: () => calls.push("cancelCarry"),
       rotate: () => calls.push("rotate"),
@@ -876,6 +942,8 @@ describe("the pointer adapter", () => {
       grabBase: () => calls.push("grab"),
       carryAt: (shift) => calls.push(`carry:${shift.column},${shift.row}`),
       settleAt: () => calls.push("settle"),
+      contactDown: () => {},
+      contactUp: () => {},
       slamDrop: () => calls.push("slam"),
       cancelCarry: () => calls.push("cancelCarry"),
       rotate: () => calls.push("rotate"),
@@ -904,6 +972,8 @@ describe("the pointer adapter", () => {
       grabBase: () => calls.push("grab"),
       carryAt: () => calls.push("carry"),
       settleAt: () => calls.push("settle"),
+      contactDown: () => {},
+      contactUp: () => {},
       slamDrop: () => calls.push("slam"),
       cancelCarry: () => calls.push("cancelCarry"),
       rotate: () => calls.push("rotate"),
@@ -933,6 +1003,8 @@ describe("the pointer adapter", () => {
       grabBase: () => calls.push("grab"),
       carryAt: () => calls.push("carry"),
       settleAt: () => calls.push("settle"),
+      contactDown: () => {},
+      contactUp: () => {},
       slamDrop: () => calls.push("slam"),
       cancelCarry: () => calls.push("cancelCarry"),
       rotate: () => calls.push("rotate"),
@@ -959,6 +1031,8 @@ describe("the pointer adapter", () => {
       grabBase: () => calls.push("grab"),
       carryAt: () => calls.push("carry"),
       settleAt: () => calls.push("settle"),
+      contactDown: () => {},
+      contactUp: () => {},
       slamDrop: () => calls.push("slam"),
       cancelCarry: () => calls.push("cancelCarry"),
       rotate: () => calls.push("rotate"),
@@ -988,6 +1062,8 @@ describe("the pointer adapter", () => {
       grabBase: () => calls.push("grab"),
       carryAt: () => calls.push("carry"),
       settleAt: () => calls.push("settle"),
+      contactDown: () => {},
+      contactUp: () => {},
       slamDrop: () => calls.push("slam"),
       cancelCarry: () => calls.push("cancelCarry"),
       rotate: () => calls.push("rotate"),
@@ -1014,6 +1090,8 @@ describe("the pointer adapter", () => {
       grabBase: () => calls.push("grab"),
       carryAt: (shift) => calls.push(`carry:${shift.column},${shift.row}`),
       settleAt: () => calls.push("settle"),
+      contactDown: () => {},
+      contactUp: () => {},
       slamDrop: () => calls.push("slam"),
       cancelCarry: () => calls.push("cancelCarry"),
       rotate: () => calls.push("rotate"),
@@ -1045,6 +1123,8 @@ describe("the pointer adapter", () => {
         grabBase: () => calls.push("grab"),
         carryAt: () => calls.push("carry"),
         settleAt: () => calls.push("settle"),
+      contactDown: () => {},
+      contactUp: () => {},
       slamDrop: () => calls.push("slam"),
         cancelCarry: () => calls.push("cancelCarry"),
         rotate: () => calls.push("rotate"),
@@ -1088,6 +1168,8 @@ describe("the pointer adapter", () => {
       grabBase: () => {},
       carryAt: () => {},
       settleAt: () => {},
+      contactDown: () => {},
+      contactUp: () => {},
       slamDrop: () => {},
       cancelCarry: () => {},
       rotate: () => {},
