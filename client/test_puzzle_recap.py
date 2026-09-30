@@ -238,6 +238,14 @@ class TheBotHonoursTheSwitch(unittest.TestCase):
     def test_that_place_is_inside_an_if(self):
         self.assertEqual(len(self._gates()), 1)
 
+    def test_that_if_is_a_statement_of_on_ready_itself(self):
+        # Anywhere else (a helper nothing calls, a dead branch) the gate would
+        # still evaluate right while the recap never started.
+        (on_ready,) = [n for n in ast.walk(self.TREE)
+                       if isinstance(n, ast.AsyncFunctionDef) and n.name == "on_ready"]
+        (gate,) = self._gates()
+        self.assertIn(gate, on_ready.body)
+
     def test_the_gate_starts_it_only_when_it_is_on(self):
         self.assertFalse(self._starts_it(enabled=False))
         self.assertTrue(self._starts_it(enabled=True))
