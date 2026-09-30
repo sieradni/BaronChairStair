@@ -854,11 +854,10 @@ not mean is one you can take back. Two things own that window. It is the time
 your hand spends **off** the piece: put a finger back down and the wait holds
 its seat without counting, and the last lift starts it over — a placement can
 never lock out from under the hand that was arranging it, and the gesture that
-follows is about the piece you were touching. And every other way of taking it
-back still works: rotating **turns the waiting seat where it sits** instead of
-throwing the arrangement away, undo withdraws the placement before it exists
-(the log gets nothing, and the previous placement is left alone), and
-anything else that moves the piece changes your mind for you. The rest counts
+follows is about the piece you were touching. And every key takes it
+back: the keyboard plays the physical piece, so a press during the wait
+cancels it — ring, seat and all — and acts on the piece itself, wherever it
+actually is. The rest counts
 on the clock like any other placement, so in a ranked rush or a duel a
 pointer player pays it and a keyboard hard-drop does not; a **flick** is how
 a pointer player skips it. A seat that does not fit **parks** exactly as shown
@@ -869,27 +868,28 @@ piece resets to falling.
 A fast, clean **swipe down** skips the rest: a stroke that dives — every
 movement deeper (a square's truncation wobble is noise, not steering), the
 whole swipe judged by its angle on the lift, about thirty degrees off vertical
-is a drop and a wider diagonal is steering — hard-drops **the seat the preview
-is showing** to rest and locks it at once. The seat on screen is what drops,
-never the seat the stroke began on: a downward drag through a tuck and a flick
-are the same motion, and the preview is the only thing that can say where the
-piece goes, so the drop follows it — mid-air seats included, descended the way
-a hard drop descends. The stroke may begin anywhere the finger has been still:
+is a drop and a wider diagonal is steering — hard-drops **the seat the stroke
+began on** to rest and locks it at once. The slam is one command, not a drag
+plus a drop: its target is fixed where the piece was shown when the dive
+started, and the preview following the finger afterwards does not move it.
+The stroke may begin anywhere the finger has been still:
 the drag's first movement, or a fresh descent after a beat of stillness — a
 short one, measured by the piece, so a resting finger's jitter that leaves the
 preview where it is counts as stillness and a move the player can see does
-not. The drop executes when the finger lifts, and the lift has to follow the
-dive: a finger still for longer than the swipe window is positioning again,
-and its release settles instead — the same seat either way, with the rest on
-top. A dive flowed straight out of positioning, with no pause, is only
-carrying. A dive that ends past the board's edge has no seat on screen and
-spends nothing.
+not. That beat ends a stroke as well as separating two: a finger that stops
+diving for longer than the beat has stopped swiping, whatever the stroke armed
+on the way down, and its release settles instead — the seated piece is where
+the player left it. A dive flowed straight out of positioning, with no pause,
+is only carrying. A stroke that began past the board's edge still drops: its
+seat is clamped whole — the piece is one shape, never column by column — back
+onto the board at the edge the dive pointed down toward, and descended to rest
+from there; a stroke with no column on the board at all spends nothing.
 
-A keyboard reaches the same seats. A hard drop during the wait commits the
-seat on screen, exactly as a flick does, instead of the landing spot of the
-piece underneath it — a piece the arrangement is standing in for, and one
-nowhere near the seat being arranged. A rotate key turns that waiting seat
-where it sits, as the tap does. Tap to rotate and press-and-hold keep their
+A keyboard reaches the same seats, and it never plays the arrangement: a
+hard drop during the wait cancels it and hard-drops the physical piece from
+where it actually is — spawn, usually — and a rotate key turns that piece
+there. The player with hands on the keys is looking at the piece, so the keys
+act on the piece. Tap to rotate and press-and-hold keep their
 meaning: only a drag carries. A mouse gets every gesture a finger does — the slam, the rest and the
 shadow-anchored grab included — carrying 1:1 where a touch carries at the
 amplified rate above; a touch-capable laptop is a mouse for these purposes.

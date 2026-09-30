@@ -71,7 +71,7 @@ function wired(puzzle: PuzzlePrompt) {
     grabBase: () => run.grabBase(),
     carryAt: (shift) => run.carryAt(shift),
     settleAt: () => run.settleAt(),
-    slamDrop: () => run.slamDrop(),
+    slamDrop: (origin) => run.slamDrop(origin),
     cancelCarry: () => run.cancelCarry(),
     rotate: () => run.tap("rotateCW"),
     hold: () => run.tap("hold"),
@@ -91,7 +91,7 @@ function wired(puzzle: PuzzlePrompt) {
         board.settleAt();
         break;
       case "slam":
-        board.slamDrop();
+        board.slamDrop(gesture.origin);
         break;
       case "cancel":
         board.cancelCarry();
@@ -177,19 +177,18 @@ describe("the gestures, wired to the run", () => {
     run.dispose();
   });
 
-  test("a fast flick locks the same tuck at once, with no wait", () => {
-    // The same drag, lifted the moment the dive ends: the slam commits the seat
-    // on screen in the same instant. Whatever the speed, the seat is the one the
-    // player was looking at — not the seat the stroke began on.
+  test("a fast flick hard-drops the seat the stroke began on, with no wait", () => {
+    // The same drag, flicked the moment the dive ends: the slam is ONE command
+    // whose target is the seat the piece was shown at when the stroke began —
+    // here the spawn seat, shifted nowhere. The command hard-drops it to rest
+    // and skips the rest gate entirely.
     const { run, down, move, up } = wired(TUCK);
     const before = run.view().cells;
     down(4, 10, 0);
     move(4, 7.9, 375);
-    const shown = seat(run.view().aim!.cells);
     up(400);
     expect(run.snapshot().piecesPlaced).toBe(1); // no rest, no gate
-    expect(added(run, before)).toEqual(shown);
-    expect(shown).toEqual(["4,0", "4,1", "5,0", "5,1"]);
+    expect(added(run, before)).toEqual(["4,3", "4,4", "5,3", "5,4"]); // the stroke seat, hard-dropped to the overhang
     run.dispose();
   });
 
@@ -237,66 +236,63 @@ describe("the gestures, wired to the run", () => {
     run.dispose();
   });
 
-  test("a hard drop during the wait commits the seat the ring is promising", () => {
-    // The desktop player's move: release, then press space to skip the ring. The
-    // physical piece is hidden under the arrangement, so the key used to lock
-    // the piece's own spawn seat — a seat nothing on screen described.
+  test("a hard drop during the wait cancels it and drops the physical piece", () => {
+    // The keyboard plays the PHYSICAL piece: a key cancels every virtual
+    // position — the waiting seat included — and acts on the piece itself.
+    // The O here was never carried, so its physical seat is spawn; hard
+    // drop drops it from spawn, not the seat the ring was promising.
     const { run, down, move, up } = wired(TUCK);
     const before = run.view().cells;
     down(4, 10, 0);
     move(4, 7.9, 40);
     up(600); // the finger rests past the dive's own window, so the seat settles
-    const promised = seat(run.view().aim!.cells);
+    expect(seat(run.view().aim!.cells)).toEqual(["4,0", "4,1", "5,0", "5,1"]); // the tuck, waiting
     expect(run.view().aim?.progress).toBeDefined(); // the ring is filling
     run.input("hardDrop", true);
     run.input("hardDrop", false);
-    expect(run.snapshot().piecesPlaced).toBe(1);
-    expect(added(run, before)).toEqual(promised);
-    expect(promised).toEqual(["4,0", "4,1", "5,0", "5,1"]);
+    pumpUntil(() => run.snapshot().piecesPlaced === 1);
+    expect(added(run, before)).toEqual(["4,3", "4,4", "5,3", "5,4"]); // spawn, dropped from spawn
     run.dispose();
   });
 
-  test("a rotation during the wait turns the seat in place instead of taking it away", () => {
-    // A key on a waiting placement: the seat the player arranged turns where it
-    // sits — the README's own promise — rather than snapping back to the hidden
-    // physical piece and leaving the arrangement to be rediscovered.
+  test("a rotation during the wait cancels it and turns the physical piece", () => {
+    // The keyboard plays the physical piece: the key takes the waiting seat
+    // away and turns the falling piece itself — the O, whose rotations are
+    // all the same cells, so its shadow keeps spawn's shape while the wait
+    // dies. The wait is gone, so nothing commits when the ring would have
+    // filled.
     const { run, down, move, up } = wired(OPEN);
     down(4, 10, 0);
     move(5.4, 10, 40);
     up(60);
-    const waiting = seat(run.view().aim!.cells);
+    expect(run.view().aim?.progress).toBeDefined(); // the ring was filling
     run.input("rotateCW", true);
     run.input("rotateCW", false);
-    const turned = seat(run.view().aim!.cells);
-    expect(turned.length).toBe(4);
-    expect(turned).not.toEqual(waiting);
-    expect(Math.min(...run.view().aim!.cells.map(([, y]) => y))).toBe(0); // same corner
+    expect(run.view().aim).toBeNull(); // the virtual seat is gone
     expect(run.snapshot().piecesPlaced).toBe(0);
     pump(60);
     expect(run.snapshot().piecesPlaced).toBe(0); // the cancelled wait stays cancelled
     run.dispose();
   });
 
-  test("undo during the wait withdraws the promise and nothing else", () => {
-    // The waiting piece looks placed — solid outline, a ring filling — but it is
-    // not in the log. Undo used to cut back to the PREVIOUS placement and throw
-    // the waiting seat away with it; on the first piece it refused outright, and
-    // the piece committed anyway.
+  test("undo during the wait takes back the previous placement, as undo does", () => {
+    // Undo is a take-back of placements, and a placement waiting out its
+    // rest is not one yet: the gate dies with the undo (a key is a key),
+    // and the undo itself cuts the last real boundary — on the first
+    // piece there is nothing to take, and the refusal is honest.
     const first = wired(OPEN);
     first.down(4, 10, 0);
     first.move(5.4, 10, 40);
     first.up(60); // the first piece waits out its rest
-    const log = first.run.log().length;
-    expect(first.run.undo()).toBe(true);
+    expect(first.run.undo()).toBe(false); // no placement behind it to take
     expect(first.run.snapshot().piecesPlaced).toBe(0);
-    expect(first.run.view().aim).toBeNull(); // the arrangement is withdrawn with it
-    expect(first.run.log().length).toBe(log); // and nothing was cut from the log
-    expect(first.run.redo()).toBe(false);
     pump(60);
-    expect(first.run.snapshot().piecesPlaced).toBe(0); // it does not commit afterwards
+    expect(first.run.snapshot().piecesPlaced).toBe(0); // the dead gate commits nothing
     first.run.dispose();
 
-    // With a placement behind it, undo still takes back only the promise.
+    // With a placement behind it, undo takes that placement back — the
+    // waiting seat's gate dies with the key, and the seat itself is not
+    // spent, so only the first placement is ever cut from the log.
     const second = wired(OPEN);
     second.down(4, 10, 0);
     second.move(5.4, 10, 40);
@@ -305,10 +301,8 @@ describe("the gestures, wired to the run", () => {
     second.down(2, 10, 2000);
     second.move(3.4, 10, 2040);
     second.up(2060); // the second piece waits
-    const beforeUndo = second.run.log().length;
     expect(second.run.undo()).toBe(true);
-    expect(second.run.snapshot().piecesPlaced).toBe(1); // the first placement stands
-    expect(second.run.log().length).toBe(beforeUndo);
+    expect(second.run.snapshot().piecesPlaced).toBe(0); // the first placement came back
     second.run.dispose();
   });
 

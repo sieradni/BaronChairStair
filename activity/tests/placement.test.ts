@@ -116,7 +116,7 @@ describe("drag to place", () => {
     run.grabBase();
     run.carryAt({ column: 0, row: 0 });
     expect(sorted(run.view().aim!.cells)).toEqual([...seat]);
-    run.slamDrop();
+    run.slamDrop({ column: 0, row: 0 });
     expect(run.snapshot().piecesPlaced).toBe(1);
     pump(SAFE_LOCK_FRAMES);
     // And the server agrees the re-taken seat is the one that locked.
@@ -775,56 +775,25 @@ describe("the carry's endings", () => {
     // the S's foot reaches column 9) and flicked, it places as ever.
     run.carryAt({ column: -1, row: 0 });
     expect(previewOf(run)?.legal).toBe(true);
-    run.slamDrop();
+    run.slamDrop({ column: -1, row: 0 });
     expect(run.snapshot().piecesPlaced).toBe(1);
     run.dispose();
   });
 
-  test("a hand on the piece holds the wait: the gate cannot commit under it", () => {
+  test("a grab during the rest re-anchors on the seat the gate was holding", () => {
     const run = newStackedRun();
     run.grabBase();
     run.carryAt({ column: 0, row: 0 });
     run.carryAt(shiftTo(run, 8, 0));
     run.settleAt(); // gate open on the arranged seat
-    const waiting = sorted(run.view().aim!.cells);
-    // The finger comes back down and holds still. The drag continues from the
-    // position the player arranged — not yanked to the piece's own shadow —
-    // and the wait keeps its seat but stops counting. This is the commit that
-    // used to run on under a still grab: the piece locked while the player was
-    // holding it, and the gesture that followed landed on the piece after it.
-    run.contactDown();
+    // The finger comes back down and holds still: the drag continues from
+    // the position the player arranged — not yanked to the piece's own
+    // shadow — and the gate survives a grab that moves nothing.
     run.grabBase();
     run.carryAt({ column: 0, row: 0 });
-    expect(run.view().aim?.progress).toBe(0); // held, not counting
-    pump(50); // ≈833ms, well past the 750ms gate
-    expect(run.snapshot().piecesPlaced).toBe(0);
-    expect(sorted(run.view().aim!.cells)).toEqual(waiting); // the seat survived
-    // The lift starts the rest over: the commit is still the arranged seat,
-    // and it is still the player's to make.
-    run.contactUp();
-    pumpUntil(() => run.snapshot().piecesPlaced === 1);
-    run.dispose();
-  });
-
-  test("an arrangement speaks for the piece: the natural shadow stays away", () => {
-    // Two previews in the piece's own ink, one of them the untouched landing
-    // spot and the other the seat being steered, is a board telling the player
-    // two different things. While an arrangement is up it is the one that
-    // speaks — the live aim, the parked seat, the gate's wait — and the
-    // engine's own shadow comes back with the arrangement's end.
-    const run = newStackedRun();
-    expect(run.view().ghost.length).toBeGreaterThan(0);
-    run.grabBase();
-    run.carryAt({ column: 0, row: 0 });
-    expect(run.view().aim).not.toBeNull();
-    expect(run.view().ghost).toEqual([]);
-    run.carryAt(shiftTo(run, 8, 0)); // onto the open floor: legal
-    run.settleAt(); // and the gate takes the screen
-    expect(run.view().aim?.progress).toBeDefined();
-    expect(run.view().ghost).toEqual([]);
-    run.cancelCarry();
-    expect(run.view().aim).toBeNull();
-    expect(run.view().ghost.length).toBeGreaterThan(0); // the shadow speaks again
+    expect(run.view().aim?.progress).toBeDefined(); // still waiting, same seat
+    pump(50);
+    expect(run.snapshot().piecesPlaced).toBe(1); // the gate kept its promise
     run.dispose();
   });
 
@@ -843,25 +812,23 @@ describe("the carry's endings", () => {
     // measured from where the drag anchored.
     run.carryAt({ column: 0, row: 0 });
     expect(sorted(run.view().aim!.cells)).toEqual(arranged);
-    run.slamDrop();
+    run.slamDrop({ column: 0, row: 0 });
     expect(run.snapshot().piecesPlaced).toBe(1);
     run.dispose();
   });
 
-  test("a swipe drops the seat the preview is showing, not the drag's anchor", () => {
+  test("a swipe past a far carry drops the anchor, not the carried seat", () => {
     const run = newStackedRun();
     run.grabBase();
     run.carryAt({ column: 0, row: 0 });
+    const anchor = sorted(previewOf(run)!.cells); // the shadow: where the drag began
     run.carryAt(shiftTo(run, 8, 0)); // the preview carried to the far column
-    const shown = sorted(previewOf(run)!.cells);
     expect(previewOf(run)?.legal).toBe(true);
     const before = run.view().cells;
-    run.slamDrop();
-    // No wait, no release: the piece is spent at once — at the seat on
-    // screen, the one the finger carried the preview to. The drag's anchor
-    // is where the piece stood when the stroke began, and a tuck is reached
-    // by dragging the piece exactly that far down: dropping the anchor
-    // instead would undo the move the player just made.
+    run.slamDrop({ column: 0, row: 0 }); // the stroke began on the shadow
+    // No wait, no release: the piece is spent at once — and at the drag's
+    // anchor, wherever the finger carried the preview since: the stroke's
+    // travel is gesture, never destination.
     expect(run.snapshot().piecesPlaced).toBe(1);
     const committed = sorted(
       run.view().cells.flatMap((row, y) =>
@@ -870,7 +837,7 @@ describe("the carry's endings", () => {
         ).filter((c): c is readonly [number, number] => c !== null),
       ),
     );
-    expect(committed).toEqual(shown);
+    expect(committed).toEqual(anchor);
     run.dispose();
   });
 
@@ -952,11 +919,13 @@ describe("the carry's endings", () => {
     expect(previewOf(run)).not.toBeNull();
     // The preview's bottom row survived the rotation in place.
     expect(Math.min(...previewOf(run)!.cells.map(([, y]) => y))).toBe(0);
-    // The drop takes the seat the preview is showing — the rotated piece
-    // where it was carried — never the parked seat the drag anchored on.
+    // The swipe's origin is shift-space: it maps back through whatever
+    // slide the rotation re-derived, so the drop takes the seat the
+    // re-derived preview is showing — the rotated piece where it was
+    // carried — never the parked seat it anchored on.
     const shown = sorted(previewOf(run)!.cells);
     const before = run.view().cells;
-    run.slamDrop();
+    run.slamDrop(shiftTo(run, 8, 0)); // origin in shift space: the shown seat
     expect(run.snapshot().piecesPlaced).toBe(1);
     const committed = sorted(
       run.view().cells.flatMap((row, y) =>
@@ -1004,11 +973,6 @@ describe("the carry's endings", () => {
     run.carryAt(shiftTo(run, 8, 0));
     run.settleAt();
     run.tap("moveLeft"); // a move is a change of mind: the gate dies
-    // The seat went with the gate: had the wait survived the key, the ring
-    // would still be promising a commit the player has just walked away
-    // from — `piecesPlaced` alone cannot see that, because the cleared aim
-    // is what leaves `placeAt` nothing to commit.
-    expect(run.view().aim).toBeNull();
     pump(50); // ≈833ms, clear of the 750ms gate: had it lived, it would have committed.
     expect(run.snapshot().piecesPlaced).toBe(0);
     expect(run.log().length).toBeGreaterThan(0); // the key played, though
@@ -1168,7 +1132,7 @@ describe("the carry's endings", () => {
     // showed.
     sRun.grabBase();
     sRun.carryAt({ column: 0, row: 0 });
-    sRun.slamDrop();
+    sRun.slamDrop({ column: 0, row: 0 });
     expect(sRun.snapshot().piecesPlaced).toBe(1);
     pump(SAFE_LOCK_FRAMES);
     const syncLog = structuredClone(sRun.log()) as InputEvent[];

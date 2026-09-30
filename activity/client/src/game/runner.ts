@@ -504,24 +504,20 @@ export class PuzzleRun {
    * false when there is nothing to take.
    */
   undo(): boolean {
-    // A placement waiting out its rest is not in the log yet — the piece looks
-    // placed, and the ring says as much, but it is only a promise. Undo is the
-    // player withdrawing it, so the gate is cancelled and NOTHING else
-    // happens: no boundary is cut, because the commit it would cut to never
-    // happened. Taking the last real boundary instead would take back the
-    // PREVIOUS placement and throw the waiting seat away with it, and on the
-    // first piece there is no boundary at all — so undo reported nothing to do
-    // and the piece committed anyway.
-    if (this.restGate) {
-      this.restGate = null;
-      this.restRing = null;
-      this.aim = null;
-      this.parked = null;
-      this.endCarry();
-      this.renderOnce();
-      return true;
+    // A refusal is still a key: the keyboard plays the physical piece, so
+    // even when there is no placement to take back, a waiting seat dies
+    // with the press — the same invalidation any key performs. Nothing is
+    // cut from the log, because nothing was ever taken.
+    if (!this.canUndo) {
+      if (this.restGate) {
+        this.restGate = null;
+        this.restRing = null;
+        this.aim = null;
+        this.endCarry();
+        this.renderOnce();
+      }
+      return false;
     }
-    if (!this.canUndo) return false;
     this.parked = null;
     this.restGate = null;
     this.restRing = null;
@@ -760,54 +756,23 @@ export class PuzzleRun {
     if (down === this.held.has(key)) return;
     if (down) this.held.add(key);
     else this.held.delete(key);
-    // A hard drop while a seat is arranged — a live drag's preview, or the seat
-    // a rest gate is holding — commits THAT seat, now. What the player is
-    // looking at is the arrangement; the physical piece is hidden under it and
-    // may be nowhere near it, so "drop" has to mean the piece on screen rather
-    // than a shadow nobody was shown. The key itself is never recorded: the
-    // placement's own route is what the log gets, exactly as a flick's commit
-    // would put there.
-    if (
-      key === "hardDrop" &&
-      down &&
-      this.aim &&
-      (this.phase === "ready" || this.phase === "playing")
-    ) {
-      const cells = this.aim.cells;
-      this.restGate = null;
-      this.restRing = null;
-      this.parked = null;
-      this.endCarry();
-      this.aim = { cells, legal: true };
-      if (this.placeAt()) return;
-    }
-    // A rotate key is not a change of mind about the seat: the piece the player
-    // is looking at is the arrangement, so turning it turns it where it sits —
-    // the in-place turn a pointer tap makes — instead of throwing the seat away
-    // and turning a piece that was hidden underneath. Read before the
-    // invalidation below, which nulls all of it.
-    const seat = ROTATIONS.has(key) && down && !this.seatByHand ? this.arrangedSeat() : null;
-    const hadCarry = this.carryBase !== null;
-    if (ROTATIONS.has(key)) {
-      // A rotation is edge-triggered and moves nothing: the arrangement stands
-      // — turned in place by {@link turnSeat} — and the drag's anchor rides
-      // along, so a keyboard rotation is the same gesture a pointer tap makes.
-      // Only the wait a gate was holding dies with the key, as any key does,
-      // and the plan walked from the piece's old orientation goes with it.
-      this.restGate = null;
-      this.planner = null;
-    } else {
-      // The piece is about to move under keys, so any drag target computed for
-      // the piece as it stood is a lie about a piece that no longer exists. The
-      // planner goes with it: it walked the board from a starting square that
-      // is being abandoned. A drag still in progress re-aims on its next move.
-      this.aim = null;
-      this.parked = null;
-      this.endCarry();
-      this.restGate = null;
-      this.planner = null;
-    }
-    if (seat) this.turnSeat(seat, key, hadCarry);
+    // The piece is about to move under keys, so any drag target computed for
+    // the piece as it stood is a lie about a piece that no longer exists. The
+    // planner goes with it: it walked the board from a starting square that
+    // is being abandoned. A drag still in progress re-aims on its next move.
+    // The keyboard plays the PHYSICAL piece, and this is the whole contract:
+    // a key cancels every virtual position — the drag's preview, the seat a
+    // rest gate is holding, a parked seat — and acts on the piece itself,
+    // wherever it actually is. A hard drop during the wait hard-drops the
+    // falling piece from spawn; a rotation turns it there. The player is
+    // looking at the piece when their hands are on the keys, so the keys
+    // are never allowed to act on a seat they are not looking at.
+    this.aim = null;
+    this.parked = null;
+    this.endCarry();
+    this.restGate = null;
+    this.restRing = null;
+    this.planner = null;
 
     if (this.phase === "ready") this.begin();
     // The log is what gets scored, so once it is full the attempt is over —
@@ -899,56 +864,6 @@ export class PuzzleRun {
     if (this.contactsDown === 0 && this.restGate) {
       this.restGate = { cells: this.restGate.cells, restFor: performance.now() };
     }
-  }
-
-  /** The seat on screen being arranged, if any — what a rotate key turns. */
-  private arrangedSeat(): TargetCells | null {
-    return this.aim?.cells ?? this.parked?.cells ?? null;
-  }
-
-  /**
-   * Turns the seat being arranged where it sits.
-   *
-   * A rotate key reaches the run as a key, but the piece the player is looking
-   * at is the arrangement — the drag's preview, or the seat a rest gate is
-   * holding — so the quarter-turn is applied to THAT: one clockwise turn of its
-   * own cells, re-cornered onto the corner the seat was showing, nudged back
-   * inside the walls the way SRS kicks the piece itself. The physical piece
-   * turns too (the key is recorded like any other), and the two are kept in
-   * step: a live drag's anchor is re-based onto the turned seat so the finger's
-   * next move continues from where the preview now is.
-   *
-   * The wait a gate was holding is gone by the time this runs — a key is a key
-   * — but the seat it held stays on screen, turned, instead of snapping back to
-   * a piece the player was never shown.
-   */
-  private turnSeat(seat: TargetCells, key: GameKey, hadCarry: boolean): void {
-    const quarterTurns = key === "rotate180" ? 2 : key === "rotateCCW" ? 3 : 1;
-    const corner = {
-      column: Math.min(...seat.map(([x]) => x)),
-      row: Math.min(...seat.map(([, y]) => y)),
-    };
-    let cells: (readonly [number, number])[] = seat.map(([x, y]) => [x, y] as const);
-    for (let turn = 0; turn < quarterTurns; turn++) cells = spinCW(cells);
-    const dx = corner.column - Math.min(...cells.map(([x]) => x));
-    const dy = corner.row - Math.min(...cells.map(([, y]) => y));
-    cells = cells.map(([x, y]) => [x + dx, y + dy] as const);
-    const outRight = Math.max(...cells.map(([x]) => x)) - (BOARD_WIDTH - 1);
-    const outLeft = -Math.min(...cells.map(([x]) => x));
-    const sideways = outRight > 0 ? -outRight : outLeft > 0 ? outLeft : 0;
-    if (sideways !== 0) cells = cells.map(([x, y]) => [x + sideways, y] as const);
-    const target = cells as TargetCells;
-    if (hadCarry) {
-      this.carryBase = { cells: target };
-      this.carryDrop = this.carryShift.row;
-      this.carrySlide = -this.carryShift.column;
-      this.carryAt({ ...this.carryShift });
-      return;
-    }
-    this.parked = null;
-    if (this.searchPlacement(target) !== null) this.aim = { cells: target, legal: true };
-    else this.parked = { cells: target };
-    this.renderOnce();
   }
 
   /**
@@ -1368,61 +1283,88 @@ export class PuzzleRun {
   }
 
   /**
-   * A clean downward flick: hard-drop the seat on screen, and commit it now.
+   * A clean downward flick: hard-drop the seat the stroke began on.
    *
-   * The drop takes the seat the PREVIEW is showing — the one the player is
-   * looking at — never the seat the stroke began on. A downward drag and a
-   * flick are the same motion, and no gesture can tell them apart by where
-   * they started: the drag that positions a piece into a tuck is exactly the
-   * drag that would slam it back out again. The preview is the only thing that
-   * can say where the piece goes, so the preview is what drops.
+   * The slam is ONE input command, not a drag plus a drop: its target is the
+   * seat the piece was shown at when the stroke began — the same motion the
+   * player made, descended to rest — never a seat the finger drifted to
+   * afterwards. The origin arrives in the drag's own shift space and is
+   * mapped through the anchor as it stands: mid-stroke taps re-derive the
+   * carry without moving the shown seat, and the mapping rides along — the
+   * drop takes the shown seat in whatever orientation it is shown.
    *
    * The seat is descended the way the keyboard's hard drop descends a piece —
-   * one row at a time, while the piece fits where it is and the row below is
-   * free — and then committed through the same plan-and-lock path a release
-   * uses, without waiting out the rest. A seat already inside the stack is not
-   * a seat anything can be dropped from, so it spends nothing; a seat dragged
-   * off the board has no preview at all and spends nothing either. A rest gate
-   * the flick answers goes with the carry: this commit IS that commit, made
+   * one row at a time, while the row below is free — and then committed
+   * through the same plan-and-lock path a release uses, without waiting out
+   * the rest. A dive that began past an edge still takes: the stroke's
+   * columns name the floor seats they point at, so the piece is seated at
+   * the stroke's top row on those columns' terrain and descended from
+   * there. A seat buried inside the stack has nothing to descend and stands
+   * as a park — the arrangement is the player's, nothing spent. A rest gate
+   * the slam answers goes with the carry: this commit IS that commit, made
    * now rather than waited out.
    */
-  slamDrop(): void {
+  slamDrop(origin: BoardSpot): void {
     if (this.phase !== "ready" && this.phase !== "playing") return;
-    const aim = this.aim;
+    // Without a live drag there is nothing to slam — an invalidated drag
+    // commits nothing.
+    if (!this.carryBase) {
+      this.renderOnce();
+      return;
+    }
+    // Read before the teardown below: it nulls the carry this reads.
+    const base = this.carryBase;
+    const slide = this.carrySlide;
+    const drop = this.carryDrop;
     this.endCarry();
     this.parked = null;
     this.restGate = null;
     this.restRing = null;
     this.aim = null;
-    // No live drag, or one whose carry ended off the board: there is no seat on
-    // screen, and a drop is never allowed to guess at one.
-    if (!aim) {
-      this.renderOnce();
-      return;
-    }
-    let cells = aim.cells;
-    while (
-      this.fallingFitsAt(cells) &&
-      this.fallingFitsAt(cells.map(([x, y]) => [x, y - 1] as const))
-    ) {
+    let cells = base.cells.map(
+      ([x, y]) => [x + origin.column + slide, y + origin.row - drop] as const,
+    );
+    // Descend the stroke's seat until it rests: the hard drop the swipe
+    // promised, made good. A seat buried in the stack has nothing to
+    // descend, so the loop leaves it as it is.
+    while (this.fallingFitsAt(cells.map(([x, y]) => [x, y - 1] as const))) {
       cells = cells.map(([x, y]) => [x, y - 1] as const);
     }
-    // Embedded in the stack: nothing was ever droppable from here. The seat
-    // stands as the park a release there would have left — nothing was spent,
-    // and the arrangement is still the player's.
+    // The drop ALWAYS takes the stroke that was properly executed — even a
+    // clean dive that began past an edge, where no seat to descend exists.
+    // The stroke's shape is clamped whole back onto the board — the piece
+    // is the shape the player dove with, so the clamp slides it as one by
+    // the least translation that fits it, never one column at a time —
+    // and then descends to rest on the terrain under its columns. A seat
+    // buried inside the stack has nothing to descend and no edge to clamp
+    // to; the swipe spends nothing.
     if (!this.fallingFitsAt(cells)) {
-      this.parked = { cells: aim.cells };
+      const left = Math.min(...cells.map(([x]) => x));
+      const right = Math.max(...cells.map(([x]) => x));
+      const clampX =
+        left < 0 && right < BOARD_WIDTH
+          ? -left
+          : right >= BOARD_WIDTH && left >= 0
+            ? BOARD_WIDTH - 1 - right
+            : 0;
+      if (clampX !== 0) {
+        cells = cells.map(([x, y]) => [x + clampX, y] as const);
+        // The clamped seat may now have terrain beneath it; descend again.
+        while (this.fallingFitsAt(cells.map(([x, y]) => [x, y - 1] as const))) {
+          cells = cells.map(([x, y]) => [x, y - 1] as const);
+        }
+      }
+    }
+    // `placeAt` re-searches the route against the real piece and validates
+    // the seat itself; the synthetic aim only carries the target. It runs
+    // only when the seat still fits — a stroke that pointed off the board
+    // entirely has no column to clamp to, and the swipe spends nothing.
+    if (!this.fallingFitsAt(cells)) {
       this.renderOnce();
       return;
     }
     this.aim = { cells: cells as TargetCells, legal: true };
-    if (this.placeAt()) return;
-    // The descended seat was not reachable after all. Nothing is spent, and
-    // the seat the player arranged is theirs to correct — parked, dashed.
-    if (this.phase === "ready" || this.phase === "playing") {
-      this.parked = { cells: aim.cells };
-    }
-    this.renderOnce();
+    if (!this.placeAt()) this.renderOnce();
   }
 
   /**

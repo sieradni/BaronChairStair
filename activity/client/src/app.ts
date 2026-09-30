@@ -386,7 +386,7 @@ export class App {
         grabBase: () => this.activeRun?.grabBase(),
         carryAt: (shift) => this.activeRun?.carryAt(shift),
         settleAt: () => this.activeRun?.settleAt(),
-        slamDrop: () => this.activeRun?.slamDrop(),
+        slamDrop: (origin) => this.activeRun?.slamDrop(origin),
         cancelCarry: () => this.activeRun?.cancelCarry(),
         // The run counts the fingers on the piece: a placement waiting out
         // its rest cannot commit under one of them.
