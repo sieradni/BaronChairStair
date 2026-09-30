@@ -41,7 +41,6 @@ for as long as you leave it there — and undo and redo are always one key away.
 | `/highlights` | Attach a `.ttrm` replay — get each player's biggest attack bursts as boards |
 | `/report` | File a bug or a suggestion. No GitHub account needed |
 | `/activity graph`<br>`/activity now` | Who is online, right now or across the last week |
-| `/internships …` | The club's internship tracker: recent postings, salaries, a ping list |
 | `/archive sync` | **Officers only.** Pull the club's spreadsheet in, and make its new puzzles playable |
 
 The bot can also reply to each day's announcement with how the server did — who
@@ -98,14 +97,13 @@ flowchart LR
 
 It began as a bridge that let Python drive the `@haelp/teto` engine to pull
 highlights out of a replay. That bridge is still here and still does that job —
-it is simply one part of four now:
+it is simply one part of three now:
 
 | Part | Lives in | What it is |
 | :-- | :-- | :-- |
-| **The bot** | `client/` | Slash commands: the daily puzzle, replay highlights, activity graphs, an internship tracker |
+| **The bot** | `client/` | Slash commands: the daily puzzle, replay highlights and activity graphs |
 | **The activity** | `activity/` | The game itself, served as a Discord Activity. [Its own README](activity/README.md) |
 | **The engine bridge** | `server/` | A Bun process wrapping the TETR.IO engine, spoken to over NDJSON from Python |
-| **The internship tracker** | `internship_poller.py` | Nothing to do with Tetris; it lives here because the bot fronts it |
 
 The bot owns none of the game. It reads the activity's server and formats what
 comes back, so the two cannot disagree about a score.
@@ -150,9 +148,6 @@ BaronChairStair/
 None of these are needed to run the bot.
 
 ```bash
-python internship_poller.py sweep      # store and print what is new
-python internship_poller.py watch      # every 15 minutes until Ctrl-C
-python resolve_boards.py <careers-url> # careers page → a pollable job board
 python sync_guilds.py SERVER_ID        # push slash commands into one guild, instantly
 python check_dupes.py                  # find commands registered twice
 ```
@@ -186,7 +181,6 @@ inline. The ones that matter:
   on either side, and a mismatch is a silent 401.
 - **`PUZZLE_RECAP`** — `on` turns on the daily recap. Off by default, because it
   pings every player it names.
-- **`GEMINI_API_KEY`** — only for `internship_poller.py --llm`.
 
 Who may run `/archive sync` is a file, not a variable: `puzzle-admins.json`,
 gitignored, copied from `puzzle-admins.example.json`.

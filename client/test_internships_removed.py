@@ -124,5 +124,19 @@ class TheirCommandsAreGone(unittest.TestCase):
                     self.assertNotIn(command, self._names_bound(tree))
 
 
+class ExampleEnvOffersNoGeminiKey(unittest.TestCase):
+    """
+    example.env is the list an operator copies to make .env, so a key in it is
+    a request to go and get one. Commented-out keys count: `#GEMINI_MODEL=` is
+    still an invitation to uncomment it.
+    """
+
+    KEY = re.compile(r"^\s*#?\s*(GEMINI_\w*)\s*=", re.MULTILINE)
+
+    def test_no_gemini_key_is_listed(self):
+        text = (ROOT / "example.env").read_text(encoding="utf-8")
+        self.assertEqual(self.KEY.findall(text), [])
+
+
 if __name__ == "__main__":
     unittest.main()

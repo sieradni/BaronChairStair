@@ -47,7 +47,7 @@ with an ordering rule inside it, and it is the half worth having your full atten
 with a message naming the version it found. Its dependencies are `discord.py`,
 `aiohttp`, `python-dotenv` and `matplotlib`.
 
-`matplotlib` is not optional and is easy to miss: `discord_bot.py:114` imports
+`matplotlib` is not optional and is easy to miss: `discord_bot.py:95` imports
 `presence_tracker`, which imports it at module scope, so the bot does not start
 without it — it is not only needed by the graph command that uses it.
 
@@ -135,7 +135,7 @@ that and abuse:
 That layer has tests, and they need no install:
 
 ```sh
-python3 -m unittest discover -s client     # 72 pass
+python3 -m unittest discover -s client     # 163 run, 0 fail; bare python3 skips 3
 ```
 
 ### Restarting, and making a new command appear
