@@ -31,8 +31,8 @@ const PUZZLE: PuzzlePrompt = {
   targetAttack: 4,
 };
 
-function newRun(): PuzzleRun {
-  return new PuzzleRun(PUZZLE, DEFAULT_HANDLING, {
+function newRun(prompt: PuzzlePrompt = PUZZLE): PuzzleRun {
+  return new PuzzleRun(prompt, DEFAULT_HANDLING, {
     onFrame: () => {},
     onFinish: () => {},
     onLock: () => {},
@@ -114,6 +114,61 @@ describe("the slam", () => {
       ),
     );
     expect(added).toEqual(shown);
+    run.dispose();
+  });
+
+  test("a stroke that began past the wall lands on top of it", () => {
+    // The owner's ruling: the slam is one command, and it executes even
+    // when its stroke seat sits past an edge - the seat is clamped whole
+    // (never column by column) onto the board at the edge the dive
+    // pointed down toward, risen clear of the terrain there, and dropped
+    // to rest. A wall at column 9, six rows tall; the stroke began with
+    // the O at columns 10-11, two rows above the floor.
+    const WALL: PuzzlePrompt = {
+      ...PUZZLE,
+      board: [".........G", ".........G", ".........G", ".........G", ".........G", ".........G"],
+      queue: ["O"],
+    };
+    const run = newRun(WALL);
+    const before = run.view().cells;
+    run.grabBase();
+    run.slamDrop({ column: 6, row: 2 });
+    expect(run.snapshot().piecesPlaced).toBe(1);
+    const added = sorted(
+      run.view().cells.flatMap((row, y) =>
+        row.map((cell, x) =>
+          cell && !before[y]?.[x] ? ([x, y] as const) : null,
+        ).filter((c): c is readonly [number, number] => c !== null),
+      ),
+    );
+    expect(added).toEqual([
+      [8, 6], [8, 7], [9, 6], [9, 7],
+    ]); // on top of the wall, at its edge - not inside it, not nowhere
+    run.dispose();
+  });
+
+  test("a stroke straddling the wall lands beside-and-on it the same way", () => {
+    // Half the shape on the board, half past the edge: the same clamp
+    // catches it, so the straddling stroke and the past-edge stroke take
+    // the same seat. Before the clamp could rise, this seat stuck inside
+    // the wall and spent nothing.
+    const WALL: PuzzlePrompt = {
+      ...PUZZLE,
+      board: [".........G", ".........G", ".........G", ".........G", ".........G", ".........G"],
+      queue: ["O"],
+    };
+    const run = newRun(WALL);
+    run.grabBase();
+    run.slamDrop({ column: 5, row: 2 }); // stroke seat: columns 9-10
+    expect(run.snapshot().piecesPlaced).toBe(1);
+    const placed = sorted(
+      run.view().cells.flatMap((row, y) =>
+        row.map((cell, x) => (cell === "O" ? ([x, y] as const) : null)).filter(
+          (c): c is readonly [number, number] => c !== null,
+        ),
+      ),
+    );
+    expect(placed).toEqual([[8, 6], [8, 7], [9, 6], [9, 7]]);
     run.dispose();
   });
 

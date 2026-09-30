@@ -1335,9 +1335,11 @@ export class PuzzleRun {
     // The stroke's shape is clamped whole back onto the board — the piece
     // is the shape the player dove with, so the clamp slides it as one by
     // the least translation that fits it, never one column at a time —
-    // and then descends to rest on the terrain under its columns. A seat
-    // buried inside the stack has nothing to descend and no edge to clamp
-    // to; the swipe spends nothing.
+    // and then descends to rest on the terrain under its columns — rising
+    // clear first when the clamp seated it inside that terrain, so a stroke
+    // that began past a wall lands on top of the wall, at the edge it dove
+    // toward. A seat buried inside the stack has nothing to descend and no
+    // edge to clamp to; the swipe spends nothing.
     if (!this.fallingFitsAt(cells)) {
       const left = Math.min(...cells.map(([x]) => x));
       const right = Math.max(...cells.map(([x]) => x));
@@ -1349,7 +1351,16 @@ export class PuzzleRun {
             : 0;
       if (clampX !== 0) {
         cells = cells.map(([x, y]) => [x + clampX, y] as const);
-        // The clamped seat may now have terrain beneath it; descend again.
+        // The clamp may have seated the shape inside the terrain the dive
+        // pointed at. The whole shape rises as one until it clears — the
+        // piece is one shape — and the descent below then lands it on top:
+        // a stroke that began past a wall lands at the wall, not inside it.
+        while (
+          !this.fallingFitsAt(cells) &&
+          cells.every(([, y]) => y + 1 < ENGINE_ROWS)
+        ) {
+          cells = cells.map(([x, y]) => [x, y + 1] as const);
+        }
         while (this.fallingFitsAt(cells.map(([x, y]) => [x, y - 1] as const))) {
           cells = cells.map(([x, y]) => [x, y - 1] as const);
         }
