@@ -135,7 +135,7 @@ that and abuse:
 That layer has tests, and they need no install:
 
 ```sh
-python3 -m unittest discover -s client     # 163 run, 0 fail; bare python3 skips 3
+python3 -m unittest discover -s client     # 173 run, 0 fail; bare python3 skips 3
 ```
 
 ### Restarting, and making a new command appear
@@ -150,7 +150,7 @@ Stop the old process before starting the new one. **Two instances on one token
 double-handle every command**, which presents as the bot answering everything twice.
 
 Before restarting, confirm every module the bot imports still parses. `discord_bot.py`
-imports seven of the files under `client/` at module scope, so a syntax error in any one
+imports nine of the files under `client/` at module scope, so a syntax error in any one
 of them is a start-up crash rather than a degraded feature:
 
 ```sh
