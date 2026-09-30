@@ -843,34 +843,56 @@ stroke. The travel is amplified in whole squares measured from where the
 finger pressed, so no square on the way is skipped and a round trip — wander
 off and come back — lands the piece exactly where it was. The travel is
 virtual: a drag may leave the card without ending, and while the piece is
-carried past an edge the preview drops until the finger brings it back. Letting
-go is the only decision: on the board, a placeable seat commits and an
-obstructed one **parks** — the dashed preview stays, drawn over the stack it
-overlaps, nothing is spent, and the next drag starts from that seat; past the
-board's edge, the piece resets to falling. A placement can be finished a
-stroke at a time — move part way, release, press again wherever the finger
-lands, and carry on from where the piece waits. A fast, clean **swipe down**
-is the one exception to letting go: a stroke that dives — every movement
-deeper (a square's truncation wobble is noise, not steering), the whole
-swipe judged by its angle on the lift — about thirty degrees off vertical
-is a drop, a wider diagonal is steering — hard-drops the position the piece
-was shown at when the stroke began, no rest required. The stroke may begin
-anywhere the finger has been still: the drag's first movement, or a fresh
-descent after a beat of stillness — a short one, measured on the raw
-finger stream so a resting finger's jitter is stillness — positioning and
-swiping can share one contact, separated by a pause. The drop executes when the finger lifts;
-until then the piece just follows it, and once the stroke has covered its
-threshold the drop is earned: the finger may hold still before lifting, and
-still drops. The stroke's travel never steers the drop — the seat the
-descent began on is the seat that locks, past an overhang included — and a
-clean dive begun past the board's edge takes the piece to the nearest floor
-seat of the columns it dove through. A dive flowed straight out of
-positioning, with no pause, is only carrying, and its release settles or
-parks as above. Rotating a seat that is locking cancels the wait, as any
-key does — but the seat rotates in place rather than snapping back to the
-piece. Tap to rotate and
-press-and-hold keep their meaning: only a drag carries, and a mouse keeps the
-1:1 mapping everywhere; a touch-capable laptop is a mouse for these purposes.
+carried past an edge the preview drops until the finger brings it back. A
+placement can be finished a stroke at a time — move part way, release, press
+again wherever the finger lands, and carry on from where the piece waits.
+
+Letting go on the board starts a short **rest**, and the rest is the point of
+it: a placement that fits waits about three quarters of a second before it
+locks, with a ring filling around the seat as it waits, so a release you did
+not mean is one you can take back. Two things own that window. It is the time
+your hand spends **off** the piece: put a finger back down and the wait holds
+its seat without counting, and the last lift starts it over — a placement can
+never lock out from under the hand that was arranging it, and the gesture that
+follows is about the piece you were touching. And every other way of taking it
+back still works: rotating **turns the waiting seat where it sits** instead of
+throwing the arrangement away, undo withdraws the placement before it exists
+(the log gets nothing, and the previous placement is left alone), and
+anything else that moves the piece changes your mind for you. The rest counts
+on the clock like any other placement, so in a ranked rush or a duel a
+pointer player pays it and a keyboard hard-drop does not; a **flick** is how
+a pointer player skips it. A seat that does not fit **parks** exactly as shown
+— the dashed preview stays, drawn over the stack it overlaps, nothing is
+spent, and the next drag starts from that seat; past the board's edge, the
+piece resets to falling.
+
+A fast, clean **swipe down** skips the rest: a stroke that dives — every
+movement deeper (a square's truncation wobble is noise, not steering), the
+whole swipe judged by its angle on the lift, about thirty degrees off vertical
+is a drop and a wider diagonal is steering — hard-drops **the seat the preview
+is showing** to rest and locks it at once. The seat on screen is what drops,
+never the seat the stroke began on: a downward drag through a tuck and a flick
+are the same motion, and the preview is the only thing that can say where the
+piece goes, so the drop follows it — mid-air seats included, descended the way
+a hard drop descends. The stroke may begin anywhere the finger has been still:
+the drag's first movement, or a fresh descent after a beat of stillness — a
+short one, measured by the piece, so a resting finger's jitter that leaves the
+preview where it is counts as stillness and a move the player can see does
+not. The drop executes when the finger lifts, and the lift has to follow the
+dive: a finger still for longer than the swipe window is positioning again,
+and its release settles instead — the same seat either way, with the rest on
+top. A dive flowed straight out of positioning, with no pause, is only
+carrying. A dive that ends past the board's edge has no seat on screen and
+spends nothing.
+
+A keyboard reaches the same seats. A hard drop during the wait commits the
+seat on screen, exactly as a flick does, instead of the landing spot of the
+piece underneath it — a piece the arrangement is standing in for, and one
+nowhere near the seat being arranged. A rotate key turns that waiting seat
+where it sits, as the tap does. Tap to rotate and press-and-hold keep their
+meaning: only a drag carries. A mouse gets every gesture a finger does — the slam, the rest and the
+shadow-anchored grab included — carrying 1:1 where a touch carries at the
+amplified rate above; a touch-capable laptop is a mouse for these purposes.
 
 Fingers also come in chords: a quick **tap of two fingers undoes the last
 placement** and a **tap of three redoes it**. The chord counts simultaneous
