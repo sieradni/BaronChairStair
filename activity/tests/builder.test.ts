@@ -856,6 +856,31 @@ describe("testing the draft", () => {
     expect(ui.warning.textContent).toContain("queue");
   });
 
+  test("the grid draws the seat the run arranged, not only the natural shadow", () => {
+    // The grid is what a builder test has instead of a canvas, and the seat a
+    // take-back hands back is a parked preview: if the grid never draws `aim`,
+    // the author sees a piece in mid-air and no landing hint at all.
+    const ui = mount();
+    ui.type(ui.pieces, "T");
+    ui.paint(ui.bottomRow(), 0);
+    const floor = ui.bottomRow();
+    // Board rows count up from the floor; the grid counts down from the top,
+    // which is the flip `paintFrame` and the builder both make.
+    const at = (boardRow: number, column: number) => classAt(ui, floor - boardRow, column);
+
+    ui.builder.showTest(
+      frame({ aim: { cells: [[6, 4], [7, 4], [6, 3], [6, 2]], legal: true } }),
+      played(),
+    );
+
+    expect(at(4, 6)).toContain("build__cell--ghost");
+    expect(at(4, 7)).toContain("build__cell--ghost");
+    expect(at(2, 6)).toContain("build__cell--ghost");
+    // Nothing invented around the seat: the cells it does not cover stay bare.
+    expect(at(0, 6)).not.toContain("build__cell--ghost");
+    expect(at(4, 5)).not.toContain("build__cell--ghost");
+  });
+
   test("the board is the run's while one is on it", () => {
     // The failure this catches is the builder repainting its own stack over a
     // falling piece — the draft and the run both want these two hundred cells,

@@ -105,9 +105,13 @@ export function extraClears(spec: GoalSpec | null, result: TestResult): string {
  * up from the floor, which is the one flip in here and the same one
  * `builder.ts` does when it draws the stack.
  *
- * The ghost is drawn only where nothing else is: a ghost under the falling
- * piece or over the stack is a cell claiming to be two things, and the board is
- * small enough that the brighter of the two always wins the eye.
+ * The ghost and the aim are drawn only where nothing else is: either under the
+ * falling piece or over the stack is a cell claiming to be two things, and the
+ * board is small enough that the brighter of the two always wins the eye. The
+ * aim outranks the ghost — it is the seat the player arranged, and the natural
+ * landing spot is only what the piece would do untouched. Drawing it matters
+ * here more than it does in the game, because the grid is what a test run has
+ * instead of a canvas: without it a take-back leaves no landing hint at all.
  */
 export function paintFrame(nodes: readonly HTMLElement[], view: BoardView): void {
   const active = new Map<number, string>();
@@ -115,6 +119,7 @@ export function paintFrame(nodes: readonly HTMLElement[], view: BoardView): void
     for (const [x, y] of view.active) active.set(y * COLUMNS + x, view.activeInk);
   }
   const ghost = new Set(view.ghost.map(([x, y]) => y * COLUMNS + x));
+  const aim = new Set((view.aim?.cells ?? []).map(([x, y]) => y * COLUMNS + x));
   const flashing = view.flashStrength > 0 ? new Set(view.flashRows) : new Set<number>();
 
   for (let y = 0; y < MAX_ROWS; y++) {
@@ -123,13 +128,14 @@ export function paintFrame(nodes: readonly HTMLElement[], view: BoardView): void
       if (!node) continue;
       const index = y * COLUMNS + x;
       const ink = active.get(index) ?? inkFor(view.cells[y]?.[x] ?? null);
-      const isGhost = ink === null && ghost.has(index);
+      const isAim = ink === null && aim.has(index);
+      const isGhost = ink === null && !isAim && ghost.has(index);
       node.className = `build__cell${ink ? " build__cell--on" : ""}${
-        isGhost ? " build__cell--ghost" : ""
+        isAim || isGhost ? " build__cell--ghost" : ""
       }`;
       node.style.background = flashing.has(y)
         ? PAPER.flash
-        : (ink ?? (isGhost ? (view.activeInk ?? "") : ""));
+        : (ink ?? (isAim || isGhost ? (view.activeInk ?? "") : ""));
     }
   }
 }
