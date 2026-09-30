@@ -8,7 +8,8 @@
  */
 
 import { BOARD_HEIGHT, type PuzzlePrompt, type SolutionStep } from "@shared/puzzle";
-import { attachPointerPlay } from "./game/pointer";import type { Handling } from "@shared/tetris/handling";
+import { attachPointerPlay } from "./game/pointer";
+import type { Handling } from "@shared/tetris/handling";
 import type { InputEvent } from "@shared/tetris/verify";
 import type { Connection } from "./discord";
 import type { DailyEntry, DailyResponse, GalleryLine, RushState, StoredRun } from "./api";
@@ -385,7 +386,12 @@ export class App {
         grabBase: () => this.activeRun?.grabBase(),
         carryAt: (shift) => this.activeRun?.carryAt(shift),
         settleAt: () => this.activeRun?.settleAt(),
-        cancelCarry: () => this.activeRun?.clearAim(),
+        slamDrop: (origin) => this.activeRun?.slamDrop(origin),
+        cancelCarry: () => this.activeRun?.cancelCarry(),
+        // The run counts the fingers on the piece: a placement waiting out
+        // its rest cannot commit under one of them.
+        contactDown: () => this.activeRun?.contactDown(),
+        contactUp: () => this.activeRun?.contactUp(),
         rotate: () => this.activeRun?.tap("rotateCW"),
         hold: () => this.runHold(),
         // The chord gestures share the buttons' path exactly — undo/redo
@@ -739,7 +745,9 @@ export class App {
     this.credits.update(puzzle);
     this.hud.setPuzzle(puzzle);
     replaceChildren(this.hud.left, this.hud.panels.hold);
-    this.showPlayfield();
+    // Reading, not playing: no run is started, so the deck keeps its text
+    // selection rather than becoming a gesture surface.
+    this.showPlayfield({ live: false });
     this.playSolution(puzzle, line.placements);
     replaceChildren(
       this.hud.right,
@@ -913,6 +921,9 @@ export class App {
     // game's chrome, and narrow.css keys the phone's board-plus-column shape
     // off this class. Each mount states its own shape.
     this.deck.classList.remove("deck--play");
+    // Every mount that leaves the playfield leaves the gesture surface with it;
+    // the two playfields that put it back say so themselves.
+    this.deck.classList.remove("deck--gestures");
     replaceChildren(this.deck, left, centre, right);
   }
 
@@ -924,9 +935,14 @@ export class App {
    * under it — and comes off the moment the rails change jobs, which is why
    * it lives here and not only beside `deck--screen`.
    */
-  private showPlayfield(): void {
+  private showPlayfield(options: { live?: boolean } = {}): void {
     this.showColumns(this.hud.left, this.stage, this.hud.right);
     this.deck.classList.add("deck--play");
+    // A live run is a gesture surface end to end — a drag can begin anywhere on
+    // the deck, so text selection there is only ever in the way — and the
+    // solutions' reading screen mounts the same board with nothing playable, so
+    // it says so and keeps its selection.
+    this.deck.classList.toggle("deck--gestures", options.live ?? true);
     this.relayout();
   }
 

@@ -32,9 +32,20 @@ export interface BoardView {
   readonly flashRows: readonly number[];
   readonly flashStrength: number;
   readonly dimmed: boolean;
-  /** The drag target, while a pointer is aiming the piece. */
+  /**
+   * The drag target, while a pointer is aiming the piece.
+   *
+   * `progress`, when present, draws the lock gate: 0..1 fills a ring around
+   * the preview while the released piece waits out its rest, values past 1
+   * fade a completed ring over the seat that just locked. The run computes
+   * the number; the board only draws it.
+   */
   readonly aim:
-    | { readonly cells: readonly (readonly [number, number])[]; readonly legal: boolean }
+    | {
+        readonly cells: readonly (readonly [number, number])[];
+        readonly legal: boolean;
+        readonly progress?: number;
+      }
     | null;
 }
 
@@ -337,6 +348,47 @@ export class BoardRenderer {
         cell - border,
       );
     }
+    ctx.restore();
+    this.drawRestRing(aim, rows, ink);
+  }
+
+  /**
+   * The lock gate, drawn where the eye already is: a ring around the
+   * preview's seat that fills as the rest runs out, then a brief fading
+   * toast on the same ring when the commit lands. The outline the board
+   * already draws goes dashed for "not yet"; the ring answers with a
+   * solid arc for "this much longer", so the wait reads as progress
+   * rather than as a freeze.
+   */
+  private drawRestRing(aim: NonNullable<BoardView["aim"]>, rows: number, ink: string | null): void {
+    const progress = aim.progress;
+    if (progress === undefined) return;
+    const { ctx, cell } = this;
+    const cells = aim.cells.filter(([x, y]) => x >= 0 && x < BOARD_WIDTH && y >= 0 && y < rows);
+    if (cells.length === 0) return;
+    const left = Math.min(...cells.map(([x]) => x));
+    const right = Math.max(...cells.map(([x]) => x));
+    const top = Math.max(...cells.map(([, y]) => y));
+    const bottom = Math.min(...cells.map(([, y]) => y));
+    // Centered on the seat's own box: the ring hugs the preview, not the board.
+    const cx = this.columnLeft((left + right + 1) / 2);
+    const cy = this.rowTop((top + bottom) / 2, rows) + cell / 2;
+    const radius = (Math.max(right - left + 1, top - bottom + 1) * cell) / 2 + cell * 0.45;
+    // Past 1 the commit has landed: the finished ring fades out over the
+    // seat it locked, 0.9→0.2, so the promise reads as kept before the
+    // placement's own animation takes over.
+    const fade = progress > 1 ? Math.max(0.2, 0.9 - (progress - 1) * 0.7) : 0.9;
+
+    ctx.save();
+    ctx.globalAlpha = fade;
+    ctx.strokeStyle = ink ?? PAPER.ink;
+    ctx.lineWidth = Math.max(3, Math.round(cell * 0.16));
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    // From the top, clockwise: the eye reads a clock into it, and the
+    // missing slice shows exactly how long is left.
+    ctx.arc(cx, cy, radius, -Math.PI / 2, -Math.PI / 2 + Math.min(1, progress) * 2 * Math.PI);
+    ctx.stroke();
     ctx.restore();
   }
 

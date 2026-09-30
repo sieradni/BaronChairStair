@@ -843,15 +843,56 @@ stroke. The travel is amplified in whole squares measured from where the
 finger pressed, so no square on the way is skipped and a round trip — wander
 off and come back — lands the piece exactly where it was. The travel is
 virtual: a drag may leave the card without ending, and while the piece is
-carried past an edge the preview drops until the finger brings it back. Letting
-go is the only decision: on the board, a placeable seat commits and an
-obstructed one **parks** — the dashed preview stays, drawn over the stack it
-overlaps, nothing is spent, and the next drag starts from that seat; past the
-board's edge, the piece resets to falling. A placement can be finished a
-stroke at a time — move part way, release, press again wherever the finger
-lands, and carry on from where the piece waits. Tap to rotate and
-press-and-hold keep their meaning: only a drag carries, and a mouse keeps the
-1:1 mapping everywhere; a touch-capable laptop is a mouse for these purposes.
+carried past an edge the preview drops until the finger brings it back. A
+placement can be finished a stroke at a time — move part way, release, press
+again wherever the finger lands, and carry on from where the piece waits.
+
+Letting go on the board starts a short **rest**, and the rest is the point of
+it: a placement that fits waits about three quarters of a second before it
+locks, with a ring filling around the seat as it waits, so a release you did
+not mean is one you can take back. Two things own that window. It is the time
+your hand spends **off** the piece: put a finger back down and the wait holds
+its seat without counting, and the last lift starts it over — a placement can
+never lock out from under the hand that was arranging it, and the gesture that
+follows is about the piece you were touching. And every key takes it
+back: the keyboard plays the physical piece, so a press during the wait
+cancels it — ring, seat and all — and acts on the piece itself, wherever it
+actually is. The rest counts
+on the clock like any other placement, so in a ranked rush or a duel a
+pointer player pays it and a keyboard hard-drop does not; a **flick** is how
+a pointer player skips it. A seat that does not fit **parks** exactly as shown
+— the dashed preview stays, drawn over the stack it overlaps, nothing is
+spent, and the next drag starts from that seat; past the board's edge, the
+piece resets to falling.
+
+A fast, clean **swipe down** skips the rest: a stroke that dives — every
+movement deeper (a square's truncation wobble is noise, not steering), the
+whole swipe judged by its angle on the lift, about thirty degrees off vertical
+is a drop and a wider diagonal is steering — hard-drops **the seat the stroke
+began on** to rest and locks it at once. The slam is one command, not a drag
+plus a drop: its target is fixed where the piece was shown when the dive
+started, and the preview following the finger afterwards does not move it.
+The stroke may begin anywhere the finger has been still:
+the drag's first movement, or a fresh descent after a beat of stillness — a
+short one, measured by the piece, so a resting finger's jitter that leaves the
+preview where it is counts as stillness and a move the player can see does
+not. That beat ends a stroke as well as separating two: a finger that stops
+diving for longer than the beat has stopped swiping, whatever the stroke armed
+on the way down, and its release settles instead — the seated piece is where
+the player left it. A dive flowed straight out of positioning, with no pause,
+is only carrying. A stroke whose seat is off the board is not a slam at all: the seat is
+where the piece would be shown, and past an edge nothing is shown — the
+gesture has no target, and the release resets the piece to falling exactly
+as a drag released off the board does.
+
+A keyboard reaches the same seats, and it never plays the arrangement: a
+hard drop during the wait cancels it and hard-drops the physical piece from
+where it actually is — spawn, usually — and a rotate key turns that piece
+there. The player with hands on the keys is looking at the piece, so the keys
+act on the piece. Tap to rotate and press-and-hold keep their
+meaning: only a drag carries. A mouse gets every gesture a finger does — the slam, the rest and the
+shadow-anchored grab included — carrying 1:1 where a touch carries at the
+amplified rate above; a touch-capable laptop is a mouse for these purposes.
 
 Fingers also come in chords: a quick **tap of two fingers undoes the last
 placement** and a **tap of three redoes it**. The chord counts simultaneous
@@ -862,7 +903,10 @@ command.
 
 The same actions have buttons: undo and redo sit in the Progress panel, and
 hold has its key. Pointers and keys share one log, so an undo takes back a
-dragged placement exactly like a pressed one.
+dragged placement exactly like a pressed one. A take-back leaves the piece
+at the rotation the placement locked: the dashed preview and the physical
+piece agree from the moment of the undo, and the next rotation tap turns
+both normally.
 
 Below tablet width the play screen is **one board with one column beside
 it**: hold, progress, goal and the queue stack into a slim strip on the
