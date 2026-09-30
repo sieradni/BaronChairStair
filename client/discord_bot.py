@@ -51,10 +51,10 @@ import sys
 
 # ── The Python floor, said out loud ──────────────────────────────────────────
 #
-# This module annotates with PEP 604 unions (`dict | None`) at module scope, and
+# This module annotates with PEP 604 unions (`str | None`) at module scope, and
 # 3.9 evaluates annotations eagerly at definition time — so importing it there
-# dies with `TypeError: unsupported operand type(s) for |` about six hundred
-# lines below, naming an operator rather than a version. Nothing in the failure
+# dies with `TypeError: unsupported operand type(s) for |` further down, naming
+# an operator rather than a version. Nothing in the failure
 # says "your Python is too old", which is the one thing the reader needs.
 #
 # Checked here rather than in a shared module because this is the only entry

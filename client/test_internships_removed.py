@@ -109,6 +109,45 @@ class TheirCommandsAreGone(unittest.TestCase):
                 bound.update(t.id for t in targets if isinstance(t, ast.Name))
         return bound
 
+    @staticmethod
+    def _names_other_ways(tree: ast.Module) -> set[str]:
+        """The three other ways discord.py names a command.
+
+        A positional first argument (`@bot.command("x")`, `@bot.group("x")`),
+        a class keyword (`class X(app_commands.Group, name="x")`), and a Group
+        subclass with neither, which discord.py names after the class.
+        """
+        names = set()
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in ("command", "group", "hybrid_command", "hybrid_group")
+                    and node.args and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str)):
+                names.add(node.args[0].value)
+            elif isinstance(node, ast.ClassDef):
+                names.update(kw.value.value for kw in node.keywords
+                             if kw.arg == "name" and isinstance(kw.value, ast.Constant)
+                             and isinstance(kw.value.value, str))
+                names.add(node.name.lower())
+        return names
+
+    def test_no_command_is_named_after_either_one_any_other_way(self):
+        for path in _bot_modules():
+            tree = _parse(path)
+            for command in REMOVED_COMMANDS:
+                with self.subTest(file=path.name, command=command):
+                    self.assertNotIn(command, self._names_other_ways(tree))
+
+    def test_the_other_ways_are_all_recognised(self):
+        # A guard that recognises nothing passes on any source, so show it
+        # catching each form on a sample.
+        sample = ast.parse(
+            "@bot.command('bennxt')\nasync def a(ctx): ...\n"
+            "class B(app_commands.Group, name='internships'): ...\n"
+            "class Bennxt(app_commands.Group): ...\n")
+        self.assertEqual(self._names_other_ways(sample) & set(REMOVED_COMMANDS),
+                         set(REMOVED_COMMANDS))
+
     def test_no_command_is_named_after_either_one(self):
         for path in _bot_modules():
             tree = _parse(path)
