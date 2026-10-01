@@ -201,6 +201,15 @@
 
 /* ── Footer strip ─────────────────────────────────────────────────────────── */
 
+/*
+ * The strip opts out of selection and the tap highlight on every screen, not
+ * only live runs: it is furniture, nothing on it is ever worth copying, and
+ * during play it sits inside the gesture surface — a two-finger undo lands
+ * wherever the second finger falls, and on mobile a long-press or a drift
+ * across the strip painted a selection over the puzzle title. The play
+ * deck's own opt-out cannot cover it: the strip is the deck's sibling in the
+ * page, not its child, so the deck-level rule never reached it.
+ */
 .credits {
   display: flex;
   align-items: center;
@@ -211,6 +220,10 @@
   border-radius: var(--radius);
   background: var(--cream);
   box-shadow: var(--drop) var(--drop) 0 var(--ink);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .credits__title {
