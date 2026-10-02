@@ -21,11 +21,21 @@
 
 /* ── Header ───────────────────────────────────────────────────────────────── */
 
+/*
+ * Furniture, like the credits strip below: nothing in the header is ever
+ * worth copying, so it opts out of selection and the tap highlight outright
+ * rather than only during play. The buttons keep their own pressed feedback
+ * (`.btn:active`), which is the flash the browser default was duplicating.
+ */
 .masthead {
   display: flex;
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .masthead__mark {

@@ -313,6 +313,12 @@
 
 /* ── Toast ────────────────────────────────────────────────────────────────── */
 
+/*
+ * The toast appears mid-play — a rejected move, a sync note — directly over
+ * the gesture surface, where a stray touch must not start selecting it or
+ * flash the browser's tap highlight. It is momentary feedback, not copy:
+ * opt out outright, like the header and the credits strip.
+ */
 .toast {
   position: absolute;
   left: 50%;
@@ -328,6 +334,10 @@
   font-weight: 800;
   font-size: 11px;
   letter-spacing: 0.04em;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
   text-transform: uppercase;
   pointer-events: none;
   animation: toast-in 220ms cubic-bezier(0.2, 1.4, 0.4, 1);
