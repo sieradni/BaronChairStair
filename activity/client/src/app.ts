@@ -756,7 +756,7 @@ export class App {
       // lives on every other screen here.
       panel(
         "Reading",
-        { class: "solutions" },
+        { class: "solutions selectable" },
         el("p", { class: "note", text: this.creditFor(line) }),
         el(
           "div",

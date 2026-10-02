@@ -6,6 +6,21 @@
  * sitting on top of it with a hard plum shadow.
  */
 
+/*
+ * The selection model, stated once.
+ *
+ * The page is a play surface first: a drag, a tap or a two-finger chord can
+ * begin anywhere on it, so by default nothing on the sheet selects, flashes
+ * on a tap, or raises the long-press callout. Text that exists to be read
+ * asks back in with the `selectable` class — the goal sentence, the solution
+ * walkthroughs, the settings sheet — and form fields opt themselves in, so a
+ * caret moves even where page text may not select. One marker narrows even
+ * those: while a live run is up, the deck's own rail text goes inert again
+ * (the `deck--gestures` rule below), because a drift across the goal
+ * sentence mid-drag would paint a highlight and eat the gesture's move
+ * stream. Furniture — masthead, credits strip, toast — carries no class and
+ * stays inert on every screen.
+ */
 .sheet {
   position: fixed;
   inset: 0;
@@ -17,25 +32,38 @@
     linear-gradient(var(--ink-hair) 1px, transparent 1px) 0 0 / 100% 28px,
     linear-gradient(90deg, var(--ink-hair) 1px, transparent 1px) 0 0 / 28px 100%,
     var(--sun);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/*
+ * Reading surfaces ask back in. `user-select` is not inherited as a value,
+ * but a descendant left at the default `auto` follows the nearest ancestor's
+ * used value — so one class here re-arms a whole subtree, and a deeper rule
+ * (the live-run suppression below) can silence it again without a fight.
+ */
+.selectable {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Form fields keep their caret and their text whatever the container says.
+   Without this, `user-select: none` above reaches into every input and a
+   long-press can no longer select — or in some engines even edit — it. */
+input, textarea, select {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 /* ── Header ───────────────────────────────────────────────────────────────── */
 
-/*
- * Furniture, like the credits strip below: nothing in the header is ever
- * worth copying, so it opts out of selection and the tap highlight outright
- * rather than only during play. The buttons keep their own pressed feedback
- * (`.btn:active`), which is the flash the browser default was duplicating.
- */
 .masthead {
   display: flex;
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-touch-callout: none;
-  -webkit-tap-highlight-color: transparent;
 }
 
 .masthead__mark {
@@ -167,26 +195,20 @@
 @media (pointer: coarse) and (min-height: 500px) {
   .stage {
     touch-action: none;
-    user-select: none;
-    -webkit-user-select: none;
-    -webkit-tap-highlight-color: transparent;
     padding-bottom: 18px;
   }
 }
 
 /*
- * A live run is a gesture surface end to end: a drag can begin anywhere on
- * the deck, and a second tap of a two-finger undo can land on a caption or
- * a stat. Text selection there is never wanted — on mobile a long-press or
- * a drift across the HUD paints a selection highlight over the play surface
- * and eats the gesture's move stream — so the play deck opts out entirely,
- * whatever the pointer. `deck--play` is the LAYOUT and is up on the
- * solutions' reading screen too, which has no run at all: `deck--gestures`
- * is the one app.ts raises only while a run is there to play. Screens
- * without a run (home, verdict, builder, reading) keep selection;
- * copy-the-goal-text still works there.
+ * The deck still carries `deck--gestures` while a run is live (app.ts raises
+ * and drops it with the playfield), but under the sheet-level model its job
+ * narrows to one suppression: even the ask-back-in text goes inert, because
+ * the goal sentence rides the rail during play too, and a drift across it
+ * mid-drag would paint a highlight and eat the gesture's move stream. Off
+ * the run — reading, verdict, the chooser — the marker is gone and
+ * `.selectable` reads normally.
  */
-.deck--gestures:not(:has(.build__board)) {
+.deck--gestures .selectable {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
@@ -200,26 +222,14 @@
   /*
    * The board is a pointer target first: taps rotate, drags place, a held
    * finger holds. `touch-action: none` hands every contact to the game — the
-   * browser must not turn a drag into a page pan — and the rest keeps the
-   * selection and tap-highlight machinery out of the way of the gesture.
+   * browser must not turn a drag into a page pan. Selection is the sheet's
+   * business now, not the board's.
    */
   touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-tap-highlight-color: transparent;
 }
 
 /* ── Footer strip ─────────────────────────────────────────────────────────── */
 
-/*
- * The strip opts out of selection and the tap highlight on every screen, not
- * only live runs: it is furniture, nothing on it is ever worth copying, and
- * during play it sits inside the gesture surface — a two-finger undo lands
- * wherever the second finger falls, and on mobile a long-press or a drift
- * across the strip painted a selection over the puzzle title. The play
- * deck's own opt-out cannot cover it: the strip is the deck's sibling in the
- * page, not its child, so the deck-level rule never reached it.
- */
 .credits {
   display: flex;
   align-items: center;
@@ -230,10 +240,6 @@
   border-radius: var(--radius);
   background: var(--cream);
   box-shadow: var(--drop) var(--drop) 0 var(--ink);
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-touch-callout: none;
-  -webkit-tap-highlight-color: transparent;
 }
 
 .credits__title {
