@@ -43,18 +43,28 @@
  * but a descendant left at the default `auto` follows the nearest ancestor's
  * used value — so one class here re-arms a whole subtree, and a deeper rule
  * (the live-run suppression below) can silence it again without a fight.
+ *
+ * `-webkit-touch-callout` is the exception that has to be re-armed by hand:
+ * the vendor property itself is inherited, so the root's `none` above would
+ * still swallow iOS's long-press copy menu whatever `user-select` says —
+ * which would make "read and copied" in the release note untrue on the very
+ * devices the note is about.
  */
 .selectable {
   user-select: text;
   -webkit-user-select: text;
+  -webkit-touch-callout: default;
 }
 
 /* Form fields keep their caret and their text whatever the container says.
    Without this, `user-select: none` above reaches into every input and a
-   long-press can no longer select — or in some engines even edit — it. */
+   long-press can no longer select — or in some engines even edit — it.
+   The callout comes back with them for the same reason it does above:
+   iOS hangs its cut/copy/paste menu off the inherited vendor property. */
 input, textarea, select {
   user-select: text;
   -webkit-user-select: text;
+  -webkit-touch-callout: default;
 }
 
 /* ── Header ───────────────────────────────────────────────────────────────── */

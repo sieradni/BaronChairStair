@@ -2,10 +2,15 @@
  * The selection model, pinned.
  *
  * sheet.css states it once on `.sheet`: nothing on the page selects by
- * default; text meant to be read asks back in with `.selectable`; form
- * fields opt themselves in; and while a live run is up, the deck's marker
- * silences even the ask-back-ins (a drift across the goal sentence mid-drag
- * must not paint a highlight and eat the move stream).
+ * default; text meant to be read asks back in with `.selectable` — which,
+ * for iOS's long-press menu, also re-arms the inherited
+ * `-webkit-touch-callout` the root sets to `none` — form fields opt
+ * themselves in; and while a live run is up, the deck's marker silences
+ * even the ask-back-ins (a drift across the goal sentence mid-drag must not
+ * paint a highlight and eat the move stream). The marker is dropped by
+ * every transition that leaves live play: that lifecycle is pinned below
+ * against the real App methods, because a stale marker re-greys exactly the
+ * reading surfaces the exit that forgot it goes on to mount.
  *
  * Two things can break that model silently. A CSS edit that moves a rule off
  * the root (the pre-inversion bug class: furniture kept highlighting because
@@ -18,12 +23,19 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
+import { todaySheet } from "../client/src/ui/home-sheet";
+import type { ShareFields } from "../client/src/ui/share";
 
 let window: Window;
 const saved = {
   document: globalThis.document,
   getComputedStyle: globalThis.getComputedStyle,
 };
+
+// Loaded once the window above exists (a second `beforeAll`): the lifecycle
+// tests run App's own transition methods, and app.ts's module graph is the
+// real app — it must not load before the document is in place.
+let App: (typeof import("../client/src/app"))["App"];
 
 beforeAll(() => {
   // The global swap is the pattern render.test.ts uses: lending happy-dom's
@@ -50,6 +62,10 @@ beforeAll(() => {
 
 afterEach(() => {
   document.body.replaceChildren();
+});
+
+beforeAll(async () => {
+  App = (await import("../client/src/app")).App;
 });
 
 afterAll(async () => {
@@ -138,6 +154,27 @@ function userSelect(node: HTMLElement): string {
 }
 
 /**
+ * The declarations of one rule, read from sheet.css's own text.
+ *
+ * The callout half of the model cannot come from the cascade here:
+ * happy-dom's parser drops `-webkit-touch-callout` outright — it never
+ * reaches `rule.style.cssText` (probed) — so those assertions pin the
+ * source, selector head by selector head. Comments are stripped first:
+ * the file's prose names the same selectors it declares.
+ */
+function ruleBody(selector: string): string {
+  const css = readFileSync("client/src/styles/sheet.css", "utf8").replace(
+    /\/\*[\s\S]*?\*\//g,
+    "",
+  );
+  for (const match of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const heads = match[1]!.split(",").map((head) => head.trim());
+    if (heads.includes(selector)) return match[2]!;
+  }
+  return "";
+}
+
+/**
  * The `user-select` values of every stylesheet rule that matches `node`
  * directly. happy-dom resolves a computed `user-select` only from a direct
  * match — it does not perform the spec's `auto` → parent-used-value
@@ -203,6 +240,59 @@ describe("the sheet-level selection model", () => {
     expect(userSelect(page.bareInput)).toBe("text");
   });
 
+  test("every ask-back re-arms the iOS long-press callout the root sets to none", () => {
+    // `-webkit-touch-callout` inherits (MDN: "Inherited: yes"), so the
+    // sheet's `none` swallows the callout on every descendant whatever
+    // `user-select` says — the release note's "read and copied" is untrue
+    // on iOS unless each ask-back names the property itself. Pinned in
+    // sheet.css's text (ruleBody) rather than the cascade: happy-dom drops
+    // the vendor property before it reaches any rule's style object.
+    expect(ruleBody(".sheet")).toContain("-webkit-touch-callout: none");
+    expect(ruleBody(".selectable")).toContain("-webkit-touch-callout: default");
+    expect(ruleBody("input")).toContain("-webkit-touch-callout: default");
+    // And the live marker takes it away again on the deck, as it takes
+    // `user-select` — the suppression is callout-clean too.
+    expect(ruleBody(".deck--gestures .selectable")).toContain("-webkit-touch-callout: none");
+  });
+
+  test("the real hero sheet ships its goal sentence as selectable", () => {
+    // The contract says the goal sentence selects, and the hand-built probe
+    // above cannot miss the class — the hero used to ship without it. This
+    // renders the actual card todaySheet() builds and mounts it the way the
+    // front door does: on the deck, under the sheet root, no live marker.
+    const card = todaySheet(
+      {
+        tier: "easy",
+        puzzle: {
+          id: 2,
+          title: "sheet 2",
+          author: "satilea",
+          difficulty: 1,
+          goal: "Clear 1 TSD",
+          set: null,
+          board: ["TTTT......", "..OO......"],
+          queue: ["T", "O", "S", "Z"],
+          hold: null,
+          targetAttack: 4,
+        },
+        run: null,
+        solution: null,
+      } as never, // the fixture shape render.test.ts casts the same way
+      { hero: true, started: new Set(), onPick: () => {} },
+    );
+    const goal = card.querySelector(".goal__text")!;
+    expect(goal.classList.contains("selectable")).toBe(true);
+
+    const root = document.createElement("div");
+    root.className = "sheet";
+    const deck = document.createElement("div");
+    deck.className = "deck deck--screen";
+    root.append(deck);
+    deck.append(card);
+    document.body.append(root);
+    expect(userSelect(goal as HTMLElement)).toBe("text");
+  });
+
   test("App.mount() mounts exactly the children the model was written for", () => {
     // The sheet-level rule covers the page by covering its children; a sixth
     // child would sit outside every decision made here. This names the set
@@ -223,5 +313,97 @@ describe("the sheet-level selection model", () => {
       "settingsDialog",
       "toastNode",
     ]);
+  });
+});
+
+/**
+ * The marker's lifecycle: raised with the playfield, dropped by every
+ * transition that leaves live play.
+ *
+ * `showColumns` drops it for column mounts, but a settled verdict and a
+ * screen mount without going through it — so those exits must drop it
+ * themselves, or the goal and walkthrough they go on to mount sit inert
+ * under `.deck--gestures .selectable`.
+ *
+ * The real methods run, against faked fields: App's constructor builds the
+ * whole sheet while these transitions touch a handful of it, and taking the
+ * prototype skips the constructor entirely.
+ */
+describe("the gesture marker's lifecycle", () => {
+  /** The slice of App these transitions touch; everything else faked. */
+  interface LifecycleApp {
+    deck: HTMLElement;
+    stage: HTMLElement;
+    credits: { update: (entry: unknown) => void };
+    hud: {
+      left: HTMLElement;
+      right: HTMLElement;
+      showFinal: (attack: number, target: number, clears: readonly unknown[]) => void;
+    };
+    leaderboard: { element: HTMLElement };
+    verdict: { update: (fields: unknown, run: unknown, options: unknown) => void };
+    sheet: unknown;
+    cleared: Set<number>;
+    relayout: () => void;
+    showScreen: (
+      options: { wide?: boolean; full?: boolean; fill?: boolean },
+      ...cards: HTMLElement[]
+    ) => void;
+    presentVerdict: (fields: ShareFields, run: unknown) => void;
+    showPlayfield: (options?: { live?: boolean }) => void;
+  }
+
+  const FIELDS: ShareFields = {
+    day: 247,
+    puzzleId: 2,
+    solved: false,
+    attack: 1,
+    targetAttack: 4,
+    durationMs: 60_000,
+    resets: 0,
+    piecesPlaced: 12,
+    clears: [],
+  };
+
+  function lifecycleApp(): LifecycleApp {
+    const app = Object.create(App.prototype) as unknown as LifecycleApp;
+    app.deck = document.createElement("div");
+    app.stage = document.createElement("div");
+    app.credits = { update: () => {} };
+    app.hud = {
+      left: document.createElement("div"),
+      right: document.createElement("div"),
+      showFinal: () => {},
+    };
+    app.leaderboard = { element: document.createElement("div") };
+    app.verdict = { update: () => {} };
+    app.sheet = null;
+    app.cleared = new Set<number>();
+    app.relayout = () => {};
+    return app;
+  }
+
+  test("the playfield raises the marker only while the run is live", () => {
+    const app = lifecycleApp();
+    app.showPlayfield();
+    expect(app.deck.classList.contains("deck--gestures")).toBe(true);
+    app.showPlayfield({ live: false });
+    expect(app.deck.classList.contains("deck--gestures")).toBe(false);
+  });
+
+  test("a settled verdict drops the marker with deck--play", () => {
+    const app = lifecycleApp();
+    app.deck.classList.add("deck--play", "deck--gestures");
+    app.presentVerdict(FIELDS, null);
+    expect(app.deck.classList.contains("deck--gestures")).toBe(false);
+    expect(app.deck.classList.contains("deck--play")).toBe(false);
+  });
+
+  test("a screen drops the marker — Home after a run reads normally", () => {
+    const app = lifecycleApp();
+    app.deck.classList.add("deck--play", "deck--gestures");
+    app.showScreen({ full: true }, document.createElement("div"));
+    expect(app.deck.classList.contains("deck--gestures")).toBe(false);
+    expect(app.deck.classList.contains("deck--screen")).toBe(true);
   });
 });
