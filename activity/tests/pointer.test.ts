@@ -931,6 +931,40 @@ describe("the pointer adapter", () => {
     play.dispose();
   });
 
+  test("capture loss clears a secondary contact from the chord and run", async () => {
+    const { attachPointerPlay } = await import("../client/src/game/pointer");
+    const node = element();
+    const calls: string[] = [];
+    let contacts = 0;
+    const play = attachPointerPlay(node, {
+      sampleAt: () => at(3, 4),
+      grabBase: () => calls.push("grab"),
+      carryAt: () => calls.push("carry"),
+      settleAt: () => calls.push("settle"),
+      contactDown: () => contacts++,
+      contactUp: () => contacts--,
+      slamDrop: () => calls.push("slam"),
+      cancelCarry: () => calls.push("cancelCarry"),
+      rotate: () => calls.push("rotate"),
+      hold: () => calls.push("hold"),
+      undo: () => calls.push("undo"),
+      redo: () => calls.push("redo"),
+    });
+
+    node.dispatchEvent(pointer("pointerdown", 10, 10, { pointerId: 1 }));
+    node.dispatchEvent(pointer("pointerdown", 20, 20, { pointerId: 2 }));
+    node.dispatchEvent(pointer("lostpointercapture", 20, 20, { pointerId: 2 }));
+    expect(contacts).toBe(1);
+    node.dispatchEvent(pointer("pointerup", 10, 10, { pointerId: 1 }));
+    expect(contacts).toBe(0);
+
+    node.dispatchEvent(pointer("pointerdown", 30, 30, { pointerId: 3 }));
+    node.dispatchEvent(pointer("pointerup", 30, 30, { pointerId: 3 }));
+    expect(calls).toEqual(["rotate"]);
+    expect(contacts).toBe(0);
+    play.dispose();
+  });
+
   test("reset, blur and page hiding clear every contact and allow another gesture", async () => {
     const { attachPointerPlay } = await import("../client/src/game/pointer");
     const node = element();

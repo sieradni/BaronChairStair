@@ -946,8 +946,9 @@ export function attachPointerPlay(
 
   const onLostCapture = (event: PointerEvent): void => {
     // Normal pointerup/pointercancel releases capture after their handlers
-    // have already cleared activeId. Only an early loss ends a live gesture.
-    if (event.pointerId === activeId) cancelContact(event.pointerId);
+    // have already removed the contact. An early loss must also clear a
+    // secondary finger: it has no drag, but still owns a chord/contact count.
+    if (contacts.has(event.pointerId)) cancelContact(event.pointerId);
   };
 
   const onBlur = (): void => reset();
