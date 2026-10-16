@@ -8,7 +8,7 @@
  */
 
 import { BOARD_HEIGHT, type PuzzlePrompt, type SolutionStep } from "@shared/puzzle";
-import { attachPointerPlay } from "./game/pointer";
+import { attachPointerPlay, type PointerPlayHandle } from "./game/pointer";
 import type { Handling } from "@shared/tetris/handling";
 import type { InputEvent } from "@shared/tetris/verify";
 import type { Connection } from "./discord";
@@ -143,8 +143,8 @@ export class App {
    */
   private badgeLinger: number | null = null;
 
-  /** Undoes the pointer attachment; nothing else ever needs it. */
-  private readonly detachPointerPlay: () => void;
+  /** Owns the board's pointer lifecycle for the life of this app. */
+  private readonly pointerPlay: PointerPlayHandle;
 
   private readonly rushPanel = createRushPanel(() => this.rush?.giveUp());
   private readonly rushBoard = createRushBoard();
@@ -369,7 +369,7 @@ export class App {
     // squares — so the tracker sees sub-square travel and the run
     // decides what off-board means. Both pointers share it; only the carry
     // factor differs (a touch at {@link TOUCH_CARRY}, a mouse at 1).
-    this.detachPointerPlay = attachPointerPlay(
+    this.pointerPlay = attachPointerPlay(
       this.stage,
       {
         // The listener is on the stage, so samples are stage-local and are
@@ -399,6 +399,7 @@ export class App {
         undo: () => this.stepHistory("undo"),
         redo: () => this.stepHistory("redo"),
       },
+      { touchTarget: this.canvas },
     );
 
     // The hold bay is a label, not a control; hold lives on the long-press
@@ -844,6 +845,7 @@ export class App {
    * the next mode added from being the one that gets forgotten.
    */
   private disposeActiveMode(): void {
+    this.pointerPlay.reset();
     this.run?.dispose();
     this.run = null;
     this.runningPuzzleId = null;
@@ -916,6 +918,7 @@ export class App {
    * alone with the rails stacked below the fold.
    */
   private showColumns(left: HTMLElement, centre: HTMLElement, right: HTMLElement): void {
+    this.pointerPlay.reset();
     this.deck.classList.remove("deck--screen");
     // The builder mounts through here too; its rails are content, not the
     // game's chrome, and narrow.css keys the phone's board-plus-column shape
@@ -976,6 +979,7 @@ export class App {
     options: { wide?: boolean; full?: boolean; fill?: boolean },
     ...cards: HTMLElement[]
   ): void {
+    this.pointerPlay.reset();
     this.clearCredits();
     this.deck.classList.add("deck--screen");
     this.deck.classList.remove("deck--play");
@@ -1565,6 +1569,10 @@ export class App {
   private startRun(): void {
     const sheet = this.sheet;
     if (!sheet) return;
+
+    // A retry or reopened puzzle must never inherit a contact from the run
+    // being replaced, even if the browser omitted its release/cancel event.
+    this.pointerPlay.reset();
 
     // The clock and the restart tally belong to a *puzzle*, not to whatever ran
     // last. Keyed on the previous run alone, wandering off to a practice puzzle
@@ -2173,7 +2181,7 @@ export class App {
 
   /** Frees the pointer capture and the last active run's frame loop. */
   dispose(): void {
-    this.detachPointerPlay();
+    this.pointerPlay.dispose();
     this.disposeActiveMode();
     // A timer outliving the app it was started in fires against a badge that
     // is no longer on screen.
