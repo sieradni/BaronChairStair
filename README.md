@@ -37,17 +37,18 @@ for as long as you leave it there — and undo and redo are always one key away.
 
 | Command | What it does |
 | :-- | :-- |
-| `/puzzle` | Today's puzzles, and the link that opens the activity |
-| `/highlights` | Attach a `.ttrm` replay — get each player's biggest attack bursts as boards |
+| `/puzzle play` | A short message and the link that opens the activity |
+| `/puzzle changelog [count:5]` | The most recent changes, shown privately; choose 1–20 individual changes. Long notes include a full text attachment |
+| `/highlights` | Attach a `.ttrm` replay — get each player's biggest attack bursts, clear by clear |
 | `/report` | File a bug or a suggestion. No GitHub account needed |
 | `/activity graph`<br>`/activity now` | Who is online, right now or across the last week |
-| `/archive sync` | **Officers only.** Pull the club's spreadsheet in, and make its new puzzles playable |
+| `/archive sync` | Pull the club's spreadsheet in, and make its new puzzles playable. Anyone may run it, at most once every 10 minutes |
 
 The bot can also reply to each day's announcement with how the server did — who
 solved what, how fast, and the server's streak. That recap is **off unless
 `PUZZLE_RECAP=on`** is set, because it pings every player it names.
 
-Every command in detail: **[docs/bot.md](docs/bot.md)**.
+Every slash command in detail: **[docs/bot.md](docs/bot.md)**.
 
 ---
 
@@ -74,9 +75,11 @@ bun install                                            # repo root, for /highlig
 cd client && python discord_bot.py
 ```
 
-Everything except `/highlights` runs on Python alone. Enable the **Server
-Members** and **Presence** intents in the Discord developer portal first, or
-login fails outright rather than degrading.
+Everything except `/highlights` and `/archive sync` runs on Python alone.
+`/archive sync` runs `bun run sync-archive` inside `activity/`, so it needs Bun
+on the bot's PATH and that folder's own `bun install`. Enable the **Message
+Content**, **Server Members** and **Presence** intents in the Discord developer
+portal first, or login fails outright rather than degrading.
 
 ---
 
@@ -89,7 +92,7 @@ flowchart LR
   A["Activity · activity/"]
   E["Engine bridge · server/"]
 
-  D -->|"/puzzle"| B
+  D -->|"/puzzle play"| B
   D -->|"opens the activity"| A
   B -->|"the day's results, over HTTP"| A
   B -->|"parses .ttrm replays"| E
@@ -117,8 +120,8 @@ BaronChairStair/
 ├── activity/                the Discord Activity — own README, own tests, own .env
 ├── client/
 │   ├── discord_bot.py       the bot: commands, schedulers, entry point
-│   ├── puzzle_commands.py   /puzzle, and the daily recap
-│   ├── archive_commands.py  /archive sync, behind an officer allowlist
+│   ├── puzzle_commands.py   /puzzle play, /puzzle changelog, and the daily recap
+│   ├── archive_commands.py  /archive sync, open to anyone once every 10 minutes
 │   ├── report_commands.py   /report — files a GitHub issue for a player
 │   ├── teto_client.py       Python client for the engine bridge
 │   └── render.py            attack-burst highlight boards
@@ -138,6 +141,7 @@ BaronChairStair/
 | [docs/bot.md](docs/bot.md) | Every slash command, and why each is shaped the way it is |
 | [docs/engine-bridge.md](docs/engine-bridge.md) | The NDJSON protocol between Python and the TETR.IO engine |
 | [DEPLOY.md](DEPLOY.md) · [activity/DEPLOY.md](activity/DEPLOY.md) | Deploying each half. The order is load-bearing in both |
+| [activity/puzzledb/README.md](activity/puzzledb/README.md) · [its DEPLOY.md](activity/puzzledb/DEPLOY.md) | db.tetrisatuci.org, the read-only public archive: puzzles, leaderboards, profiles and alternate lines; what it shows, what it never shows, and deploying it |
 | [CLAUDE.md](CLAUDE.md) | The few rules that live nowhere else |
 | [changelog.json](changelog.json) | Every release, newest first. The top entry is the version |
 
@@ -176,14 +180,17 @@ Copy `example.env` to `.env` at the repo root — every variable is documented
 inline. The ones that matter:
 
 - **`DISCORD_TOKEN`** — the bot. Required.
-- **`PUZZLE_APP_ID`, `PUZZLE_API`, `PUZZLE_API_KEY`** — the `/puzzle` command.
-  `PUZZLE_API_KEY` must match `BOT_API_KEY` in `activity/.env` — different names
-  on either side, and a mismatch is a silent 401.
+- **`PUZZLE_APP_ID`, `PUZZLE_API`** — the `/puzzle play` command.
+- **`PUZZLE_API_KEY`** — the daily recap, and `/archive sync` telling the
+  activity to reload; `/puzzle play` itself never sends it. It must match
+  `BOT_API_KEY` in `activity/.env` — different names on either side, and a
+  mismatch is a 401: the recap silently never posts, and a sync publishes but
+  the activity refuses to reload, so nothing goes live until its next restart.
 - **`PUZZLE_RECAP`** — `on` turns on the daily recap. Off by default, because it
   pings every player it names.
 
-Who may run `/archive sync` is a file, not a variable: `puzzle-admins.json`,
-gitignored, copied from `puzzle-admins.example.json`.
+`/archive sync` needs no setting of its own: anyone may run it, at most once
+every 10 minutes.
 
 `.env` is gitignored and must stay that way.
 
@@ -202,8 +209,8 @@ included. Nothing on `main` has been rewritten, because nothing on `main` can be
 Tests, before you open it:
 
 ```bash
-cd activity && bun test && bun run typecheck   # the activity
-python3 -m unittest discover -s client         # the bot
+(cd activity && bun test && bun run typecheck)   # the activity
+python3 -m unittest discover -s client           # the bot, from the repo root
 ```
 
 ---

@@ -17,7 +17,10 @@ import {
   readOverrides,
   writeOverride,
 } from "./puzzle-overrides";
+import { bestStreak, currentStreak } from "../shared/streaks";
 import { readPublishedArchive } from "./archive-rows";
+import { CREDITED, LIVE } from "./discovery-sql";
+import { migrateSiteIdentity, SiteIdentity, withFreshKey } from "./site-identity";
 import {
   acceptSubmission,
   countPendingSubmissions,
@@ -438,6 +441,8 @@ CREATE TABLE IF NOT EXISTS rush_runs (
   time_to_last_ms INTEGER NOT NULL,
   elapsed_ms      INTEGER NOT NULL,
   created_at      INTEGER NOT NULL,
+  -- The signed ticket that owns the day's first filing. NULL for legacy rows.
+  ticket_id       TEXT,
   PRIMARY KEY (day, player_id)
 );
 
@@ -466,6 +471,16 @@ CREATE TABLE IF NOT EXISTS puzzle_clears (
   times     INTEGER NOT NULL,
   best_ms   INTEGER NOT NULL,
   PRIMARY KEY (player_id, puzzle_id)
+);
+
+-- One receipt per counted attempt, scoped to its player and puzzle. Written
+-- in the same transaction as puzzle_clears: a lost reply can then be retried
+-- without counting twice, and a failed write never consumes the receipt.
+CREATE TABLE IF NOT EXISTS puzzle_clear_attempts (
+  player_id TEXT    NOT NULL REFERENCES players(id),
+  puzzle_id INTEGER NOT NULL,
+  attempt_id TEXT   NOT NULL,
+  PRIMARY KEY (player_id, puzzle_id, attempt_id)
 );
 
 -- Every read is "everything this player has cleared", for the Explore ticks and
@@ -798,6 +813,28 @@ export interface GalleryLine {
   readonly solvedStrict: boolean;
 }
 
+/**
+ * One alternate solution, for the browser that lists them across every puzzle.
+ *
+ * Everything a row of that list can print, and not the placements: the list
+ * never draws a board, and opening a line goes through the puzzle's own
+ * gallery, which has its own gate. `pieces` is the line's length, counted by
+ * the database so the placements never leave it.
+ *
+ * What a *reader* may see of this is a separate question, answered by
+ * `alternateRows` in `server/alternates.ts` — this is the store's half, and
+ * carries the whole line.
+ */
+export interface AlternateLine {
+  readonly solutionId: number;
+  readonly puzzleId: number;
+  readonly foundAt: number;
+  readonly attack: number;
+  readonly clears: readonly ClearName[];
+  readonly pieces: number;
+  readonly finder: PlayerProfile | null;
+}
+
 /** One line of the discovery board. */
 export interface DiscoveryRow {
   readonly player: PlayerProfile;
@@ -810,6 +847,17 @@ export interface SolutionCount {
   readonly puzzleId: number;
   readonly total: number;
   readonly missingGoal: number;
+}
+
+/** How the Store is opened, beyond where its file is. */
+export interface StoreOptions {
+  /**
+   * The zone the game deals days in, written into the database at every start
+   * for db.tetrisatuci.org to cut by (`server/site-identity.ts`). The game's
+   * server passes `config.timeZone`; a maintenance tool leaves it out, and the
+   * zone the game last recorded stays as it was.
+   */
+  readonly timeZone?: string;
 }
 
 export interface PastDays {
@@ -861,76 +909,51 @@ const RUN_COLUMNS = `
   runs.pieces_placed, runs.clears, runs.created_at
 `;
 
-/**
- * What a row has to be for its finder to be paid for it, as one clause.
- *
- * Written once because the board and a player's own standing must agree
- * exactly: a rank counted under a different predicate from the board it is a
- * rank *in* is not wrong in some rare case, it is wrong whenever they differ.
- * Every query using it aliases `puzzle_solutions` as `s`.
- *
- * The last clause is `countsAsAlternate` in SQL — solved it, *or* sent more
- * attack than it was asked for. `tests/alternate-solution.test.ts` runs the
- * function and this string against one table of cases, because a board cannot
- * call the function per row and two spellings of one rule drift.
- *
- * `attack > target_attack` is NULL, and so false, on a row filed before that
- * column existed. Those fall back to the solve, which is what they were
- * credited on when they were written — the honest answer rather than a
- * backfilled guess at a target that may since have moved.
- *
- * Note what is absent: `voided_at`. Credit outlives the board it was earned on
- * — see the column.
- */
-const CREDITED =
-  "s.source = 'player' AND s.found_by IS NOT NULL " +
-  "AND (s.solved_strict = 1 OR s.attack > s.target_attack)";
-
-/** The live rows: the ones still describing a board that exists. */
-const LIVE = "voided_at IS NULL";
+// `CREDITED` and `LIVE` live in `./discovery-sql`, and `currentStreak` and
+// `bestStreak` in `../shared/streaks`, so that db.tetrisatuci.org — which may
+// not import this module — runs the same rules rather than a copy of them.
 
 /**
- * The streak a player is on now, walking back from `today`.
+ * How long a statement waits for another connection's write lock before it
+ * gives up with `SQLITE_BUSY`.
  *
- * `days` arrives newest-first and already distinct. The rule is `Store.streak`'s
- * and is copied rather than shared because that one answers for a single player
- * over a `LIMIT 400` query and this one reduces every player at once — but the
- * *rule* must not differ, so it is written out here in the same shape.
+ * SQLite's own default is not to wait at all, which was right while this
+ * process was the only writer. It is not any more. A deploy hands over on one
+ * port, so for a while two game processes have this file open at once — the
+ * new one migrating, pinning and seeding at boot while the old one is still
+ * filing hand-ins — and `tools/sync-archive.ts` writes here too. Without a wait,
+ * whichever of them arrives second fails outright: a boot that crashes, or a
+ * hand-in answered 500.
+ *
+ * Five seconds because every write here is short — a run, a clear, a pin — so
+ * any honest wait is milliseconds, and a lock still held after five seconds is
+ * something wrong that a client's error says better than a hung request.
+ *
+ * **A transaction that reads before it writes must be begun IMMEDIATE**
+ * (`db.transaction(fn).immediate()`), or this wait does not reach it.
+ * `db.transaction(fn)()` is DEFERRED: its first SELECT takes a read lock, and
+ * when its first write then asks for the write lock while another connection
+ * holds it, SQLite fails at once rather than wait. It never waits to turn a
+ * read into a write: by the time the other writer let go, what this one read
+ * could be out of date. IMMEDIATE takes the write lock at BEGIN, where the
+ * wait applies. A single statement, or a transaction that writes first, needs
+ * nothing. `tests/store-busy-timeout.test.ts` holds the lock from another
+ * process against each one that does.
  */
-function currentStreak(days: readonly number[], today: number): number {
-  let streak = 0;
-  let expected = today;
-  for (const day of days) {
-    if (day === expected) {
-      streak++;
-      expected--;
-    } else if (day === expected - 1 && streak === 0) {
-      // Today not yet played does not break a streak; a missed day does.
-      streak++;
-      expected = day - 1;
-    } else {
-      break;
-    }
-  }
-  return streak;
-}
-
-/** The longest run of consecutive days they ever put together. */
-function bestStreak(days: readonly number[]): number {
-  let best = 0;
-  let run = 0;
-  let previous: number | null = null;
-  // Newest-first, so consecutive means each day is one less than the last.
-  for (const day of days) {
-    run = previous !== null && day === previous - 1 ? run + 1 : 1;
-    previous = day;
-    if (run > best) best = run;
-  }
-  return best;
-}
+export const STORE_BUSY_TIMEOUT_MS = 5_000;
 
 export class Store {
   private readonly db: Database;
+  private readonly identity: SiteIdentity;
+
+  /**
+   * Player and server keys, server names, the opt-out and the zone fact: what
+   * db.tetrisatuci.org reads instead of Discord ids. Its own module because
+   * this one is long enough; it shares this handle and so this transaction.
+   */
+  get siteIdentity(): SiteIdentity {
+    return this.identity;
+  }
 
   /**
    * The handle, for the read-only archive queries in `server/archive-rows.ts`.
@@ -949,10 +972,14 @@ export class Store {
    * @param pastDays the rotation to write history down from, for a caller whose
    *   archive does not come out of this database. `server/index.ts`'s does, so
    *   it opens the store bare and calls {@link pinPastDays} once it has one.
+   * @param options see {@link StoreOptions}.
    */
-  constructor(path: string, pastDays?: PastDays) {
+  constructor(path: string, pastDays?: PastDays, options: StoreOptions = {}) {
     mkdirSync(dirname(path), { recursive: true });
     this.db = new Database(path, { create: true });
+    // First, before anything that can take a lock — switching to WAL is itself
+    // a write on a new file. See STORE_BUSY_TIMEOUT_MS for why there is a wait.
+    this.db.exec(`PRAGMA busy_timeout = ${STORE_BUSY_TIMEOUT_MS}`);
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.db.run(SCHEMA);
@@ -990,6 +1017,13 @@ export class Store {
       // accepted under attack-only scoring, and inventing a requirement for it
       // now would hold later players to a bar its author never cleared. NULL is
       // the honest answer: nothing was decided.
+    );
+    this.addMissingColumn(
+      "rush_runs",
+      "ticket_id",
+      "TEXT",
+      // No backfill: the old row did not remember which signed ticket filed
+      // it, and a guessed identity could credit a different device's rush.
     );
     this.addMissingColumn(
       "day_rush",
@@ -1039,6 +1073,12 @@ export class Store {
     // whatever their dailies earned them, which is the honest floor rather than
     // a guess.
     this.backfillClears();
+    // Additive only — two nullable columns and two new tables — so code from
+    // before it still runs on the database it leaves behind. Keys every player
+    // and every server already on file, which the site needs before it can
+    // publish a single row by anything but a Discord id.
+    migrateSiteIdentity(this.db, options.timeZone);
+    this.identity = new SiteIdentity(this.db, options.timeZone);
     // Last, because it writes rows rather than shapes, and it must find every
     // table it touches already built.
     if (pastDays) this.pinPastDays(pastDays);
@@ -1095,12 +1135,13 @@ export class Store {
     if (this.db.query<{ one: number }, []>("SELECT 1 AS one FROM day_puzzles LIMIT 1").get()) {
       return;
     }
+    // IMMEDIATE: it reads the runs before it writes. See STORE_BUSY_TIMEOUT_MS.
     this.db.transaction(() => {
       this.pinDaysAlreadyPlayed();
       for (let day = 1; day <= pastDays.throughDay; day++) {
         this.insertDay(day, pastDays.puzzleIdsFor(day));
       }
-    })();
+    }).immediate();
   }
 
   /**
@@ -1480,11 +1521,12 @@ export class Store {
   }
 
   /**
-   * Records that a player solved a puzzle. Idempotent by design, not by luck.
+   * Records a solve once per attempt when its caller supplies a receipt.
    *
    * Called from all three places a solve can happen — the daily submit, each
-   * puzzle a rush solved, and a practice run — so it is written far more often
-   * than it changes anything. `first_at` survives every re-solve, because "when
+   * puzzle a rush solved, and a practice run. Separate solves still increase
+   * `times`; a retry of the same receipt changes nothing. Callers without a
+   * receipt retain the legacy behaviour. `first_at` survives every re-solve, because "when
    * did you first crack this" is the fact worth keeping and the upsert would
    * otherwise quietly move it every time somebody replayed a favourite.
    *
@@ -1497,28 +1539,40 @@ export class Store {
     puzzleId: number;
     durationMs: number;
     player?: PlayerProfile;
+    /** Namespaced by the route: practice UUID, daily slot, or signed rush ticket. */
+    attemptId?: string;
   }): void {
     // `puzzle_clears.player_id` is `NOT NULL REFERENCES players(id)` and foreign
-    // keys are on, so a player this box has never written throws — which the
-    // rush and the practice route both can, since neither writes a `players`
-    // row of its own. Every other write path here upserts first;
+    // keys are on, so a player this box has never written throws. Every route
+    // that files a clear — the daily, the rush and the practice route — passes
+    // `player` for that reason, and every other write path here upserts first;
     // `recordSubmission` documents the same hazard three methods up.
-    if (entry.player) this.upsertPlayer(entry.player);
-    const now = Date.now();
-    const ms = entry.durationMs > 0 ? entry.durationMs : 0;
-    this.db.run(
-      `INSERT INTO puzzle_clears (player_id, puzzle_id, first_at, last_at, times, best_ms)
-       VALUES (?1, ?2, ?3, ?3, 1, ?4)
-       ON CONFLICT (player_id, puzzle_id) DO UPDATE SET
-         last_at = excluded.last_at,
-         times   = puzzle_clears.times + 1,
-         best_ms = CASE
-           WHEN puzzle_clears.best_ms = 0 THEN excluded.best_ms
-           WHEN excluded.best_ms = 0      THEN puzzle_clears.best_ms
-           ELSE MIN(puzzle_clears.best_ms, excluded.best_ms)
-         END`,
-      [entry.playerId, entry.puzzleId, now, ms],
-    );
+    this.db.transaction(() => {
+      if (entry.player) this.upsertPlayer(entry.player);
+      if (entry.attemptId !== undefined) {
+        const receipt = this.db.run(
+          `INSERT INTO puzzle_clear_attempts (player_id, puzzle_id, attempt_id)
+           VALUES (?1, ?2, ?3) ON CONFLICT DO NOTHING`,
+          [entry.playerId, entry.puzzleId, entry.attemptId],
+        );
+        if (receipt.changes === 0) return;
+      }
+      const now = Date.now();
+      const ms = entry.durationMs > 0 ? entry.durationMs : 0;
+      this.db.run(
+        `INSERT INTO puzzle_clears (player_id, puzzle_id, first_at, last_at, times, best_ms)
+         VALUES (?1, ?2, ?3, ?3, 1, ?4)
+         ON CONFLICT (player_id, puzzle_id) DO UPDATE SET
+           last_at = excluded.last_at,
+           times   = puzzle_clears.times + 1,
+           best_ms = CASE
+             WHEN puzzle_clears.best_ms = 0 THEN excluded.best_ms
+             WHEN excluded.best_ms = 0      THEN puzzle_clears.best_ms
+             ELSE MIN(puzzle_clears.best_ms, excluded.best_ms)
+           END`,
+        [entry.playerId, entry.puzzleId, now, ms],
+      );
+    })();
   }
 
   /**
@@ -1739,6 +1793,66 @@ export class Store {
   }
 
   /**
+   * Every alternate solution on file, newest first, across every puzzle.
+   *
+   * An alternate is `CREDITED AND LIVE`: a line a player found that the game
+   * pays them for — it solved the puzzle, or sent more than it asked — and
+   * that still describes a board that exists. Not `solutionGallery`'s
+   * predicate, which also lets through the maker's own answer and any player
+   * line, credited or not: the gallery is "every way through this board", and
+   * this is "every way somebody found that counts", which is the Discoveries
+   * board's question and so its clause. A voided line keeps its credit there,
+   * but is left out here, because there is nothing left to open it on.
+   *
+   * Unbounded on purpose. The owner asked for every alternate, sortable, and
+   * the sort happens in the browser over the whole set; the table holds a few
+   * hundred credited rows and each row here is a few short columns.
+   *
+   * `json_array_length` counts the pieces where the placements already are,
+   * so the JSON is neither parsed here nor sent.
+   */
+  liveAlternates(): AlternateLine[] {
+    return this.db
+      .query<
+        {
+          solution_id: number;
+          puzzle_id: number;
+          found_at: number;
+          attack: number;
+          clears: string;
+          pieces: number;
+          finder_id: string | null;
+          username: string | null;
+          avatar_url: string | null;
+        },
+        []
+      >(
+        `SELECT s.solution_id, s.puzzle_id, s.found_at, s.attack, s.clears,
+                json_array_length(s.placements) AS pieces,
+                s.found_by AS finder_id, p.username, p.avatar_url
+           FROM puzzle_solutions s
+           LEFT JOIN players p ON p.id = s.found_by
+          WHERE ${CREDITED} AND s.${LIVE}
+          ORDER BY s.found_at DESC, s.solution_id DESC`,
+      )
+      .all()
+      .map((row) => ({
+        solutionId: row.solution_id,
+        puzzleId: row.puzzle_id,
+        foundAt: row.found_at,
+        attack: row.attack,
+        clears: JSON.parse(row.clears) as ClearName[],
+        pieces: row.pieces,
+        // As in `solutionGallery`: a finder whose `players` row is missing
+        // reads as unattributed rather than as a blank name.
+        finder:
+          row.finder_id !== null && row.username !== null
+            ? { id: row.finder_id, username: row.username, avatarUrl: row.avatar_url }
+            : null,
+      }));
+  }
+
+  /**
    * How many distinct lines each puzzle has, and how many miss its goal.
    *
    * Live rows only, for the reason {@link solutionsFor} gives: this is the
@@ -1766,7 +1880,16 @@ export class Store {
     definition: string,
     backfill?: string,
   ): void {
-    const columns = this.db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all();
+    // This metadata is read only at boot. Filling Bun's twenty-statement
+    // query cache with migrations makes later .get() readers uncached, so a
+    // reader can outlive close() and keep another connection from leaving WAL.
+    const metadata = this.db.prepare<{ name: string }, []>(`PRAGMA table_info(${table})`);
+    let columns: { name: string }[];
+    try {
+      columns = metadata.all();
+    } finally {
+      metadata.finalize();
+    }
     if (columns.some((c) => c.name === column)) return;
     this.db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     if (backfill) this.db.run(backfill);
@@ -1776,17 +1899,24 @@ export class Store {
     this.db.close();
   }
 
+  /**
+   * Writes a player's name and avatar as Discord last gave them.
+   *
+   * A new player is given their site key here, on first write, so nobody is
+   * ever on file without one. An existing player keeps theirs, and keeps their
+   * `site_hidden` choice: the conflict clause names only the three columns
+   * Discord owns, so a sign-in can never re-key or un-hide anybody.
+   */
   upsertPlayer(player: PlayerProfile): void {
-    this.db
-      .query(
-        `INSERT INTO players (id, username, avatar_url, updated_at)
-         VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT(id) DO UPDATE SET
-           username = excluded.username,
-           avatar_url = excluded.avatar_url,
-           updated_at = excluded.updated_at`,
-      )
-      .run(player.id, player.username, player.avatarUrl, Date.now());
+    const upsert = this.db.query(
+      `INSERT INTO players (id, username, avatar_url, updated_at, public_key)
+       VALUES (?1, ?2, ?3, ?4, ?5)
+       ON CONFLICT(id) DO UPDATE SET
+         username = excluded.username,
+         avatar_url = excluded.avatar_url,
+         updated_at = excluded.updated_at`,
+    );
+    withFreshKey((key) => upsert.run(player.id, player.username, player.avatarUrl, Date.now(), key));
   }
 
   /**
@@ -1806,6 +1936,7 @@ export class Store {
     result: RunResult,
   ): { run: StoredRun; isFirst: boolean } {
     this.upsertPlayer(player);
+    this.identity.ensureGuild(guildId);
     const changes = this.db
       .query(
         `INSERT INTO runs (day, player_id, guild_id, puzzle_id, solved, attack,
@@ -2234,20 +2365,24 @@ export class Store {
    * opening rush after rush and keeping the best. Practice runs never reach
    * here at all.
    *
-   * @returns the rush now on file, which may be an earlier one.
+   * @returns the rush now on file, which may be an earlier one. `isFirst` is
+   * true for the accepted ticket on every retry; a different ticket is false.
+   * Without a ticket id, legacy callers retain insert-only `isFirst`.
    */
   recordRushRun(
     day: number,
     player: PlayerProfile,
     guildId: string | null,
     result: RushResult,
+    ticketId?: string,
   ): { run: StoredRushRun; isFirst: boolean } {
     this.upsertPlayer(player);
+    this.identity.ensureGuild(guildId);
     const changes = this.db
       .query(
         `INSERT INTO rush_runs (day, player_id, guild_id, solved, attempted,
-                                skips_used, time_to_last_ms, elapsed_ms, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                                skips_used, time_to_last_ms, elapsed_ms, created_at, ticket_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(day, player_id) DO NOTHING`,
       )
       .run(
@@ -2260,11 +2395,25 @@ export class Store {
         result.timeToLastSolveMs,
         result.elapsedMs,
         Date.now(),
+        ticketId ?? null,
       );
 
     const run = this.rushRunFor(day, player.id);
     if (!run) throw new Error("Rush run vanished immediately after being written");
-    return { run, isFirst: changes.changes > 0 };
+    let isFirst = changes.changes > 0;
+    if (ticketId !== undefined) {
+      // Explicitly finalized even if Bun's query cache is full: the ticket
+      // lookup must not leave a read cursor behind the next write or close.
+      const receipt = this.db.prepare<{ ticket_id: string | null }, [number, string]>(
+        "SELECT ticket_id FROM rush_runs WHERE day = ?1 AND player_id = ?2",
+      );
+      try {
+        isFirst ||= receipt.get(day, player.id)?.ticket_id === ticketId;
+      } finally {
+        receipt.finalize();
+      }
+    }
+    return { run, isFirst };
   }
 
   rushRunFor(day: number, playerId: string): StoredRushRun | null {

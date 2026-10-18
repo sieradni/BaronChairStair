@@ -1,10 +1,99 @@
 {
-  "$comment": "The project's version and its player-facing release notes. Newest first; order in this list IS the version order. Read by client/changelog.py — the bot's /puzzle announcement. Adding a release means putting it at the top. Keep `changes` to things a player can see.",
+  "$comment": "The project's version and its player-facing release notes. Newest first; order in this list IS the version order. Read by client/changelog.py for /puzzle changelog, requested privately. Adding a release means putting it at the top. Keep `changes` to things a player can see.",
   "releases": [
+    {
+      "version": "beta 0.25",
+      "changes": [
+        "**Board touch controls recover cleanly when a gesture is interrupted.** If the app loses a finger mid-drag or is backgrounded, the piece and touch state reset; the next tap, drag or hold works normally, including after restarting or reopening a puzzle. On iPhone, the board also suppresses the system's magnified loupe during a tap-and-hold while keeping the game's hold gesture."
+      ]
+    },
+    {
+      "version": "beta 0.24",
+      "changes": [
+        "**A dropped duel connection during a server handover now ends the match without a winner.** The other player is told the server is updating. Using the Leave command still forfeits the match.",
+        "**Retrying a practice or rush hand-in after a lost reply counts each solved puzzle once.** A rush retry also reports whether that run earned the day's ranked result, even if another device handed in a rush while it was reconnecting.",
+        "**Update ready now follows the client bundle when it is rebuilt.** The server notices the new bundle within two seconds when answering requests, and newly opened pages no longer keep offering a reload for the bundle they already have."
+      ]
+    },
+    {
+      "version": "beta 0.23",
+      "changes": [
+        "**A hand-in now retries when the connection drops partway through the server's reply**, as well as before the reply starts. Daily sheets, rushes and practice clears can recover from that interruption instead of failing at once."
+      ]
+    },
+    {
+      "version": "beta 0.22",
+      "changes": [
+        "**Opening an alternate solution now follows your latest choice.** Leaving Explore to play another puzzle keeps you there even if the old solution takes a while to load, and choosing another line opens the one you picked last."
+      ]
+    },
+    {
+      "version": "beta 0.21",
+      "changes": [
+        "**Finishing a puzzle while the server restarts no longer loses it.** A daily sheet or a rush handed in at that moment says **Reconnecting…** and tries again for up to about fifteen seconds, instead of failing at once. A practice clear tries again the same way, without the message.",
+        "**1v1 says when the server is updating** and asks you to open the lobby again, instead of only saying the connection closed. After any dropped duel connection, **Duel** works again straight away.",
+        "**An \"Update ready\" chip appears in the header when a new version of the activity is out.** Reload when you're done: it never shows in the middle of a run, a rush or a duel, and it never reloads by itself.",
+        "**A sheet you finish after the daily reset is no longer judged against the new day's puzzle.** The activity says that day is over and loads today's puzzles.",
+        "**A bot command sent while the bot is finishing others before a restart** now gets \"Restarting — try again in a few seconds.\" instead of no answer. While the bot is fully down, between the old one closing and the new one connecting, Discord still says the application did not respond."
+      ]
+    },
+    {
+      "version": "beta 0.20",
+      "changes": [
+        "**Explore has a new tab, Alternate solutions**: every other way players have solved the club's puzzles, in one list. Sort by date found, difficulty, puzzle name or number, attack or pieces, either way round, and open any line on the board. A line on a puzzle you have not solved yet is listed but stays locked — no board, no attack, no clears — until you solve it yourself.",
+        "**db.tetrisatuci.org has an Alternates page** with the same list and sorts, and a link from each line straight to it on its puzzle's page. Each line now shows the day it was found, never the time and never who found it. On a day only one player solved a puzzle, that day can point at them."
+      ]
+    },
+    {
+      "version": "beta 0.19",
+      "changes": [
+        "**Every line you find now lands in the puzzle's Solutions**: a puzzle from Explore, and a replay of a daily you have already solved (**Play again**), as well as the daily itself. Until now only the daily run reached the Solutions menu, so solving a puzzle another way afterwards left no trace. A new line found this way also counts on the Discoveries board."
+      ]
+    },
+    {
+      "version": "beta 0.18",
+      "changes": [
+        "**Reopening the activity now asks Discord to reuse your existing permission approval.** The sign-in still verifies your identity and server. First-time access, changed permissions or a revoked approval can still show the consent screen."
+      ]
+    },
+    {
+      "version": "beta 0.17",
+      "changes": [
+        "**Release notes now appear only when you ask.** Use `/puzzle play` to open the activity without posting a changelog to the channel. Use `/puzzle changelog` to see the five most recent changes privately, or set `count` from 1 to 20."
+      ]
+    },
+    {
+      "version": "beta 0.16",
+      "changes": [
+        "**`/puzzle` now posts a short message and the activity link.** The daily puzzle summary, difficulty tiers, solve count and streak reminder are gone from its Discord reply. Open the activity to see today's puzzles."
+      ]
+    },
+    {
+      "version": "beta 0.15",
+      "changes": [
+        "**The archive now has a Players table and a recent-solves feed.** Sort players by days solved, best streak, puzzles cleared, lines found or best rush; search by name and narrow to a server. Each profile shows per-tier solve rates and times, a calendar and puzzles cleared. The Solves page lists daily solves by tier, server and puzzle. Players who choose to hide still appear only as \"a player\" and have no profile.",
+        "**To leave yourself off the site**, open the activity's Settings → On the web and turn on **Hide me on db.tetrisatuci.org**. Your results there then read \"a player\", within a few minutes, and you can turn it off again whenever you like. The game's own boards are unchanged."
+      ]
+    },
+    {
+      "version": "beta 0.14",
+      "changes": [
+        "**Anyone can run `/archive sync` now**, not only officers — it pulls new puzzles in from the club's sheet and makes them playable. It runs at most once every 10 minutes, shared by every server. Ask too soon and the bot tells you, privately, when the last sync started and when the next one can.",
+        "The ten-minute wait still holds if the bot's clock moves backwards and its database cannot save the new sync start."
+      ]
+    },
+    {
+      "version": "beta 0.13",
+      "changes": [
+        "**db.tetrisatuci.org now shows how every finished day went**: each Discord server's daily boards, tier by tier, and rush board; the all-time boards, Discoveries among them; each puzzle's hand-ins, solves and times; and a page for each player with their solved days, streaks, best rush and lines found. Players appear by the name the game shows, and servers by their Discord name once somebody signs in from there. Today is never shown. The game keeps its own leaderboards, profile and solutions.",
+        "**New setting: Hide me on db.tetrisatuci.org**, under Settings → On the web. With it on, your results on the site say \"a player\" and you have no page there. The site catches up within a few minutes, and you can turn it off at any time. It hides you on the site only: the game's boards still show you, and a copy of the site saved before you turned it on keeps what it had.",
+        "**Players' alternate lines are now public on db.tetrisatuci.org**, on each puzzle's page, for finished days, with no name on them. Beta 0.3 said a puzzle you had not solved kept its answers to themselves; on the site that is no longer true, so open a puzzle's answers there only when you want them. In the game nothing changes: a puzzle's solutions still open once you have solved it."
+      ]
+    },
     {
       "version": "beta 0.12",
       "changes": [
-        "**Board touch controls recover cleanly when a gesture is interrupted.** If the app loses a finger mid-drag or is backgrounded, the piece and touch state reset; the next tap, drag or hold works normally, including after restarting or reopening a puzzle. On iPhone, the board also suppresses the system's magnified loupe during a tap-and-hold while keeping the game's hold gesture."
+        "**The club's puzzle archive is on the web at https://db.tetrisatuci.org** — every club puzzle the daily deals from, with its board, to search by title, author, set, difficulty or length, no sign-in needed. Open one to step through its maker's answer, which stays hidden until you press **Show the answer**. Each finished day is listed too, with the puzzles it dealt (never today's), and the whole archive downloads as one SQLite file. Puzzles written by players are not listed there."
       ]
     },
     {
@@ -17,7 +106,7 @@
       "version": "beta 0.10",
       "changes": [
         "**A flick slams, and a placement waits to be locked.** A fast, straight-down flick now hard-drops the piece from the seat it showed when the stroke began — the slam is one command, and a beat of stillness ends it: drag to a seat, rest a moment, and the drag becomes a placement there rather than a flick anywhere. A placement then locks only after the piece rests for about three quarters of a second with nobody touching the screen — the wait counts against your clock, like any other pause. A ring shows the wait; putting a hand back on the piece holds it; and any key press — a hard drop, a turn, an undo — cancels the wait and plays the falling piece itself, exactly as the keyboard always plays. Tapping a piece you have parked turns it where it sits, and taking a placement back leaves the piece and its preview turning together. A stroke that begins with the piece past the board's edge is not a slam — nothing is shown there to drop — so the piece resets on the release, exactly as a drag released off the board does. The same gestures work under a mouse as under a finger.",
-        "**Dragging on the play screen no longer selects text.** A drifting finger can no longer highlight the board mid-gesture; building, browsing and reading still select as before."
+        "**The page no longer highlights text on touch unless it is meant to be read.** A drifting finger or a long-press can no longer select anything on the play screen — board, HUD, header, the puzzle-title strip, toast messages — and the same goes for the rest of the page: one rule now keeps every surface gesture-clean instead of each surface asking its own way out. What still selects is what exists to be read and copied — the goal sentence, solution walkthroughs, the settings sheet — and anything you type into keeps its caret and its text."
       ]
     },
     {

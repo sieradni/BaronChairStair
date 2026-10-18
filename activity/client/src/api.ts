@@ -4,6 +4,12 @@
  * Inside Discord every request has to travel through the activity proxy, which
  * expects a `/.proxy` prefix. That is the only difference between running in
  * Discord and running on localhost, so it is handled once, here.
+ *
+ * Two things ride along on every request without the caller asking: the
+ * server's build is read off each response ({@link Api.onServerBuild}), and
+ * the three hand-ins — the daily filing, the rush hand-in and the practice
+ * clear — ask again through a restart ({@link withHandInRetries}). Nothing
+ * else retries; every other call behaves exactly as it always did.
  */
 
 import type { ProfileStats } from "./ui/profile";
@@ -11,6 +17,8 @@ import type { DailyTier } from "@shared/daily";
 import type { Handling } from "@shared/tetris/handling";
 import type { InputEvent } from "@shared/tetris/verify";
 import type { ClearName, Mino, PuzzlePrompt, RowCode, SolutionStep } from "@shared/puzzle";
+import { BUILD_ID_HEADER } from "@shared/runtime-status";
+import { isBuildId } from "./build-id";
 
 export interface PlayerProfile {
   readonly id: string;
@@ -84,6 +92,31 @@ export interface GalleryLine {
   readonly finder: PlayerProfile | null;
   readonly foundAt: number;
   readonly solvedStrict: boolean;
+}
+
+/**
+ * One alternate solution, as Explore's "Alternate solutions" tab lists it.
+ * Mirrors `AlternateRow` in `server/alternates.ts`, which says why each field
+ * is what it is.
+ *
+ * `locked` is "you have not solved this puzzle": the server then sends
+ * `attack`, `pieces` and `clears` as null, and the row must say "solve it
+ * first" rather than print them. A puzzle the reader may not see at all —
+ * today's unsolved tier — is simply not in the list.
+ */
+export interface AlternateRow {
+  readonly solutionId: number;
+  readonly puzzleId: number;
+  readonly title: string;
+  /** Null when the puzzle is unrated. */
+  readonly difficulty: number | null;
+  readonly set: string | null;
+  readonly finder: PlayerProfile | null;
+  readonly foundAt: number;
+  readonly locked: boolean;
+  readonly attack: number | null;
+  readonly pieces: number | null;
+  readonly clears: readonly ClearName[] | null;
 }
 
 /**
@@ -267,6 +300,28 @@ export interface PuzzleSubmitResponse {
   };
 }
 
+/**
+ * Where the signed-in player stands on db.tetrisatuci.org, as the game's server
+ * reads it: `GET /api/site-visibility`, and the answer to every
+ * `PUT /api/site-visibility`.
+ *
+ * `hidden` is only the player's own choice. `playerKey` is the site's name for
+ * them, and it is null whenever the site would not give them a page — hidden,
+ * a guest, not yet keyed, or a username the site refuses to print. The game
+ * reads only `hidden` today; the keys are kept so links to the site can return
+ * without a server change.
+ * `hasFinishedDay` says whether that page exists yet: the site builds it only
+ * from finished days, so a player whose every result is from today has a key
+ * and no page. `serverKey` is the site's name for the server this session
+ * signed in from, or null outside one.
+ */
+export interface SiteVisibility {
+  readonly hidden: boolean;
+  readonly playerKey: string | null;
+  readonly hasFinishedDay: boolean;
+  readonly serverKey: string | null;
+}
+
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
@@ -274,13 +329,186 @@ export class ApiError extends Error {
   }
 }
 
+// ── Hand-ins that ride out a restart ─────────────────────────────────────────
+
+/**
+ * How long to wait before each retry of a hand-in, in milliseconds: about
+ * fifteen seconds in all, after which the failure is the player's to see.
+ *
+ * Short first, because the common case is a restart that is already over —
+ * a same-port handover leaves a gap of milliseconds, and the first retry half
+ * a second later lands on the new process. Longer after, for a cold restart
+ * that has to migrate the database before it listens. Capped at four seconds
+ * so the player is never staring at "Reconnecting…" for long between tries.
+ */
+export const HAND_IN_RETRY_DELAYS_MS: readonly number[] = [500, 1_000, 2_000, 3_000, 4_000, 4_000];
+
+/**
+ * Whether a failed hand-in is worth sending again.
+ *
+ * Only when nobody answered: 0 is a connection that never completed (the
+ * process was down), and 502, 503 and 504 are a proxy — cloudflared, nginx,
+ * Discord's own — answering for a server that was not there. Everything else
+ * is the server's considered answer. A 4xx cannot change by asking again, and
+ * a 500 is a bug, where six retries are six copies of one log line and fifteen
+ * seconds of "Reconnecting…" before the player learns what the first said.
+ */
+export function isRetryableStatus(status: number): boolean {
+  return status === 0 || status === 502 || status === 503 || status === 504;
+}
+
+/** What a hand-in's caller hears about a retry it is about to make. */
+export interface RetryNotice {
+  /** The attempt about to be made: 2 is the first retry. */
+  readonly attempt: number;
+  /** How long until it is sent. */
+  readonly delayMs: number;
+  /** Why the last one failed: 0 for no connection, else the proxy's status. */
+  readonly status: number;
+}
+
+export interface HandInOptions {
+  /**
+   * Epoch ms, on this page's clock, after which no attempt is started. The
+   * last wait is cut short to land on it rather than skipped, because the
+   * one case with a deadline — the rush — loses everything if it gives up a
+   * second early.
+   */
+  readonly deadline?: number;
+  /** Told before each wait, so the screen can say "Reconnecting…". */
+  readonly onRetrying?: (notice: RetryNotice) => void;
+}
+
+/** Time, as the retries see it. A seam so tests can run fifteen seconds of backoff in none. */
+export interface RetryClock {
+  now(): number;
+  sleep(ms: number): Promise<void>;
+}
+
+const SYSTEM_CLOCK: RetryClock = {
+  now: () => Date.now(),
+  sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
+};
+
+/**
+ * How long to wait before the next attempt, or null to give up: past the
+ * schedule, or out of time.
+ */
+function nextWait(retry: number, deadline: number | undefined, now: number): number | null {
+  const delay = HAND_IN_RETRY_DELAYS_MS[retry];
+  if (delay === undefined) return null;
+  if (deadline === undefined) return delay;
+  const left = deadline - now;
+  return left > 0 ? Math.min(delay, left) : null;
+}
+
+/**
+ * Sends a hand-in, and sends it again while the server is restarting.
+ *
+ * Safe because all three hand-in routes already are: the daily filing upserts
+ * on (day, player, tier), a rush is first-write-wins on (day, player), and a
+ * practice clear only counts up. A retry whose first attempt landed and lost
+ * its answer files nothing new. The caller sends the same request each time —
+ * `send` is called afresh, but over a body serialised once.
+ *
+ * Throws the last failure once it gives up, or the first one that is not
+ * worth retrying, unchanged — so a caller's `catch` reads exactly what it did
+ * before this existed.
+ */
+export async function withHandInRetries<T>(
+  send: () => Promise<T>,
+  options: HandInOptions = {},
+  clock: RetryClock = SYSTEM_CLOCK,
+): Promise<T> {
+  for (let retry = 0; ; retry += 1) {
+    try {
+      return await send();
+    } catch (error) {
+      if (!(error instanceof ApiError) || !isRetryableStatus(error.status)) throw error;
+      const wait = nextWait(retry, options.deadline, clock.now());
+      if (wait === null) throw error;
+      options.onRetrying?.({ attempt: retry + 2, delayMs: wait, status: error.status });
+      await clock.sleep(wait);
+    }
+  }
+}
+
+/**
+ * The status a daily filing is refused with when the sheet's day is over.
+ *
+ * The server stamps a run with the day it arrives on, so a sheet solved across
+ * midnight — or a retry that crossed it — used to be replayed against the next
+ * day's puzzle of the same tier. The filing now names its own day, and the
+ * server answers this, with a sentence, when that day is not today.
+ */
+export const DAILY_STALE_STATUS = 409;
+
+/** What the page lends the client: the network and the clock. Tests lend their own. */
+export interface ApiOptions {
+  readonly fetch?: (url: string, init: RequestInit) => Promise<Response>;
+  readonly clock?: RetryClock;
+}
+
 export class Api {
   private token: string | null = null;
+  private latestBuild: string | null = null;
+  private readonly buildListeners = new Set<(buildId: string) => void>();
+  private readonly send: (url: string, init: RequestInit) => Promise<Response>;
+  private readonly clock: RetryClock;
 
-  constructor(private readonly prefix: string) {}
+  constructor(
+    private readonly prefix: string,
+    options: ApiOptions = {},
+  ) {
+    // The global is looked up on each call, as it always was, rather than
+    // captured here once.
+    this.send = options.fetch ?? ((url, init) => fetch(url, init));
+    this.clock = options.clock ?? SYSTEM_CLOCK;
+  }
 
   setToken(token: string | null): void {
     this.token = token;
+  }
+
+  /**
+   * The build the server says it is serving, from the last response that
+   * named one; null until one has.
+   */
+  get serverBuild(): string | null {
+    return this.latestBuild;
+  }
+
+  /**
+   * Hears the server's build whenever it changes, and at once if it is
+   * already known — the first responses arrive during sign-in, before any
+   * screen exists to listen.
+   *
+   * Every change, not just the first: during a same-port handover both
+   * processes answer for a moment, so a page can hear the old id after the
+   * new one. Reporting the latest lets a listener settle on what the server
+   * is serving now rather than on whichever answered first.
+   */
+  onServerBuild(listener: (buildId: string) => void): () => void {
+    this.buildListeners.add(listener);
+    if (this.latestBuild !== null) listener(this.latestBuild);
+    return () => this.buildListeners.delete(listener);
+  }
+
+  /** Reads the build header off any response, an error included. */
+  private noteBuild(response: Response): void {
+    const buildId = response.headers.get(BUILD_ID_HEADER)?.trim() ?? "";
+    // A value that is not an id is ignored rather than trusted: it goes no
+    // further than a comparison, but a proxy's mangled header must not read
+    // as "a different build" and offer a reload that changes nothing.
+    if (!isBuildId(buildId) || buildId === this.latestBuild) return;
+    this.latestBuild = buildId;
+    for (const listener of this.buildListeners) listener(buildId);
+  }
+
+  /** A POST of `body` that rides out a restart. Serialised once, so every attempt is the same request. */
+  private handIn<T>(path: string, body: unknown, options: HandInOptions | undefined): Promise<T> {
+    const init: RequestInit = { method: "POST", body: JSON.stringify(body) };
+    return withHandInRetries(() => this.request<T>(path, init), options, this.clock);
   }
 
   /**
@@ -304,7 +532,7 @@ export class Api {
 
     let response: Response;
     try {
-      response = await fetch(`${this.prefix}${path}`, { ...init, headers });
+      response = await this.send(`${this.prefix}${path}`, { ...init, headers });
     } catch (cause) {
       // Inside the Discord webview this is where a CORS refusal or a wrong
       // `/.proxy` prefix surfaces, and the browser's own message is the only
@@ -312,6 +540,7 @@ export class Api {
       console.error(`[puzzle] request to ${path} failed`, cause);
       throw new ApiError("Could not reach the server. Check your connection.", 0);
     }
+    this.noteBuild(response);
 
     if (!response.ok) {
       const detail = await response
@@ -320,7 +549,18 @@ export class Api {
         .catch(() => null);
       throw new ApiError(detail ?? `Request failed (${response.status})`, response.status);
     }
-    return (await response.json()) as T;
+    // Fetch resolves once the headers arrive. The connection can still fail
+    // while reading a successful response, so that read belongs to the same
+    // retryable transport failure as fetch itself. Parse only after it has
+    // finished: malformed JSON is a server fault, not a connection to retry.
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (cause) {
+      console.error(`[puzzle] response from ${path} failed`, cause);
+      throw new ApiError("Could not reach the server. Check your connection.", 0);
+    }
+    return JSON.parse(text) as T;
   }
 
   config(): Promise<{ clientId: string; allowGuestPlay: boolean }> {
@@ -340,15 +580,24 @@ export class Api {
     return this.request("/api/daily");
   }
 
-  submitRun(body: {
-    /** Which of the day's tiers this log was played on. */
-    tier: DailyTier;
-    handling: unknown;
-    events: unknown;
-    resets: number;
-    totalMs: number;
-  }): Promise<SubmitResponse> {
-    return this.request("/api/daily/run", { method: "POST", body: JSON.stringify(body) });
+  /**
+   * Files a daily run. Rides out a restart; refused with
+   * {@link DAILY_STALE_STATUS} when `day` is no longer today.
+   */
+  submitRun(
+    body: {
+      /** Which of the day's tiers this log was played on. */
+      tier: DailyTier;
+      /** The day the sheet was dealt on — not the day it is filed on. */
+      day: number;
+      handling: unknown;
+      events: unknown;
+      resets: number;
+      totalMs: number;
+    },
+    options?: HandInOptions,
+  ): Promise<SubmitResponse> {
+    return this.handIn("/api/daily/run", body, options);
   }
 
   rushRecords(scope: RushScope): Promise<{ scope: RushScope; entries: readonly RushRecord[] }> {
@@ -381,14 +630,21 @@ export class Api {
     });
   }
 
-  submitRush(body: {
-    ticket: string;
-    handling: unknown;
-    segments: readonly { events: unknown }[];
-    timeToLastSolveMs: number;
-    skipsUsed: number;
-  }): Promise<RushSubmitResponse> {
-    return this.request("/api/rush/run", { method: "POST", body: JSON.stringify(body) });
+  /**
+   * Hands a rush in. Rides out a restart, with the same ticket every time,
+   * until `options.deadline` — the moment the server would refuse it anyway.
+   */
+  submitRush(
+    body: {
+      ticket: string;
+      handling: unknown;
+      segments: readonly { events: unknown }[];
+      timeToLastSolveMs: number;
+      skipsUsed: number;
+    },
+    options?: HandInOptions,
+  ): Promise<RushSubmitResponse> {
+    return this.handIn("/api/rush/run", body, options);
   }
 
   /**
@@ -445,6 +701,15 @@ export class Api {
   }
 
   /**
+   * Every alternate solution across the archive, newest first. Lines on a
+   * puzzle this player has not solved come without their content; today's
+   * unsolved tiers are left out. See `AlternateRow`.
+   */
+  alternates(): Promise<{ alternates: readonly AlternateRow[] }> {
+    return this.request("/api/alternates");
+  }
+
+  /**
    * Every way a puzzle has been solved. 403 until this player has solved it
    * themselves, and 403 while it is one of today's unfiled tiers.
    */
@@ -455,19 +720,21 @@ export class Api {
   /**
    * Files a practice solve so it counts towards what this player has cleared.
    *
-   * Unscored, like the run it describes: nothing here reaches a leaderboard, a
-   * streak or the discovery board. The log is sent because the server replays
-   * it — a bare claim would let `puzzle_clears` fill with puzzles nobody played,
+   * Unscored, like the run it describes: nothing here reaches a daily
+   * leaderboard or a streak. The line played is filed like a daily's, so it
+   * reaches the Solutions menu and, if new, the Discoveries board. The log is
+   * sent because the server replays it — a bare claim would let `puzzle_clears` fill with puzzles nobody played,
    * and the Explore ticks and the Archive board both read it as fact.
+   *
+   * Rides out a restart like the other two hand-ins. One receipt is minted per
+   * solve, before retries begin, so a lost reply never counts that solve twice.
    */
   clearPuzzle(
     id: number,
     body: { handling: Handling; events: readonly InputEvent[] },
+    options?: HandInOptions,
   ): Promise<{ solved: boolean; solution: readonly SolutionStep[] | null }> {
-    return this.request(`/api/puzzles/${id}/clear`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
+    return this.handIn(`/api/puzzles/${id}/clear`, { ...body, attemptId: crypto.randomUUID() }, options);
   }
 
   /**
@@ -491,5 +758,29 @@ export class Api {
 
   savePreferences(preferences: unknown): Promise<{ ok: true }> {
     return this.request("/api/prefs", { method: "PUT", body: JSON.stringify({ preferences }) });
+  }
+
+  /**
+   * Whether this player is hidden on db.tetrisatuci.org, and their keys there.
+   * Reads only; the server writes nothing.
+   */
+  siteVisibility(): Promise<SiteVisibility> {
+    return this.request("/api/site-visibility");
+  }
+
+  /**
+   * Hides this player on db.tetrisatuci.org, or shows them again.
+   *
+   * Its own route rather than a field of `savePreferences`, on purpose. The
+   * preferences payload is rebuilt from known fields, the local copy wins on
+   * load, and Reset replaces all of it — any one of which would quietly put a
+   * hidden player's name back on a public site. The answer is the state the
+   * server now holds, and the settings row paints from that and nothing else.
+   */
+  setSiteHidden(hidden: boolean): Promise<SiteVisibility> {
+    return this.request("/api/site-visibility", {
+      method: "PUT",
+      body: JSON.stringify({ hidden }),
+    });
   }
 }

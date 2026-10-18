@@ -23,6 +23,7 @@ Environment (see example.env):
 import logging
 import os
 import sqlite3
+from io import BytesIO
 from urllib.parse import urlparse
 
 import aiohttp
@@ -40,30 +41,10 @@ ACTIVITY_LAUNCH_URL = "https://discord.com/activities/{app_id}"
 
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=8)
 
-# The club's own yellow, so the embed matches tetrisatuci.org and the activity.
-PUZZLE_COLOUR = discord.Colour.from_rgb(0xFC, 0xD7, 0x50)
-
-# The archive's difficulty is a loose vibe scale, so it is shown as a band.
-GRADE_BANDS = (
-    (2, "I · gentle"),
-    (4, "II · steady"),
-    (6, "III · firm"),
-    (8, "IV · hard"),
-    (10, "V · severe"),
-)
-
-
 # Lent by discord_bot at boot so /puzzle can note where it announced the
 # day. Left as None when nothing wired it up: this module stays importable on
 # its own, and a missing recap must never stop the commands working.
 recap_db: "sqlite3.Connection | None" = None
-#: The same file, set separately.
-#:
-#: Not `recap_db` reused. That one is assigned inside the try that creates the
-#: recap's table, so a recap failure would switch version announcements off too
-#: — two unrelated features sharing one failure, and a boot log pointing at the
-#: wrong one. Each is set only if its own table was made.
-version_db: "sqlite3.Connection | None" = None
 
 
 def _app_id() -> str:
@@ -72,15 +53,6 @@ def _app_id() -> str:
 
 def _api_base() -> str:
     return os.environ.get("PUZZLE_API", "").rstrip("/")
-
-
-def _grade(difficulty: float) -> str:
-    if difficulty <= 0:
-        return "ungraded"
-    for ceiling, label in GRADE_BANDS:
-        if difficulty <= ceiling:
-            return label
-    return "VI · brutal"
 
 
 def _not_configured(missing: str) -> str:
@@ -134,17 +106,14 @@ async def _get(path: str, *, api_key: str | None = None) -> dict:
             "Couldn't reach the puzzle server. Try again in a minute.") from exc
 
 
-# One command, not a group.
-#
-# There were four: play, standings, rush and help. Discord will not let a
-# command be both invocable and a group, so `/puzzle` being a thing you can
-# type at all means the subcommands cannot exist — and they should not. Three
-# of them rendered in Discord what the activity itself now shows on its own
-# front screen, each in its own embed, each a second place for a board to be
-# wrong. The one job left here is the one Discord is actually for: announcing
-# the day in a channel, with a way in.
-@app_commands.command(
-    name="puzzle",
+puzzle = app_commands.Group(
+    name="puzzle", description="Open the daily puzzle or read recent changes.")
+
+
+# Discord requires subcommands once a command becomes a group. The launch
+# keeps its short public reply under /puzzle play; notes are requested privately.
+@puzzle.command(
+    name="play",
     description="Open the daily Tetris puzzle.")
 async def puzzle_command(interaction: discord.Interaction):
     app_id = _app_id()
@@ -158,87 +127,39 @@ async def puzzle_command(interaction: discord.Interaction):
 
     try:
         today = await _get("/api/today")
-        puzzles = today["puzzles"]
         day = today["day"]
-        solved = today["solvedCount"]
     except (PuzzleServerUnavailable, KeyError, TypeError) as exc:
         log.warning("puzzle /api/today unusable: %s", exc)
         await interaction.followup.send(
             f"**Daily puzzle** is up.\n{launch}\n"
             "_(puzzle details are unavailable right now)_")
-        # The changelog describes *this bot's* version, not the puzzle server's
-        # health, so an unreachable activity is no reason to withhold it. It
-        # used to be announced only on the happy path, which meant the whole of
-        # an outage went unannounced — and a server that cannot reach the
-        # activity is the one most likely to want to know what just changed.
-        await _announce_new_version(interaction)
         return
-    embed = discord.Embed(
-        title=f"Puzzle #{day}",
-        description="Solving any one of today's keeps your streak.",
-        colour=PUZZLE_COLOUR,
-        url=launch)
-    # One field per tier rather than one embed each: they are one day's puzzle,
-    # and splitting them would read as several announcements to scroll past.
-    for entry in puzzles:
-        tier = str(entry.get("tier", "")).title() or "Puzzle"
-        embed.add_field(
-            name=f"{tier} · {_grade(entry.get('difficulty', 0))}",
-            value=(f"{entry.get('goal') or 'Match the reference solution.'}\n"
-                   f"{entry.get('pieces', '?')} pieces · "
-                   f"{entry.get('targetAttack', '?')} attack\n"
-                   f"_“{entry.get('title', 'untitled')}” "
-                   f"by {entry.get('author', 'unknown')}_"),
-            inline=False)
-    # People, not results: the server counts players who solved anything today,
-    # so this does not treble now that a day holds one per tier.
-    embed.add_field(name="Solved by", value=f"{solved} so far", inline=False)
-    # Leaderboards, rush and the rules all live one click away now, so the
-    # embed says where rather than reproducing any of them.
-    embed.set_footer(text="Boards, rush and 1v1 are inside — open it to see them.")
-
     # `wait=True` so the send comes back with a message: without it discord.py
     # returns None and there is nothing for tomorrow's recap to reply to.
     message = await interaction.followup.send(
-        f"Today's puzzle is up. {launch}", embed=embed, wait=True)
+        f"Today's puzzle is up. {launch}", wait=True)
     _remember_play(interaction, day, message)
-    await _announce_new_version(interaction)
 
 
-async def _announce_new_version(interaction: discord.Interaction) -> None:
-    """
-    Tells a server what changed, the first time somebody runs `/puzzle` on a
-    build it has not heard about.
-
-    Here rather than on a timer or at boot because a deploy should not wake a
-    channel up. It rides along behind the thing somebody actually asked for, and
-    only the first person to ask sees it arrive.
-
-    **No pings**, explicitly: this is an announcement nobody opted into, and the
-    text is written by us rather than by a player, so the one thing it must not
-    do is notify a room. `AllowedMentions.none()` rather than trusting the
-    content — a future release note containing `@everyone` would otherwise be a
-    server-wide ping shipped in a string literal.
-
-    Best effort, like `_remember_play`: a server missing a changelog is a
-    nuisance, and raising here would cost the player the puzzle they asked for.
-    The claim happens before the send, so a failure loses that announcement
-    rather than repeating it — see `changelog.claim_announcement`.
-    """
-    if version_db is None or interaction.guild_id is None:
-        return
+@puzzle.command(name="changelog", description="Read the most recent puzzle changes privately.")
+@app_commands.describe(count="Number of recent changes to show (1–20; default 5)")
+async def puzzle_changelog(
+    interaction: discord.Interaction,
+    count: app_commands.Range[int, 1, changelog.MAX_RECENT_CHANGES] = changelog.DEFAULT_RECENT_CHANGES,
+) -> None:
+    """An on-demand, repeatable response without channel posts or seen state."""
+    attachment = None
     try:
-        message = changelog.announcement_for(version_db, interaction.guild_id)
-    except sqlite3.Error:
-        log.warning("could not read the changelog state", exc_info=True)
-        return
-    if not message:
-        return
-    try:
-        await interaction.followup.send(
-            message, allowed_mentions=discord.AllowedMentions.none())
-    except discord.HTTPException:
-        log.warning("could not post the changelog", exc_info=True)
+        message = changelog.format_recent_changes(count)
+        full_text = changelog.format_recent_changes(count, truncate=False)
+        if sum(2 if ord(char) > 0xFFFF else 1 for char in full_text) > changelog.MAX_MESSAGE_CHARS:
+            attachment = discord.File(BytesIO(full_text.encode("utf-8")), filename="puzzle-changelog.txt")
+            message += "\n\nThe full requested changelog is attached."
+    except ValueError:
+        message = f"Choose a number of changes between 1 and {changelog.MAX_RECENT_CHANGES}."
+    options = {"file": attachment} if attachment else {}
+    await interaction.response.send_message(
+        message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none(), **options)
 
 
 def _remember_play(interaction: discord.Interaction, day: int,

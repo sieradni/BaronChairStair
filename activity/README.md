@@ -1,9 +1,9 @@
 # Puzzle — the daily Tetris puzzle
 
-Three modern Tetris puzzles a day — an easy, a medium and a hard — played
-inside Discord as an
+Four modern Tetris puzzles a day — an easy, a medium, a hard and an extreme —
+played inside Discord as an
 [Activity](https://discord.com/developers/docs/activities/overview). Everyone
-in the server gets the same three, they change at midnight, solving any one of
+in the server gets the same four, they change at midnight, solving any one of
 them keeps a streak, and the result pastes into a channel as a spoiler-light
 grid. Alongside them run puzzle rush (five minutes, one sequence everyone
 shares, as many puzzles as you can solve), 1v1 duels, and a builder for writing
@@ -16,9 +16,9 @@ real TETR.IO engine to learn what it actually sends, and uses that number as the
 day's target.
 
 ```
-tmp/*.csv ──► tools/build-puzzles.ts ──┬─► data/puzzles.json   ──► server ──► browser
-                                       └─► data/solutions.json ──► server (reveals only)
-   archive        decode + replay            138 puzzles       daily     the game
+../tmp/*.csv ──► tools/build-puzzles.ts ──┬─► data/puzzles.json   ──► server ──► browser
+                                          └─► data/solutions.json ──► server (reveals only)
+   archive           decode + replay            138 puzzles       daily     the game
 ```
 
 ## What is in here
@@ -30,18 +30,21 @@ tmp/*.csv ──► tools/build-puzzles.ts ──┬─► data/puzzles.json   �
 | `shared/puzzle.ts` | The puzzle data model, shared by the build, the server, and the client |
 | `shared/daily.ts` | Which puzzle belongs to which day |
 | `shared/rush.ts` | Which puzzles a rush deals out, and in what order |
-| `shared/rng.ts` | Seeded shuffling, so both of those derive rather than store |
+| `shared/rng.ts` | Seeded shuffling for both of those. A day's puzzles are derived once, then pinned in SQLite; the rush is re-derived from each run's seed, over the day's pinned pool |
 | `tools/` | The build pipeline and its diagnostics |
 | `server/` | Hono + Bun: OAuth exchange, daily puzzle, puzzle rush, run verification, SQLite |
 | `client/` | The activity itself — canvas playfield and interface |
 | `client/public/fonts/` | Archivo and DM Mono, self-hosted (see below) |
+| `puzzledb/` | db.tetrisatuci.org: a read-only public view of the archive and of how every finished day went, as its own process and build — see [its README](puzzledb/README.md) |
 
 ## Running it locally
 
 ```sh
 bun install
-bun run puzzles       # tmp/*.csv -> data/puzzles.json (committed)
-                      #            -> data/solutions.json (never committed)
+bun run puzzles       # ../tmp/*.csv -> data/puzzles.json (committed)
+                      #               -> data/solutions.json (never committed)
+                      # needs the club's sheets in the repo root's tmp/;
+                      # skip it to play the committed data/puzzles.json
 bun run build         # client -> dist/
 bun run dev           # server on :3001, serving dist/
 ```
@@ -96,7 +99,11 @@ reaches. So it is a proof about a player on the default handling, which is nearl
 everybody, and not about one who has turned it down. `--seconds` raises the
 per-puzzle budget, `--only 15,37` narrows it, and `--write` files what it finds
 as `enumerated` rows credited to nobody — which is what stops the first player
-to *play* one of those lines being paid for rediscovering it.
+to *play* one of those lines being paid for rediscovering it. That holds only
+for the server's own database: `--write` opens `DATABASE_PATH` and otherwise
+falls back to `data/puzzles.sqlite`, not the server's `data/daily.sqlite`, so
+on a box that leaves `DATABASE_PATH` unset, set it to the live database or the
+rows land in a file nothing reads.
 
 Its findings agree with the archive where the archive has an opinion: puzzle 15's
 goal text reads "Clear 1 TSD (2 solutions)", written by a person years before any
@@ -104,13 +111,14 @@ of this, and an exhaustive search finds exactly two.
 
 **What the suite can and cannot see.** Most of it needs no browser: the engine,
 the verifier, the routes and the duel referee are all plain data in and plain
-data out. `tests/render.test.ts` adds a document through **happy-dom**, which
-builds a real DOM and cascades real stylesheets, so "which rules apply to this
-element" and "what did this component actually build" are testable — that is
-where the scroll-container and retry-wiring tests live. It is scoped to that one
-file rather than registered as a preload, because `bun test` shares a process
-and the server suite leans on Bun's own `fetch` and `Request`, which a global
-DOM registration would shadow.
+data out. `tests/render.test.ts` and eight other suites add a document through
+**happy-dom**, which builds a real DOM and cascades real stylesheets, so "which
+rules apply to this element" and "what did this component actually build" are
+testable — `render.test.ts` is where the scroll-container and retry-wiring
+tests live. Each file builds its own `Window` and puts the globals back when it
+is done, rather than happy-dom being registered as a preload, because `bun test`
+shares a process and the server suite leans on Bun's own `fetch` and `Request`,
+which a global DOM registration would shadow.
 
 happy-dom does **no layout**. Nothing in the suite can tell you that a card
 overflowed its screen, that a wheel event chained to a parent, or that resizing
@@ -149,20 +157,32 @@ bun run tools/e2e-submit.ts http://localhost:3998
    detects it is running inside Discord; the server accepts both forms, so no
    further configuration is needed.
 6. **Launch it** from the activity picker in any voice channel, or post a link
-   with `/puzzle`.
+   with `/puzzle play`.
 
 The activity asks for two OAuth scopes. `identify` names the player on the
 leaderboard. `guilds` lets the server confirm a player is really in the server
 whose leaderboard they are writing to — without it, the guild is whatever the
 client claims, and anyone could post into any server's standings.
 
+Each launch still performs a fresh SDK authorization-code exchange and
+authentication handshake. The client passes `prompt: "none"` so Discord can
+reuse an existing approval for these scopes rather than requesting consent
+again. First-time players, changed scopes, revoked grants, or a different
+Discord account can still require approval. Access tokens and player sessions
+remain in memory; the game does not cache another account's credentials to
+skip sign-in.
+
+If returning players see the permission screen on every launch, confirm that
+the deployed client bundle includes `prompt: "none"`. Rebuild with
+`bun run build` from `activity/` and follow [the deployment guide](DEPLOY.md);
+pulling code and restarting the server alone leaves the old bundle in place.
+
 ### The bot commands
 
-`client/puzzle_commands.py` adds one command, `/puzzle`, which announces the
-day in a channel with a way in. It used to be a group of four; the other three
-rendered in Discord what the activity now shows on its own front screen, each
-in its own embed, each a second place for a board to be wrong. The bot owns
-none of the game — it reads the activity server so the two can never disagree.
+`client/puzzle_commands.py` registers `/puzzle play`, which posts the activity
+link, and `/puzzle changelog`, which returns recent changes privately on request.
+Puzzle details and boards stay in the activity. The bot reads the day number
+only to remember where tomorrow's recap should reply.
 Set these in the repo-root `.env`:
 
 ```
@@ -171,7 +191,7 @@ PUZZLE_API=https://your-activity-host
 PUZZLE_API_KEY=<same value as BOT_API_KEY in activity/.env>
 ```
 
-Without `PUZZLE_APP_ID` the commands are still registered; they just explain
+Without `PUZZLE_APP_ID` the command is still registered; it just explains
 what is missing.
 
 ## How a run is scored
@@ -216,8 +236,11 @@ arrives after something from a harder one.
 
 ### Discoveries
 
-Every solved daily run is filed as a *solution* — the placements, the log they
-were derived from, and what the engine scored them. A run whose line nobody had
+Every solved daily run, every solve of a puzzle opened from Explore, and every
+replay of a daily the player has already solved (*Play again*) is filed as a
+*solution* — the placements, the log they were derived from, and what the
+engine scored them. All three reach the puzzle's Solutions menu. A rush run files
+none: its segments are scored for the rush alone. A run whose line nobody had
 recorded before is a discovery, and the Discoveries board counts them.
 
 **When two solutions are the same solution** is the whole of it. Placements as
@@ -231,13 +254,17 @@ in a stored flag, so they can be retuned without re-crediting anybody:
 
 - only lines a player actually played — enumerated and reference lines are
   credited to nobody,
-- only lines that met the goal, not merely the attack target,
-- one credit per player per puzzle, however many ways they find to solve it.
+- only lines that solved the puzzle or sent more attack than it asked for, not
+  ones that merely reach the target while missing the goal's clears,
+- every distinct line, several on one puzzle included — the same line found
+  twice, by the same player or another, is still one, and it is the first
+  finder's.
 
-Lines that hit the target attack while missing the required clears are still
-*filed*, and still count for nothing. They are what the review tool's `off-goal`
-badge counts, and they are the clearest evidence a puzzle's condition says less
-than its goal sentence does.
+Lines that hit the target attack exactly while missing the required clears are
+still *filed*, and still count for nothing. The review tool's `off-goal` badge
+counts every line on the puzzle as it stands that missed the clears, past the
+target or not, and those lines are the clearest evidence a puzzle's condition
+says less than its goal sentence does.
 
 **Everyone gets the same sequence on the same day**, for the run that counts,
 which is the only way the board compares like with like. That is the run that goes on the leaderboard,
@@ -274,16 +301,21 @@ the day it was set, because a board that never resets otherwise reads as though
 everything on it happened recently. Only ranked runs are ever stored, so
 practice and replays cannot reach it.
 
-**The sequence is derived, not stored**, from the day number alone — the same
-discipline as the daily rotation, for a stronger reason: the server has to be
-able to re-derive exactly what a player was given in order to check a run it
-never watched. Anything longer than twenty-four pieces is set aside first,
-which excludes exactly one of the 138; it runs to seventy-four, and meeting it
-inside five minutes would not be a puzzle in the rush, it would be the rush.
-The rest are shuffled by the day's seed, the first forty are taken, and only
-then are they sorted by difficulty, so a rush opens gently and ends somewhere
-nobody reaches. Sorting before taking rather than after would hand out the same
-forty easiest puzzles every single day with only their order changing.
+**The sequence is derived, not stored**, from the day's pool and the run's
+seed — the same discipline as the daily rotation, for a stronger reason: the
+server has to be able to re-derive exactly what a player was given in order to
+check a run it never watched. The seed travels in the ticket; the pool is the
+one thing written down, the way `day_puzzles` holds the daily. The first time
+anything asks for a day — today's as the server starts — its rush-eligible
+puzzles and the difficulty each carried go into `day_rush`, so an accepted
+submission or a re-rating cannot move a day's forty under a run in flight.
+Anything longer than twenty-four pieces is set aside first, which excludes
+exactly one of the 138; it runs to seventy-four, and meeting it inside five
+minutes would not be a puzzle in the rush, it would be the rush. The rest are
+shuffled by the run's seed, the first forty are taken, and only then are they
+sorted by rung, so a rush opens gently and ends somewhere nobody reaches.
+Sorting before taking rather than after would hand out the same forty easiest
+puzzles every single day with only their order changing.
 
 Unrated puzzles — `difficulty` 0 in the archive — are sorted as though they
 were 8. Unrated is not the same as easy: the unrated ones ask for things like
@@ -312,14 +344,59 @@ count clamped to what the replay actually left unsolved and to the budget, the
 time never less than the play the server replayed to reach it and never more
 than the run the server timed.
 
+**What that proves, and what it does not.** `GET /api/archive/:id` hands a
+signed-in player the solution to a puzzle they have earned, and no longer to
+one they have not — but the club's answers are still committed to this public
+repository, inside `data/archive/puzzles.sqlite`. The scheme therefore proves
+exactly one thing: that the submitted inputs legally solve those puzzles, in
+that order, inside five minutes the server measured itself. It does not prove a
+human made them, and a scripted client beats it. A fixed sequence per day also
+means whoever plays later knows what is coming — the daily's own trade, forty
+puzzles at a time.
+
+## Explore's alternate solutions
+
+Explore has two tabs. **Puzzles** is the explorer it always was. **Alternate
+solutions** lists every alternate on file, across every puzzle: a line a player
+found that the Discoveries board credits — it solved the puzzle, or sent more
+attack than it asked for — and that still describes the board (`CREDITED AND
+LIVE`, `server/discovery-sql.ts`). Never the maker's own answer, never the batch
+search's lines, never a line on a board an edit has since voided.
+
+It sorts by date found, difficulty, puzzle name, puzzle number, attack or pieces,
+with a button to reverse the direction. The order is `shared/alternate-sort.ts`,
+which db.tetrisatuci.org's Alternates page uses too. Each row says which puzzle,
+who found the line and how long ago; clicking it steps that exact line on the
+board, through the puzzle's own Solutions gallery (or opens the menu, if the line
+has left the gallery since). The list is fetched each time the tab is opened,
+and the tab choice lasts for the session.
+
+It reads `GET /api/alternates` (signed in; under the blanket game limit, like
+`/api/archive`). What a reader is told about each line is decided per row, by
+`alternateRows` in `server/alternates.ts`:
+
+- **Omitted** — a puzzle `maySeeSolution` refuses: one of today's tiers this
+  player has not solved, or a duel round they are in. A shut row would still
+  hint that somebody found another way through the board they are about to be
+  scored on, so it is not listed at all. Lines on a puzzle this box does not
+  have are dropped too.
+- **Locked** — a puzzle this player has not solved. The row carries the puzzle,
+  the finder and the date, and `attack`, `pieces` and `clears` arrive as null:
+  a line's content is the answer, and the profile withholds it under the same
+  rule. The row is shut and says "solve it first".
+- **Open** — a puzzle they have solved: attack, length and clears as well.
+
+Placements are never in the list; opening a line fetches the gallery, behind its
+own gate.
+
 ## The daily recap
 
 `GET /api/recap?guild=<id>&day=<n>` gives the bot everything it needs to look
-back on one finished day in one server: which puzzle it was, that server's
-board, its rush board, and how many consecutive days somebody there has
-solved. Gated on `BOT_API_KEY`, like the other three bot routes. The bot only asks
-when its recap is switched on — `PUZZLE_RECAP=on` in the bot's `.env` — since the
-recap pings every player it names.
+back on one finished day in one server: which puzzle it dealt in each tier,
+that server's board, its rush board, and how many consecutive days somebody
+there has solved. Gated on `BOT_API_KEY`, like the other three bot routes. The
+bot only asks when its recap is switched on — `PUZZLE_RECAP=on` in the bot's
+`.env` — since the recap pings every player it names.
 
 It is a separate route rather than a `?day=` on the boards because a recap
 wants three things about the same day at the same instant, and a board that
@@ -339,6 +416,58 @@ forgiveness would congratulate a server on a run it had just broken.
 The board it returns is capped at a hundred rather than the interactive
 twenty-five, and carries a `total`. Misses sort last, so the smaller cap would
 have quietly deleted exactly the people a recap exists to tease.
+
+## db.tetrisatuci.org, and what the game tells it
+
+The puzzle database site ([`puzzledb/`](puzzledb/README.md)) publishes finished
+days' boards, a page per player and the lines players have found, by reading this
+server's database read-only. It cannot ask the game anything, so the game writes
+down the few things the site needs and cannot work out — in `server/site-identity.ts`,
+run from the `Store`'s constructor:
+
+- **A key for every player and every server**: ten random characters
+  (`players.public_key`, `guilds.public_key`), drawn once and never changed. The site
+  addresses a player's page by it and never by a Discord id. The game draws them,
+  rather than the site deriving them, so that the site holds no secret, and so that
+  the game could link a player to their own page. It does not today: its screens
+  were taken off the site's links, below.
+- **Each server's name**, as Discord gave it at the last sign-in from there. The
+  session route already asks Discord whether the player is in the server they
+  launched from, and the answer carries the name, so recording it costs no new
+  permission. A failure to record it is logged as `[site-identity]` and never stops a
+  sign-in; the session still holds only the server's id. The name is cleaned of
+  control and direction-override characters and clipped to 100 code points.
+- **The game's time zone**, `site_facts('time_zone')`, rewritten at every start:
+  the site cuts some rows by a midnight, and must take the game's.
+- **Whether a player wants to be on the site at all.**
+
+### Hide me on db.tetrisatuci.org
+
+A switch in Settings, under *On the web*. On, the site shows the player's results as
+"a player" and gives them no page; the game's own boards are unchanged. It is
+`players.site_hidden` — NULL never chose, 0 shown, 1 hidden — and deliberately not a
+field of `preferences`: `PUT /api/prefs` rebuilds the stored payload from the fields
+it knows, the local copy wins on load, and Reset replaces every setting, and any one
+of those would quietly un-hide somebody. So Reset never touches it, and the row in
+the sheet is never optimistic: it shows `…` until the server answers, and repaints
+only from the server's answer to a save.
+
+| Route | |
+|---|---|
+| `GET /api/site-visibility` | `{ hidden, playerKey, hasFinishedDay, serverKey }`. Writes nothing — the site rebuilds on any commit, so a read that wrote would rebuild it every time somebody opened Settings |
+| `PUT /api/site-visibility` | Body `{ hidden: true \| false }`; answers the same shape, read back after the write. `400` for anything but a boolean, `403` for a guest, who has no name on the site; twenty saves a minute per caller |
+
+`playerKey` is the player's key only when the site would show them, and null while
+hidden; `hasFinishedDay` says whether their page there exists yet; `serverKey` is the
+session's server. The game reads only `hidden` today. The keys are kept so that links
+to the site can come back without a server change. The site picks a change up within
+about a minute.
+
+The game links out from one place: the setting's *What the site shows*, inside
+Discord through its own `openExternalLink`, which asks before leaving, and in a
+browser as a new tab. Its leaderboards, profile and solutions do not link to the
+site. Players asked to keep browsing those in the activity, so the links added with
+the site were taken off again.
 
 ## 1v1
 
@@ -384,39 +513,58 @@ The opponent is a bar and a score, never a board — a board part-way through a
 puzzle is a partial solution to it, and losing should not come with a hint. The
 archive likewise refuses the answer to a puzzle you are currently duelling on.
 
-**It still cannot prove a human made the log.** The answers are no longer in
-this repository — `data/puzzles.json` carries no solutions and
-`data/solutions.json` is untracked — but the pathfinder that turns a board into
-a keystroke log ships in the client bundle, so a determined player can still
-derive one. The scheme proves a submitted log really solves the puzzle it
+**It still cannot prove a human made the log.** `data/puzzles.json` carries no
+solutions and `data/solutions.json` is untracked, but every club answer is
+committed inside `data/archive/puzzles.sqlite`, which is where a deploy box
+reads them from — and the pathfinder that turns a board into a keystroke log
+ships in the client bundle besides, so a determined player can derive one
+either way. The scheme proves a submitted log really solves the puzzle it
 claims; it cannot prove a person typed it. That is the same trade the daily and
 rush make, and it costs more here, because what a scripted opponent takes is
 somebody's match rather than a place on a board.
 
-**What that proves, and what it does not.** `GET /api/archive/:id` hands a
-signed-in player the solution to a puzzle they have earned, and no longer to
-one they have not — and the answers are no longer sitting in the repository
-either. The scheme therefore proves exactly
-one thing: that the submitted inputs legally solve those puzzles, in that
-order, inside five minutes the server measured itself. It does not prove a
-human made them, and a scripted client beats it. A fixed sequence per day also
-means whoever plays later knows what is coming — the daily's own trade, forty
-puzzles at a time.
+## When the server is updated
+
+A deploy either restarts the server or hands it over to a new one on the same port
+([DEPLOY.md](DEPLOY.md), *Restarts and handovers*). What a player sees:
+
+- **A hand-in waits it out.** Handing in the daily or a rush while the server is away
+  shows "Reconnecting…" and tries again for about fifteen seconds — a rush only as
+  long as its own grace allows — before failing as it used to. A practice clear
+  tries again the same way, without the message. A
+  sheet solved before the daily reset and handed in after it is refused with "That
+  day is over — today's puzzles are new. Open the daily again.", rather than judged
+  against the new day's puzzle.
+- **A duel says why it ended.** A handover sends lobbies away with "The server is
+  updating — open the lobby again" and lets every match finish on the old process; a
+  restart ends everything with "The server restarted, so the duel ended." Either way
+  Duel opens again straight after, which it did not after a dropped connection
+  before.
+- **"Update ready — reload when you're done"** appears in the header once the server
+  answers with a build other than the page's own: `X-Build-Id` on every response,
+  against the id compiled into the page. It never shows during a run, a rush, a duel,
+  a builder test or a hand-in still retrying, and it never reloads by itself.
 
 ## The puzzle builder
 
 Paint a board, say which pieces the solver gets, write down what they are
-aiming for, and take a `b1@…` code away with you. It is behind **Build** on the
-front screen.
+aiming for, and either take a `b1@…` code away with you or send the puzzle to
+the club for review. It is behind **Build** on the front screen.
 
-**The code is the artefact, which is why the screen ends at a text field rather
-than a save button.** The club authors every puzzle on
-[bp.tali.software](https://bp.tali.software) and keeps them in a spreadsheet as
-Blueprint codes, so the only output worth anything is one that site and this
-decoder both read. `shared/blueprint/encode.ts` is the inverse of the decoder
-and writes four opcodes — SetCells, PushBack, SwapHold and Comment. What makes
-it trustworthy is not the four opcodes but the check behind them: all 138
-archived codes decode, re-encode, and decode again to the same page.
+**The code is the artefact for anyone working outside this app, which is why
+the Code panel gives you a text field rather than a save button.** The club
+authors every puzzle on [bp.tali.software](https://bp.tali.software) and keeps
+them in a spreadsheet as Blueprint codes, so the code worth taking away is one
+that site and this decoder both read. `shared/blueprint/encode.ts` is the
+inverse of the decoder and writes four opcodes — SetCells, PushBack, SwapHold
+and Comment. What makes it trustworthy is not the four opcodes but the check
+behind them: all 138 archived codes decode, re-encode, and decode again to the
+same page.
+
+**Submit is the other door.** It files the draft and the run its author played
+on it for an officer to decide — see *Letting an officer at the review queue* —
+because a puzzle nobody has played has no honest target. It needs a Discord
+sign-in, and it stays shut until the draft has been played through Test.
 
 **Two limits, before they are discovered.** A code written here carries no
 active piece, so a reader opens it with the first preview in hand rather than
@@ -453,7 +601,9 @@ ten cells by twenty with row 0 on the floor, which is the shape and the
 direction a rendered frame arrives in — so a test needs no second playfield.
 The palette steps aside and the run is painted into the cells that were being
 clicked on. It is the real engine under the player's own handling, and nothing
-about it is filed or scored. What it tells the author:
+about it is scored. Nor is it filed until the author presses Submit — and then
+the last run they played on this draft is what is sent, to become the puzzle's
+solution and the source of its target. What it tells the author:
 
 - **A solve exists**, because they just played one. That is the question no
   static check can answer, and this screen makes no other claim about
@@ -509,9 +659,9 @@ bun run review-link -- hannah --minutes 5
 ```
 
 It signs a string, prints it and exits — it never opens the database, because
-constructing a `Store` runs the schema and a table rebuild on every
-construction and nothing in this repo sets `busy_timeout`, so a second writer
-against the live WAL file fails instantly rather than waiting. It reads
+constructing a `Store` runs the whole schema and its migrations: writes against
+the live WAL file, contending with the server for its lock, which a `Store` waits
+for only five seconds before failing. It reads
 `REVIEW_SECRET` straight out of the environment for the same kind of reason:
 `server/config.ts` throws at import under `NODE_ENV=production` unless the whole
 production environment is present, which is not a thing a one-off command should
@@ -519,11 +669,13 @@ depend on.
 
 **What the link is worth.** Whoever holds it is the reviewer — it is a bearer
 capability with nothing written down behind it. The link itself lasts fifteen
-minutes, and the page trades it once, in a POST body, for a two-hour token that
-never appears in a URL. Those two windows add up rather than overlap: a link
-spent in its last second still buys a full sitting, so the worst case is fifteen
-minutes plus two hours. Send it in a DM, not a channel. That token is what every
-review call carries, and when it runs out the officer asks for another link.
+minutes unless `--minutes` says otherwise (an hour at most), and the page
+trades it once, in a POST body, for a two-hour token that never appears in a
+URL. Those two windows add up rather than overlap: a link spent in its last
+second still buys a full sitting, so the worst case is the link's own life plus
+two hours — three hours at the outside. Send it in a DM, not a channel. That
+token is what every review call carries, and when it runs out the officer asks
+for another link.
 
 **The trust root is SSH, and the audit column says so.** `<who>` is typed by
 whoever ran the command and lands in `submissions.reviewed_by`. Nothing
@@ -554,16 +706,18 @@ typo in a title is not.
 which locks each stored placement into a board copy and clears full rows
 itself — no engine, no second board renderer. Beside the goal sentence is the
 list of clears the author's solve actually made, because that pairing is the
-only goal check that ever happens: there is no goal checker on the server, and
-most goals are prose. The attack is labelled as the author's own solve rather
-than as a target, since a community target is what a person really did —
-reachable and beatable — where an archive target is the best line a pathfinder
-could find.
+only check a sentence gets once submitted: nothing on the server parses it —
+the clear requirement `GOAL_ENFORCEMENT` governs is read off the author's
+solve, never off the words — and 64 of the archive's 138 goals are prose
+anyway. The attack is labelled as the author's own solve rather than as a
+target, since a community target is what a person really did — reachable and
+beatable — where an archive target is the best line a pathfinder could find.
 
 **The token is held in a variable and nowhere else** — never `localStorage`,
 never `sessionStorage`, never a cookie. A cookie would manufacture CSRF in a
 codebase that has no answer to one: there are no cookies anywhere here, no
-`SameSite` configuration, no CORS middleware and no Origin check, which is
+`SameSite` configuration and no Origin check, and the only CORS is the public
+archive's — `GET` only, under `/api/public`, with no credentials — which is
 exactly why nothing needs a CSRF token today. Authentication is a header a
 browser never attaches by itself, so a cross-site POST arrives unauthenticated
 and Accept and Reject cannot be reached from another origin. The link is taken
@@ -619,7 +773,7 @@ the author ever hears back about a puzzle they wrote. An acceptance needs no
 note because the puzzle turning up in the archive is the message.
 
 **The reviewer's difficulty is the one that counts**, and under full rotation it
-routes: `dailyTierOf` reads it to pick which of the day's three a puzzle can be,
+routes: `dailyTierOf` reads it to pick which of the day's four a puzzle can be,
 and `rushBand` to place it on the ladder. The author's own rating is kept beside
 it as `claimed_difficulty` and is a hint, never a control — a self-rated field
 that routed would hand the person being routed the switch.
@@ -633,7 +787,7 @@ nobody can reach and whose reveal plays a line that does not work. Nothing else
 would catch it: the shape check does not look at solutions and says so.
 
 **Accepted puzzles are ids 100000 and up, allocated at accept.** The club sheet
-runs 1–140 with gaps and keeps allocating, so the band keeps the two allocators
+numbers past 150 and keeps allocating, so the band keeps the two allocators
 from ever having to know about each other; the number comes from the current
 maximum inside the same transaction as the write, so an id is never issued twice
 and never reused. Do not renumber the sheet into the band — the archive refuses
@@ -642,11 +796,17 @@ failure that is otherwise silent and unrecoverable (the archive keys by id, so
 one copy wins every lookup while both stay in the rotation, and `runs.puzzle_id`
 has no foreign key to notice two puzzles' history merging).
 
-**A puzzle becomes playable at the next restart, not at accept.** The archive is
-loaded once at module scope and never reloaded, deliberately: an archive that
-grew mid-day would re-deal a day underneath the players holding its prompt. The
-startup banner says how many of the puzzles came from players, so a restart that
-did not pick one up does not look like a restart that did.
+**A puzzle becomes playable at the next restart or reload, not at accept.**
+Accepting only decides the row; the running archive picks it up when it is
+built again — when the server next starts, or when Discord's `/archive sync`
+(without `dry_run`) asks it to reload in place (`POST /api/bot/reload-archive`),
+which reads accepted puzzles exactly as a boot does. A reload serves a new id at
+once, but today's tiers and rush pool are pinned to the pool they were dealt
+from before the swap, so the puzzle joins the daily rotation from tomorrow and
+a day is never re-dealt underneath the players holding its prompt. The startup
+banner says how many of the puzzles came from players, and a reload's log line
+names every id it added, so a restart or reload that did not pick one up does
+not look like one that did.
 
 **Growing the archive does not move a day anybody has played.** It moves almost
 every one of them in the raw derivation — one extra easy-band puzzle re-deals
@@ -668,7 +828,7 @@ by title, author or number, showing where each came from and which have been
 corrected — and beside it a form for the five fields. Each field that a
 correction has changed shows what its source says underneath, with a Revert of
 its own; `Revert all` puts the whole puzzle back. The list scrolls inside its own
-card rather than growing the page, which is not a detail: 139 rows is three
+card rather than growing the page, which is not a detail: 138 rows is three
 screens, and a list that pushes the form off the bottom makes the officer scroll
 away from the thing they are editing to pick the thing they are editing.
 `tests/review-archive.test.ts` drives all of it, including that the form posts
@@ -728,11 +888,15 @@ are pinned in `day_puzzles` and do not move, which is the same protection an
 accepted puzzle relies on. `tests/puzzle-override.test.ts` proves it, with a
 control showing the untouched derivation really did shift.
 
-**A correction reaches players at the next restart**, like an accepted puzzle
-and for the same reason. The list and PATCH responses are computed from the
-source plus the row on file rather than read off the running archive, so the
-officer sees the result of their own correction immediately and it is the same
-thing the next boot will serve.
+**A correction reaches players at the next restart or reload**, like an
+accepted puzzle and by the same path: `PuzzleArchive.load` lays every
+correction on whenever it builds the archive, at boot and at the in-place
+reload an `/archive sync` asks for. A reload holds back only a puzzle whose
+board, queue, hold, target or requirement changed, and a correction can touch
+none of them. The list and PATCH responses are computed from the source plus
+the row on file rather than read off the running archive, so the officer sees
+the result of their own correction immediately and it is the same thing the
+next boot or reload will serve.
 
 **A correction the server cannot use is ignored, not fatal.** Every rule is
 enforced on the write — the same title, goal and difficulty rules a submission
@@ -796,6 +960,8 @@ Fully rebindable, with TETR.IO handling: DAS, ARR, DCD, SDF, safe lock, DAS
 cancel, 20G movement, and initial rotation/hold. Lock delay is absent rather
 than configurable — see above. Settings are stored locally and
 mirrored to the player's Discord account, so they follow them to another device.
+One switch is not a setting in that sense: *Hide me on db.tetrisatuci.org* lives on
+the server alone, and Reset does not touch it (see above).
 
 **Timings are in milliseconds**, matching the club's own board and every
 handling guide worth reading. The engine works in 60Hz frames, and the
@@ -947,20 +1113,26 @@ are SIL Open Font Licence.
 ## Regenerating the puzzle data
 
 `data/puzzles.json` is committed, so a checkout runs without the spreadsheet.
-`data/solutions.json` is not: an answer key beside its puzzles in a public
-repository is a published answer key. Without it every puzzle still loads,
-plays and scores — only the reveal has nothing to show, which is the right way
-round for the thing that must not leak. Regenerate it with `bun run puzzles`
-against the club's archive.
-When the archive gains puzzles, re-export the sheets into `tmp/` and run:
+`data/solutions.json` is not, but a checkout is not short of answers: every
+one is committed in the tracked archive, `data/archive/puzzles.sqlite`, and
+the server falls back to those for any puzzle this box has no answer of its
+own for — matched by shape rather than id (`server/archive-solutions.ts`). The
+club decided the answers are public, and `/api/public` serves each published
+puzzle's. The startup log says how many puzzles have an answer. Regenerate
+`data/solutions.json` with `bun run puzzles` against the club's archive.
+When the archive gains puzzles, re-export the two sheets as CSV into the
+repository root's `tmp/` — `../tmp` from `activity/`, which is where the build
+looks unless given `--archive <dir>` — and run:
 
 ```sh
 bun run puzzles
 ```
 
 It reports how many puzzles built, how far the replayed clears agree with the
-authors' own descriptions, and every entry it had to skip with the reason. Two
-of the current 140 are skipped: one answer is drawn into squares no legal
-movement can reach, and one has no answer that its own pieces can produce. Both
-are archive-side problems, not decoder bugs — `tools/inspect-puzzle.ts` shows
-the working.
+authors' own descriptions, and every entry it had to skip with the reason. At
+the archive's last sync 153 built and three were skipped: #13 and #149 each
+have a step no legal movement can reach, and #58's answer replays but sends no
+attack, so there is nothing to score it against. All three are archive-side
+problems, not decoder bugs — `tools/inspect-puzzle.ts` shows the working. The
+committed `data/puzzles.json` is older: 138, cut from an export that ended at
+#140.

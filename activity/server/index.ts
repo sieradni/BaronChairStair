@@ -8,6 +8,7 @@
  */
 
 import { Hono } from "hono";
+import { createHash } from "node:crypto";
 import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import {
@@ -44,6 +45,7 @@ import { config } from "./config";
 import { enforcingGoals, solvedUnderPolicy } from "./solve-verdict";
 import { trackedAnswers } from "./archive-solutions";
 import { profileLines, recordDiscovery, seedReferenceSolutions } from "./discoveries";
+import { alternateRows } from "./alternates";
 import { Store, type StoredRun } from "./db";
 import { DaySchedule, pastDaysOf } from "./schedule";
 import {
@@ -67,13 +69,25 @@ import { registerPublicRoutes, PUBLIC_PREFIX } from "./public-routes";
 import { registerStaticRoutes } from "./static-routes";
 import { registerSubmissionRoutes } from "./submission-routes";
 import {
+  recordSignInGuild,
+  registerSiteVisibilityRoutes,
+  SITE_VISIBILITY_ROUTE,
+} from "./site-visibility-routes";
+import {
   type SocketData,
+  closeEveryDuel,
+  drainDuels,
+  duelCounts,
   duelSocket,
   puzzlesInPlayFor,
   openDuelSocket,
   sweepDuels,
   useArchive,
 } from "./duel";
+import { countSessions } from "./activity";
+import { createBuildIdReader } from "./build-id";
+import { requireHandInDay } from "./hand-in-day";
+import { Lifecycle, serveWithLifecycle } from "./lifecycle";
 
 const LEADERBOARD_SIZE = 25;
 
@@ -105,6 +119,20 @@ const MINUTE = 60_000;
 const MAX_TOTAL_MS = 24 * 60 * MINUTE;
 
 /*
+ * Before the store, so the status file says "starting" while the database
+ * migrates and the archive loads — the part of a boot that takes time — rather
+ * than nothing at all. Only the entrypoint writes one: see `config.statusFile`.
+ */
+const servedBuildId = createBuildIdReader(config.paths.clientBuild, config.buildId);
+const lifecycle = new Lifecycle({
+  buildId: servedBuildId(),
+  servedBuildId,
+  port: config.port,
+  statusFile: import.meta.main ? config.statusFile : null,
+  duels: { counts: duelCounts, drain: drainDuels, closeAll: closeEveryDuel },
+});
+
+/*
  * Store, then archive, then the backfill — and that order is load-bearing.
  *
  * The archive used to be built first and handed to the store's constructor. It
@@ -119,7 +147,10 @@ const MAX_TOTAL_MS = 24 * 60 * MINUTE;
  * day nobody has played the moment one puzzle has ever been accepted, so the
  * pinned history would be a pool this process is not serving from.
  */
-const store = new Store(config.paths.database);
+// The zone goes in with the path because db.tetrisatuci.org reads it back out:
+// it cuts "finished days" at this game's midnight, and has no other way to
+// learn which one that is (`server/site-identity.ts`).
+const store = new Store(config.paths.database, undefined, { timeZone: config.timeZone });
 const community = store.acceptedPuzzles();
 /*
  * The corrections come out of the same database and go on last, over both
@@ -191,6 +222,9 @@ app.use("*", async (c, next) => {
 });
 
 app.use("/api/*", limitBodySize);
+// Who has been playing lately, for the status file: counted once a route has
+// verified the session, never off a token nobody checked.
+app.use("/api/*", countSessions(lifecycle.activity));
 
 // Signing in talks to Discord on our behalf, and verifying a run blocks the
 // event loop for tens of milliseconds, so those two get tighter limits than
@@ -209,6 +243,12 @@ app.use("/api/rush/run", rateLimit({ max: 12, windowMs: MINUTE }, callerKey));
 // caller chose rather than one of today's. Nobody writes five puzzles a
 // minute, so this only ever costs somebody who is not writing puzzles.
 app.use("/api/submissions", rateLimit({ max: 5, windowMs: MINUTE }, callerKey));
+// Saving "Hide me on db.tetrisatuci.org" is a write that rebuilds the site, and
+// nobody flips one switch twenty times a minute. Only the save: the read is one
+// row, opened with the settings sheet, and a whole server may share this
+// bucket behind one proxy address, so limiting reads would grey out the switch
+// for everybody in a busy channel.
+app.on("PUT", SITE_VISIBILITY_ROUTE, rateLimit({ max: 20, windowMs: MINUTE }, callerKey));
 // Ten a minute on the exchange, knowing it may be one shared bucket: behind a
 // proxy with `TRUST_PROXY` unset, `callerKey` falls back to the socket's peer
 // address and every caller arrives as the proxy. What actually stands between a
@@ -248,8 +288,13 @@ app.get("/api/config", (c) =>
   c.json({
     clientId: config.discord.clientId,
     allowGuestPlay: config.allowGuestPlay,
+    // The build this server hands out, for an open page to compare with its own.
+    buildId: lifecycle.servedBuildId,
   }),
 );
+
+// For the deploy and a person with curl: which build, which state. No database.
+app.get("/api/health", (c) => c.json(lifecycle.health()));
 
 /**
  * Trades the embedded SDK's authorization code for a session.
@@ -273,7 +318,11 @@ app.post("/api/session", async (c) => {
 
   const { accessToken, player } = await exchangeCode(String(body.code));
   store.upsertPlayer(player);
-  const { token } = await mintSession(player, await verifyGuild(accessToken, guildId));
+  const guild = await verifyGuild(accessToken, guildId);
+  // The server's name, for db.tetrisatuci.org. Never blocks the sign-in, and
+  // never reaches the session, which still carries the id alone.
+  recordSignInGuild(store.siteIdentity, guild);
+  const { token } = await mintSession(player, guild?.id ?? null);
   return c.json({ token, player, accessToken, guest: false });
 });
 
@@ -345,6 +394,8 @@ app.post("/api/daily/run", requireSession, async (c) => {
   const { day, puzzles } = schedule.today();
 
   const body = await readJsonBody(c);
+  // Before the replay: a log played on yesterday's board proves nothing here.
+  requireHandInDay(body.day, day);
   const tier = readTier(body.tier);
   const puzzle = puzzles[tier];
   const handling = sanitizeHandling(body.handling);
@@ -383,6 +434,7 @@ app.post("/api/daily/run", requireSession, async (c) => {
       playerId: session.player.id,
       puzzleId: puzzle.id,
       durationMs: run.totalMs,
+      attemptId: `daily:${day}:${tier}`,
     });
   }
 
@@ -876,6 +928,33 @@ app.get("/api/archive", requireSession, (c) => {
 });
 
 /**
+ * Every alternate solution on file, across every puzzle, for Explore's
+ * "Alternate solutions" tab.
+ *
+ * The rule for what each reader is told lives in `alternateRows`, with its
+ * reasons; this only hands it the three things it asks about. In short: a
+ * puzzle `maySeeSolution` refuses — today's unsolved tier, a duel round in
+ * play — is not listed at all; a puzzle this reader has not solved is listed
+ * with its finder and date but none of the line's content; and one they have
+ * solved comes with attack, length and clears. Never placements: opening a
+ * line goes through `/api/puzzles/:id/solutions`, behind its own gate.
+ *
+ * Sorting is the browser's, over the whole set, with the order both
+ * alternate browsers share (`shared/alternate-sort.ts`). No route-specific
+ * limit: like `/api/archive`, one read a visit, under the blanket game limit.
+ */
+app.get("/api/alternates", requireSession, (c) => {
+  const session = c.get("session");
+  const alternates = alternateRows(
+    store.liveAlternates(),
+    (puzzleId) => archive.get(puzzleId) ?? null,
+    (puzzleId) => maySeeSolution(session, puzzleId),
+    store.clearedPuzzleIds(session.player.id),
+  );
+  return c.json({ alternates });
+});
+
+/**
  * Every way a puzzle has been solved, for the gallery beside the board.
  *
  * Behind the same gate as the answer itself, and not a looser one: these *are*
@@ -892,10 +971,12 @@ app.get("/api/archive", requireSession, (c) => {
 /**
  * Files a practice solve, so it counts towards what a player has cleared.
  *
- * Practice has always been unscored and stays unscored: nothing here touches a
- * leaderboard, a streak, a rush board or a discovery. The single thing it
- * records is "this person has solved this board", which is what ticks the
- * Explore list and unlocks the puzzle's solutions.
+ * Practice is unscored: nothing here touches a daily leaderboard, a streak or
+ * a rush board. It records two things. "This person has solved this board",
+ * which ticks the Explore list and unlocks the puzzle's solutions. And the line
+ * they played, through `recordDiscovery`, exactly as a daily run's is filed, so
+ * it reaches the Solutions menu, and a line nobody had found counts on the
+ * Discoveries board.
  *
  * **The log is replayed, not believed** — but be clear about what that buys.
  * It stops a body with no run in it counting as a solve, which keeps
@@ -914,35 +995,65 @@ app.get("/api/archive", requireSession, (c) => {
  * reader does not spoil a puzzle they were about to try, not to keep a secret
  * there is none of.
  *
- * Today's puzzles are refused outright. A player could otherwise practise the
- * board they are about to be scored on and read its answers first — the exact
- * rehearsal `lockedPuzzleIds` exists to stop, arriving through a different
- * door. The client already refuses it; this is the half that cannot be edited
- * out in a console.
+ * Today's puzzles are refused until this player has solved that tier
+ * (`maySeeSolution`). A player could otherwise practise the board they are
+ * about to be scored on and read its answers first — the exact rehearsal
+ * `lockedPuzzleIds` exists to stop, arriving through a different door. Once
+ * solved, the rehearsal is over, and the verdict card's "Play again" files its
+ * replay here. The client applies the same rule; this is the half that cannot
+ * be edited out in a console.
  */
 app.post("/api/puzzles/:id/clear", requireSession, async (c) => {
   const session = c.get("session");
   const puzzle = archive.get(Number.parseInt(c.req.param("id") ?? "", 10));
   if (!puzzle) throw new HTTPException(404, { message: "No such puzzle" });
-  if (schedule.tierOfDay(archive.currentDay(), puzzle.id)) {
+  // `maySeeSolution`, not "is it one of today's": a player who has solved this
+  // tier today replays it from the verdict card, and a line found that way is
+  // one this route must file. The gate still refuses everybody else, and a
+  // duel's puzzle in play.
+  if (!maySeeSolution(c.get("session"), puzzle.id)) {
     throw new HTTPException(403, { message: "That is one of today's — play it on the daily" });
   }
 
   const body = await readJsonBody(c);
+  // Older bundles send no receipt and retain their separate-solve behaviour.
+  // A malformed receipt must fail loudly, rather than collapse unrelated
+  // solves into the same coerced string such as "[object Object]".
+  const attemptId = body.attemptId;
+  if (attemptId !== undefined &&
+      (typeof attemptId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(attemptId))) {
+    throw new HTTPException(400, { message: "Invalid clear attempt id" });
+  }
   const handling = sanitizeHandling(body.handling);
+  const events = parseInputLog(body.events);
   const verified = verifyRun(
     { board: decodeBoard(puzzle.board, ENGINE_ROWS), queue: puzzle.queue, hold: puzzle.hold },
     handling,
-    parseInputLog(body.events),
+    events,
   );
   const solved = solvedUnderPolicy(verified.attack, verified.clears, puzzle, "daily");
   if (solved) {
     store.recordClear({
+      // Upserted first, as the daily route does: `puzzle_clears` references
+      // `players`, and a session whose player has no row yet — the guest, in
+      // development — would otherwise answer a solve with a 500.
+      player: session.player,
       playerId: session.player.id,
       puzzleId: puzzle.id,
       durationMs: verified.durationMs,
+      ...(attemptId === undefined ? {} : { attemptId: `practice:${attemptId}` }),
     });
   }
+  // The line goes on record exactly as a daily run's does, and after the clear
+  // for the same reason: a line found from Explore is a line on this puzzle,
+  // and the Solutions menu promises "Solve it another way and yours lands
+  // here". This route used to skip it, so only lines played on the day a puzzle
+  // was dealt ever reached the menu. `recordDiscovery` decides what is worth
+  // filing, and catches its own failures so a solve is never lost to one.
+  recordDiscovery(store, puzzle, verified, events, handling, {
+    playerId: session.player.id,
+    guildId: session.guildId,
+  });
   // The verdict goes back so the client can stop asking. It is not a score.
   //
   // And the answer, but only on a solve. The sheet was fetched when this player
@@ -1173,7 +1284,11 @@ app.post("/api/rush/start", requireSession, async (c) => {
     seed,
     ranked,
     startedAt: Date.now(),
+    attemptId: crypto.randomUUID(),
   };
+  // A rush that may come back to be handed in for the next five minutes, which
+  // a deploy has to wait for: the ticket is the only record that it exists.
+  lifecycle.activity.mintedRushTicket();
 
   return c.json({
     ticket: await mintRushTicket(ticket),
@@ -1190,6 +1305,9 @@ app.post("/api/rush/run", requireSession, async (c) => {
   const body = await readJsonBody(c);
 
   const ticket = await readRushTicket(body.ticket);
+  // The exact signed ticket, including a nonce on new tickets. Hashing also
+  // keeps receipts bounded for an in-flight ticket from the previous build.
+  const ticketId = createHash("sha256").update(body.ticket as string).digest("hex");
   // A ticket is bound to whoever it was minted for; presenting somebody else's
   // would otherwise file a run under this session with that clock.
   if (ticket.playerId !== session.player.id) {
@@ -1270,6 +1388,7 @@ app.post("/api/rush/run", requireSession, async (c) => {
         playerId: session.player.id,
         puzzleId: puzzle.id,
         durationMs: segment.durationMs,
+        attemptId: `rush:${ticketId}`,
       });
     }
   });
@@ -1313,7 +1432,7 @@ app.post("/api/rush/run", requireSession, async (c) => {
 
   // Scored against the day the rush began, not the day it was handed in: a run
   // started at 23:59 belongs to the day the player started it.
-  const { run, isFirst } = store.recordRushRun(ticket.day, session.player, ticket.guildId, result);
+  const { run, isFirst } = store.recordRushRun(ticket.day, session.player, ticket.guildId, result, ticketId);
   return c.json({
     ranked: true,
     played,
@@ -1396,6 +1515,7 @@ app.get("/api/rush/leaderboard", requireSession, (c) => {
  * stay above with the rest of the stack rather than scattering with them.
  */
 registerSubmissionRoutes(app, store);
+registerSiteVisibilityRoutes(app, store);
 registerReviewRoutes(app, { secret: config.reviewSecret, store, archive });
 // The archive, for anybody. The one prefix in this server with CORS, and the
 // one that serves answers — both explained in the module. It reads the same
@@ -1486,16 +1606,47 @@ function isDuelPath(pathname: string): boolean {
   return bare === DUEL_PATH;
 }
 
-export default {
+type GameServer = import("bun").Server<SocketData>;
+
+function route(request: Request, server: GameServer | undefined): Response | Promise<Response> {
+  const url = new URL(request.url);
+  if (isDuelPath(url.pathname)) return openDuelSocket(request, server, url);
+  return app.fetch(request, server);
+}
+
+/**
+ * The server's options, for `Bun.serve` here and for the tests.
+ *
+ * **Not the default export, deliberately.** Bun serves a default export with a
+ * `fetch` by itself, and this module also calls `Bun.serve` — it has to, to
+ * hold the server it stops listening on a drain. Both at once would be two
+ * listeners in one process, and with `reusePort` the second binds without a
+ * word of complaint and takes half the connections.
+ */
+export const entrypoint = {
   port: config.port,
+  /*
+   * The handover. A deploy starts the new release on this same port while this
+   * one is still serving — `SO_REUSEPORT` is what lets the second bind — then
+   * sends this one SIGHUP, and once it has stopped listening every new
+   * connection reaches the new one (`server/lifecycle.ts`). Nothing in front of
+   * the game is reconfigured, which is the point.
+   *
+   * db.tetrisatuci.org does the opposite, `reusePort: false`, on purpose
+   * (`puzzledb/server/main.ts`): it never hands over, so a second copy of it is
+   * always a mistake, and a refused bind is how that mistake gets noticed.
+   */
+  reusePort: true,
+  // Explicit, because in Bun 1.3 `development` also decides SO_REUSEPORT when
+  // `reusePort` is left out — see the same note in `puzzledb/server/main.ts` —
+  // and because a stack-trace error page is not something to serve players.
+  development: false,
   /**
    * `server` is optional so the test suite, which drives `fetch` with one
    * argument, still exercises every HTTP route.
    */
-  fetch(request: Request, server?: import("bun").Server<SocketData>) {
-    const url = new URL(request.url);
-    if (isDuelPath(url.pathname)) return openDuelSocket(request, server, url);
-    return app.fetch(request, server);
+  fetch(request: Request, server?: GameServer) {
+    return lifecycle.handle(request, server, route);
   },
   websocket: duelSocket,
   idleTimeout: 60,
@@ -1504,3 +1655,7 @@ export default {
   // actually holds, applied by the runtime before a handler ever sees the body.
   maxRequestBodySize: MAX_BODY_BYTES,
 };
+
+// Only as the entrypoint: a test imports this module for `entrypoint` and
+// serves it itself, on a port of its own, with no signals taken over.
+if (import.meta.main) serveWithLifecycle<SocketData>(lifecycle, entrypoint);

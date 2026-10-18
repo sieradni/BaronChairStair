@@ -94,11 +94,16 @@ from build_snapshots import build_rounds
 from render import top_attack_bursts
 import presence_tracker
 import puzzle_commands
-import changelog
 import puzzle_recap
-from puzzle_commands import puzzle_command
+from puzzle_commands import puzzle
 import report_commands
 import archive_commands
+import sync_window
+import command_sync
+import lifecycle
+import runtime_status
+import stats_db
+import tracked_tree
 
 log = logging.getLogger(__name__)
 
@@ -256,7 +261,15 @@ intents.message_content = True  # required for prefix commands and attachment ac
 intents.members = True    # member list, so offline members are countable
 intents.presences = True  # online/idle/dnd status per member
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+# Starting, ready or stopping, and how many commands are being handled right
+# now. The status file reports it to the deploy and the graceful stop waits on
+# it (client/lifecycle.py); the tree and the invoke hooks keep it counted
+# (client/tracked_tree.py).
+LIFECYCLE = lifecycle.Lifecycle()
+
+bot = commands.Bot(command_prefix="!", intents=intents,
+                   tree_cls=tracked_tree.tree_class(LIFECYCLE))
+tracked_tree.track(bot, LIFECYCLE)
 
 
 # ── No link-preview embeds, anywhere ──────────────────────────────────────────
@@ -284,7 +297,14 @@ commands.Context.send = _no_embeds(commands.Context.send)
 commands.Context.reply = _no_embeds(commands.Context.reply)
 discord.Message.reply = _no_embeds(discord.Message.reply)
 
-db = sqlite3.connect(ROOT / "stats.db")  # anchored to the repo root — never CWD
+# STATS_DB when the deploy sets it — one file outside every release directory,
+# so a new release keeps the recap claims and the sync window — else beside the
+# code as before. Never the working directory; client/stats_db.py says why.
+try:
+    STATS_DB_PATH = stats_db.resolve(ROOT, os.environ)
+except stats_db.StatsDbPathError as e:
+    sys.exit(str(e))
+db = sqlite3.connect(STATS_DB_PATH)
 
 TRACKED_STICKER_ID = 1485928821038383314
 
@@ -313,19 +333,30 @@ if recap_error is None and not puzzle_recap.enabled():
     print("puzzle recap off: set PUZZLE_RECAP=on in .env to turn it on",
           file=sys.stderr)
 
-# bot_versions, owned by client/changelog.py. Same policy again: without the
-# table nobody is told what changed, and `/puzzle` carries on regardless.
+# archive_sync_window, owned by client/sync_window.py: when /archive sync
+# last started, so a restart does not reopen its ten-minute window. Without
+# the table the window still holds, but only until the next restart.
 try:
-    changelog.init_db(db)
-    puzzle_commands.version_db = db
-    changelog_error = None
+    sync_window.init_db(db)
+    archive_commands.sync_db = db
 except sqlite3.Error as e:
-    changelog_error = f"{type(e).__name__}: {e}"
-    print(f"version announcements disabled: {changelog_error}", file=sys.stderr)
+    print(f"/archive sync window kept in memory only: {type(e).__name__}: {e}",
+          file=sys.stderr)
+
+# command_sync, owned by client/command_sync.py: a hash of the last global
+# command tree written to Discord, so a restart or reconnect with the same tree
+# writes nothing. Without the table every ready syncs, as it always used to.
+try:
+    command_sync.init_db(db)
+    command_sync_db = db
+except sqlite3.Error as e:
+    command_sync_db = None
+    print(f"command sync runs on every ready: {type(e).__name__}: {e}",
+          file=sys.stderr)
 
 # presence_samples, owned by client/presence_tracker.py. A schema mismatch
 # disables presence tracking instead of taking the whole bot down with it --
-# same policy as the recap and changelog tables above.
+# same policy as the recap table above.
 try:
     presence_tracker.init_db(db)
     presence_error = None
@@ -346,6 +377,9 @@ async def on_message(message):
         """, (message.author.id,))
         db.commit()
 
+    # While the bot stops, a prefix command is told to try again, not run.
+    if await tracked_tree.refuse_prefix_while_stopping(bot, message, LIFECYCLE):
+        return
     await bot.process_commands(message)
 
 @bot.group()
@@ -375,41 +409,32 @@ async def yauna_cancer(ctx):
 
     await ctx.send("**Cancer Leaderboard**\n" + "\n".join(lines))
 
-# Discord creates this command itself when an application has Activities
-# enabled -- it is the entry the app launcher shows. discord.py has no concept
-# of it, so a plain tree.sync() leaves it out of the bulk payload, Discord reads
-# that as a request to delete it, and rejects the whole update (error 50240).
-ENTRY_POINT_COMMAND_TYPE = 4
-
-
 async def _sync_global_commands():
     """
-    Bulk-sync global commands, preserving Discord's own Entry Point command.
+    Write the global commands to Discord, unless they are what was last written.
 
-    Reaches into discord.py internals because 2.7.1 has no public way to do
-    this: `_get_all_commands`, `get_translated_payload` and `to_dict` have all
-    changed shape across the 2.x line (`to_dict` took no argument before 2.4),
-    so a dependency bump can break this. Written against **discord.py 2.7.1**.
+    The payload, the Entry Point command Discord owns and must be sent back,
+    and the hash in stats.db that makes an unchanged tree cost no call at all
+    are in client/command_sync.py. FORCE_COMMAND_SYNC=1 syncs regardless.
     """
-    tree = bot.tree
-    commands = tree._get_all_commands(guild=None)
-    translator = tree.translator
-    if translator:
-        payload = [await c.get_translated_payload(tree, translator) for c in commands]
-    else:
-        payload = [c.to_dict(tree) for c in commands]
-
-    existing = await bot.http.get_global_commands(bot.application_id)
-    payload = payload + [c for c in existing
-                         if c.get("type") == ENTRY_POINT_COMMAND_TYPE]
-    await bot.http.bulk_upsert_global_commands(bot.application_id, payload=payload)
+    application_id = bot.application_id
+    await command_sync.sync_if_changed(
+        payload=await command_sync.global_payload(bot.tree),
+        scope=command_sync.scope_for(application_id),
+        db=command_sync_db,
+        force=command_sync.forced(os.environ),
+        fetch_existing=lambda: bot.http.get_global_commands(application_id),
+        overwrite=lambda payload: bot.http.bulk_upsert_global_commands(
+            application_id, payload=payload),
+    )
 
 
 @bot.event
 async def on_ready():
     # on_ready fires on every reconnect, and global command writes are rate
-    # limited -- a failure here must not take down everything after it, which
-    # includes starting the presence sampler and the daily recap.
+    # limited -- which is why an unchanged tree is skipped -- and a failure
+    # here must not take down everything after it, which includes starting
+    # the presence sampler and the daily recap.
     try:
         await _sync_global_commands()
     except Exception:
@@ -420,6 +445,8 @@ async def on_ready():
     if (recap_error is None and puzzle_recap.enabled()
             and not puzzle_recap_post.is_running()):
         puzzle_recap_post.start()
+    # The status file says "ready" from here; a reconnect leaves it so.
+    LIFECYCLE.mark_ready()
     print(f"Logged in as {bot.user} (id: {bot.user.id})")
 
 
@@ -705,16 +732,9 @@ async def activity_now(interaction: discord.Interaction,
 
 
 bot.tree.add_command(activity)
-bot.tree.add_command(puzzle_command)
-# Its own top-level command rather than `/puzzle report`: Discord will not
-# let a command be both invocable and a group, and `/puzzle` is the one
-# people already type. See report_commands.py's header.
+bot.tree.add_command(puzzle)
+# Reports and archive operations keep their existing commands.
 bot.tree.add_command(report_commands.report_command)
-# A group of its own rather than `/puzzle sync`, for the reason two lines up:
-# `/puzzle` is the command people type, and making it a parent would rename it.
-# `/archive` is a name nobody types, so the subcommands cost nothing and there
-# is room beside `sync` for the status and publish this will want later. See
-# archive_commands.py's header.
 bot.tree.add_command(archive_commands.archive)
 
 
@@ -727,4 +747,22 @@ if __name__ == "__main__":
               file=sys.stderr)
         sys.exit(1)
 
-    bot.run(DISCORD_TOKEN)
+    # What bot.run() did — discord.py's logging, then the event loop — but
+    # through lifecycle.serve, because bot.run installs no signal handlers:
+    # pm2's SIGINT became a KeyboardInterrupt that cut every command short,
+    # and SIGTERM ended the process outright. serve adds the polite stop and
+    # the status file the deploy reads; docs/bot.md has the settings.
+    # root=False is bot.run's own default (root_logger=False): discord.py's
+    # logger only. setup_logging's default, root=True, would also print every
+    # other library's INFO lines.
+    discord.utils.setup_logging(root=False)
+    status = runtime_status.StatusWriter.from_environ(
+        os.environ, read=LIFECYCLE.snapshot, sync_running=archive_commands.is_running)
+    try:
+        asyncio.run(lifecycle.serve(
+            bot, DISCORD_TOKEN, lifecycle=LIFECYCLE, status=status,
+            grace_s=lifecycle.shutdown_grace_s(os.environ)))
+    except KeyboardInterrupt:
+        # A Ctrl-C before serve has installed its handlers is still Python's
+        # own, and ends the bot as bot.run let it: quietly.
+        pass

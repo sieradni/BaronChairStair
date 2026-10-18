@@ -55,7 +55,7 @@ beforeAll(async () => {
   process.env.ALLOW_GUEST_PLAY = "true";
   process.env.NODE_ENV = "test";
   delete process.env.DISCORD_CLIENT_SECRET;
-  const server = (await import("../server/index")).default;
+  const server = (await import("../server/index")).entrypoint;
   fetchApp = server.fetch;
 
   const db = new Database(DB);
@@ -101,6 +101,30 @@ describe("the whole archive", () => {
     const response = await get("");
 
     expect(response.headers.get("Cache-Control")).toContain("max-age=");
+  });
+
+  test("links each published puzzle to the Blueprint viewer, built from its codes", async () => {
+    // Spelled out rather than built with `blueprintLink`. The viewer's address
+    // moved to `shared/blueprint/viewer.ts` so the puzzle database could share
+    // it, and a check that asked that module would agree with any change made
+    // there. This pins what a downstream project actually receives.
+    const viewer = (code: string | undefined) => (code ? `https://bp.tali.software/?${code}` : null);
+    const body = (await (await get("")).json()) as {
+      puzzles: {
+        id: number;
+        source: { puzzle: string; solution: string } | null;
+        puzzleUrl: string | null;
+        solutionUrl: string | null;
+      }[];
+    };
+    const found = body.puzzles.find((p) => p.id === PUBLISHED);
+
+    expect(found?.puzzleUrl).toBe("https://bp.tali.software/?code-a");
+    expect(found?.solutionUrl).toBe("https://bp.tali.software/?code-b");
+    for (const listed of body.puzzles) {
+      expect(listed.puzzleUrl).toBe(viewer(listed.source?.puzzle));
+      expect(listed.solutionUrl).toBe(viewer(listed.source?.solution));
+    }
   });
 });
 
